@@ -621,6 +621,7 @@ do
 		io_timeout="--timeout=30"
 		daemon_connect_timeout="--contimeout=30"
 		transfer_modification_times="--times"
+		RSYNC_MODULE="scc"
 		# Ensure config file exists
 		if [ ! -f /etc/opt/scc/conf/scc-rsync.conf ]; then
 			echo 'Configuration file /etc/opt/scc/conf/scc-rsync.conf is missing. Please run setup /opt/scc/bin/scc-rsync-setup and try again.'
@@ -633,7 +634,7 @@ do
 		echo "done" >${REMOTE_SIGNAL}
 
 		# TODO: rsync_module, remove secret
-		rsync ${quiet} ${connect_timeout} ${REMOTE_NAME} ${REMOTE_SIGNAL} ${USER}@${RSYNC_SERVER_HOST}::${RSYNC_MODULE}
+		rsync ${quiet} ${daemon_connect_timeout} ${REMOTE_NAME} ${REMOTE_SIGNAL} ${USER}@${RSYNC_SERVER_HOST}::${RSYNC_MODULE}
 		;;
 
 	cp)	# Produce an empty signal-file to indicate that transfer is in progress.

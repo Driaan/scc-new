@@ -70,7 +70,7 @@ if [ ! -f /usr/bin/rsync ]; then
 fi
 
 if [ ! -f /var/opt/scc-srv/conf/scc-hosts ]; then
-  echo 'File "/var/opt/scc-srv/conf/scc-hosts" please create it and run this command again.'
+  echo 'File "/var/opt/scc-srv/conf/scc-hosts" does not exist, please create it and run this command again.'
   exit
 fi
 
