@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# SERVER
+# This is the setup file for the scc-srv rsync module for transporting client scc data.
+
+function backup() {
+  echo 'Backing up existing "/etc/rsyncd.scc.secrets" to "/etc/rsyncd.scc.secrets.bak"'
+  if [ -f /etc/rsyncd.scc.secrets ]; then
+    mv /etc/rsyncd.scc.secrets /etc/rsyncd.scc.secrets.bak
+  fi
+}
+
+function setup() {
+  backup
+
+  IFS=" "
+  while read -a INPUTHOST lines; do
+    python -c 'import crypt; print("'${INPUTHOST[0]}':" + crypt.crypt("'${INPUTHOST[0]}'", "$1$'${INPUTHOST[1]}'$"))' | sed -e 's/\$.*\$//' >>/etc/rsyncd.scc.secrets
+  done </var/opt/scc-srv/conf/scc-hosts
+  if [ ! -f /etc/rsyncd.conf ]; then
+    sudo tee /etc/rsyncd.conf >/dev/null <<EOT
+lock file = /var/run/rsync.lock
+log file = /var/log/rsyncd.log
+pid file = /var/run/rsyncd.pid
+
+[scc]
+path = /var/opt/scc-srv/data/transfer/cp/%RSYNC_USER_NAME%
+read only = no
+uid = scc
+gid = scc
+hosts allow = *
+auth users = *
+secrets file = /etc/rsyncd.scc.secrets
+pre-xfer exec = mkdir -p /var/opt/scc-srv/data/transfer/cp/%RSYNC_USER_NAME%
+post-xfer exec = /opt/scc-srv/bin/scc-update
+EOT
+  else
+    sudo tee /etc/rsyncd.conf.scc-template >/dev/null <<EOT
+lock file = /var/run/rsync.lock
+log file = /var/log/rsyncd.log
+pid file = /var/run/rsyncd.pid
+
+[scc]
+path = /var/opt/scc-srv/data/transfer/cp/%RSYNC_USER_NAME%
+read only = no
+uid = scc
+gid = scc
+hosts allow = *
+auth users = *
+secrets file = /etc/rsyncd.scc.secrets
+pre-xfer exec = mkdir -p /var/opt/scc-srv/data/transfer/cp/%RSYNC_USER_NAME%
+post-xfer exec = /opt/scc-srv/bin/scc-update
+EOT
+  fi
+  echo 'Setup complete. Trying to start rsync in daemon mode.'
+  chmod 600 /etc/rsyncd.scc.secrets
+  if [ -f /var/run/rsyncd.pid ]; then
+    kill $(cat /var/run/rsyncd.pid)
+    rm -f /var/run/rsyncd.pid
+    rsync --daemon
+  else
+    rsync --daemon
+  fi
+  exit
+}
+
+if [ ! -f /usr/bin/rsync ]; then
+  echo 'File "/usr/bin/rsync" does not exist, aborting.'
+  exit
+fi
+
+if [ ! -f /var/opt/scc-srv/conf/scc-hosts ]; then
+  echo 'File "/var/opt/scc-srv/conf/scc-hosts" please create it and run this command again.'
+  exit
+fi
+
+if [ -f /etc/rsyncd.scc.secrets ]; then
+  read -p 'File "/etc/rsyncd.scc.secrets" exists and will be backed up and overwritten. Continue? (y/n)?' CONT
+  if [ ! "$CONT" = "y" ]; then
+    echo 'Aborting...'
+    exit
+  fi
+fi
+
+if [ -f /etc/rsyncd.conf ]; then
+  echo 'File "/etc/rsyncd.conf" exists. An example config file will be written to "/etc/rsyncd.conf.scc-template" instead.'
+  setup
+fi

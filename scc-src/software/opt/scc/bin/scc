@@ -221,7 +221,7 @@ do
 	-p|--prog)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
 			port_default=25
 			case "${2}" in
-			cp|ftp|pull|mail|rcp)	prog="${2}";;
+			cp|ftp|pull|mail|rcp|rsync)	prog="${2}";;
 			scp)			port_default=22
 						prog="${2}";;
 			smtp)			port_default=25
@@ -353,12 +353,13 @@ then
 	case "${prog}" in
 	cp)	dest="${default_srv_dir}";;
 	pull)	dest="${SCC_DATA}/transfer";;				# Use default directory
+	rsync) dest="${default_srv_dir}";;
 	*)	echo "${ProgName}: missing destination for method ${prog}" >&2
 		exit 2;;
 	esac
 else
 	case "${prog}" in
-	ftp|rcp|scp)	if [ "${dest%:*}" = "${dest}" ]
+	ftp|rcp|scp|rsync)	if [ "${dest%:*}" = "${dest}" ]
 			then
 				# Without the separator ':', the directory is not specified, use the default directory:
 				dest="${dest}:${default_srv_dir}"
@@ -410,6 +411,13 @@ then
 		if [ $? -ne 0 ]
 		then
 			echo "${ProgName}: scp not found" >&2
+			exit 2
+		fi
+		;;
+	rsync)	which rsync 2>/dev/null >/dev/null
+		if [ $? -ne 0 ]
+		then
+			echo "${ProgName}: rsync not found" >&2
 			exit 2
 		fi
 		;;
@@ -467,7 +475,7 @@ else
 				for suffix in cur html log log.html
 				do
 					rm -f scc.${SCC_HOST_ALIAS}.${suffix}
-					ln -s scc.${our_name}.${suffix} scc.${SCC_HOST_ALIAS}.${suffix}
+					ln -s scc.${our_name}.${suffix} scc.${SCC_HOST_ALIAS}.${sux`ffix}
 				done
 				scc_pack ${SCC_HOST_ALIAS}
 				rm -f scc.${SCC_HOST_ALIAS}.*
@@ -606,6 +614,26 @@ do
 		# Transfer the packed files followed by the non-empty signal file to indicate completion of transfer.
 		echo "done" >${REMOTE_SIGNAL}
 		scp ${connect_timeout} ${quiet} ${port_scp} ${ssh_identity} ${strict_host_checking} ${REMOTE_NAME} ${REMOTE_SIGNAL} ${dest} >/dev/null 2>/dev/null
+		;;
+
+	rsync)
+		quiet="-q"
+		io_timeout="--timeout=30"
+		daemon_connect_timeout="--contimeout=30"
+		transfer_modification_times="--times"
+		# Ensure config file exists
+		if [ ! -f /etc/opt/scc/conf/scc-rsync.conf ]; then
+			echo 'Configuration file /etc/opt/scc/conf/scc-rsync.conf is missing. Please run setup /opt/scc/bin/scc-rsync-setup and try again.'
+			exit  
+		fi
+		
+		. /etc/opt/scc/conf/scc-rsync.conf
+
+		# Move the packed files to the destination
+		echo "done" >${REMOTE_SIGNAL}
+
+		# TODO: rsync_module, remove secret
+		rsync ${quiet} ${connect_timeout} ${REMOTE_NAME} ${REMOTE_SIGNAL} ${USER}@${RSYNC_SERVER_HOST}::${RSYNC_MODULE}
 		;;
 
 	cp)	# Produce an empty signal-file to indicate that transfer is in progress.

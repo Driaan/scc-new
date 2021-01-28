@@ -1,0 +1,90 @@
+#!/bin/bash
+
+# CLIENT
+# This is the setup file for the scc rsync client for transporting scc data to scc-srv.
+
+script="scc-rsync-setup"
+#Declare the number of mandatory args
+margs=2
+
+function ensureConfigFileExists() {
+  if [[ -f /etc/opt/scc/conf/scc-rsync.conf ]]; then
+    echo 'Config file "/etc/opt/scc/conf/scc-rsync.conf" exists. Updating...'
+    sudo tee /etc/opt/scc/conf/scc-rsync.conf >/dev/null <<EOT
+#  These variables are populated by running /opt/scc/bin/scc-rsync-setup
+#  This file is sourced during the execution of /opt/scc/bin/scc-rsync-transfer
+export RSYNC_PASSWORD=""
+export RSYNC_SERVER_HOST=""
+export USER="$HOSTNAME"
+EOT
+  else
+    echo 'Config file "/etc/opt/scc/conf/scc-rsync.conf" does not exist. Creating new...'
+    mkdir -p /etc/opt/scc/conf/
+    touch /etc/opt/scc/conf/scc-rsync.conf
+    sudo tee /etc/opt/scc/conf/scc-rsync.conf >/dev/null <<EOT
+#  These variables are populated by running /opt/scc/bin/scc-rsync-setup
+#  This file is sourced during the execution of /opt/scc/bin/scc-rsync-transfer
+export RSYNC_PASSWORD=""
+export RSYNC_SERVER_HOST=""
+export USER="$HOSTNAME"
+EOT
+  fi
+}
+
+function example() {
+  echo -e "example: $script --host 192.168.55.100 --secret 123456789"
+}
+
+function usage() {
+  echo -e "usage: $script --host ServerHostAddress --secret SecretSauce\n"
+}
+
+function margs_precheck() {
+  if [ $2 ] && [ $1 -lt $margs ]; then
+    usage
+    example
+    exit 1 # error
+  fi
+}
+
+# Ensures that all the mandatory args are not empty
+function margs_check() {
+  if [ $# -lt $margs ]; then
+    usage
+    example
+    exit 1 # error
+  fi
+}
+
+margs_precheck $# $1  
+hostAddress=
+secret=
+
+while [ "$1" != "" ]; do
+  case $1 in
+  -h | --host)
+    shift
+    hostAddress=$1
+    ;;
+  -s | --secret)
+    shift
+    secret=$1
+    ;;
+  *)
+    echo "$script: illegal option $1"
+    usage
+    example
+    exit 1 # error
+    ;;
+  esac
+  shift
+done
+
+margs_check $hostAddress $secret
+
+ensureConfigFileExists
+
+pass=$(python -c 'import crypt; print(crypt.crypt("'$HOSTNAME'", "$1$'$secret'$"))' | sed -e 's/\$.*\$//')
+sed -in "3s/.*/export RSYNC_PASSWORD=$pass/" /etc/opt/scc/conf/scc-rsync.conf
+sed -in "4s/.*/export RSYNC_SERVER_HOST=$hostAddress/" /etc/opt/scc/conf/scc-rsync.conf
+echo 'Done.'
