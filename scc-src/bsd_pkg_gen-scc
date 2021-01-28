@@ -1,0 +1,232 @@
+#!/bin/sh
+
+# Generate binary BSD package to install scc by means of pkg add.
+# Name ends with "_gen-scc" to avoid that scc_gen-all calls this script.
+# Copyright (C) 2017-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: bsd_pkg_gen-scc 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# Program relocate is used to change this default hierarchy into FreeBSD/DragonFlyBSD practices:
+#
+#	install				pre/post install scripts
+#	software/usr/local		bin and man
+#	software/usr/local/doc/scc	doc
+#	software/usr/local/etc/scc	conf and newconfig
+#	software/usr/local/share/scc	data
+#
+# After using this program, the directory contains one of the files:
+#
+#	scc-1.26.73.FreeBSD.txz
+#	scc-1.26.73.DragonFlyBSD.txz
+#
+# Environment variable BSD_PKG_ARCH can be used to control the architecture of the generated package.
+# Format is: FreeBSD|dragonfly:<release>:i386:*
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+if [ ! -x /usr/bin/xz ]
+then
+	echo "${ProgName}: cannot find /usr/bin/xz" >&2
+	exit 2
+fi
+
+# Calling by non-root users results in wrong permissions of the installed files.
+uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+if [ "${uid}" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+VERSION=${1:-1.26.73}
+
+my_sha256()
+{
+	exe="$(which sha256sum 2>/dev/null)"
+	if [ -x "${exe}" ]
+	then
+		"${exe}" "${1}" | awk '{ print $1 }'
+	else
+		exe="$(which sha256 2>/dev/null)"
+		if [ -x "${exe}" ]
+		then
+			"${exe}" "${1}" | awk '{ print $4 }'
+		fi
+	fi
+}
+
+# Use separate sub directory scc for doc to avoid conflicts with scc-srv concerning CHANGELOG and COPYRIGHT files.
+./relocate	--conf		/usr/local/etc/scc		\
+		--data		/usr/local/share/scc/data	\
+		--sw_bin	/usr/local/bin			\
+		--sw_doc	/usr/local/doc/scc		\
+		--sw_man	/usr/local/man			\
+		--ign ${ProgName}
+
+# This script should leave the working directory empty: collect all file names
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >remove_list
+echo remove_list >>remove_list
+
+if [ -z "${BSD_PKG_ARCH:-}" ]
+then
+	case "$(uname)" in
+	DragonFly)	bsd_os="dragonfly"
+			bsd_release="$(uname -r | sed -e 's/\..*//')"
+			;;
+	FreeBSD)	bsd_os="FreeBSD"
+			bsd_release="$(uname -r | sed -e 's/\..*//')"
+			;;
+	*)		bsd_os="FreeBSD"
+			bsd_release="11"
+			;;
+	esac
+	scc_arch="${bsd_os}:${bsd_release}:i386:*"
+else
+	scc_arch="${BSD_PKG_ARCH}"
+fi
+
+case "${scc_arch}" in
+FreeBSD:*)	os_label="FreeBSD";;
+dragonfly:*)	os_label="DragonFlyBSD";;
+*)		echo "${ProgName}: unsupported OS in '${scc_arch}'" >&2
+		exit 2
+esac
+
+scc_comment="System Configuration Collector"
+scc_description="System Configuration Collector collects configuration data in a snapshot.\nDetected changes in the configuration are added to a logbook."
+scc_maintainer="scc_feedback@qnh.eu"
+scc_release="1.26.73"
+scc_size="$(find software -type f	|
+		xargs wc -c		|
+		tail -n 1		|
+		awk '{ print $1 }')"
+scc_www="http://sysconfcollect.sourceforge.net/index.html"
+
+# We should not tar directories, so we collect the names of files in a file for use with tar.
+(
+	cd software
+
+	find usr/local/bin -type f
+	find usr/local/man -type f
+	find usr/local/doc -type f
+	find usr/local/etc -type f
+)	|
+sort >file_list
+
+# Manifest requires checksums of all files
+while read file
+do
+	# translate relative path to absolute path
+	echo "\"/${file}\":\"1\$$(my_sha256 software/${file})\","
+done <file_list >checksum_list
+
+cat <<-_XC_ >COMPACT_MANIFEST
+{
+	"name":"scc",
+	"origin":"sysutils/scc",
+	"version":"${scc_release}",
+	"comment":"${scc_comment}",
+	"maintainer":"${scc_maintainer}",
+	"arch":"${scc_arch}",
+	"www":"${scc_www}",
+	"prefix":"/usr/local",
+	"flatsize":${scc_size},
+	"licenselogic":"single",
+	"licenses":["GPL2"],
+	"desc":"${scc_description}"
+}
+_XC_
+
+sed -e 's/^[ 	]*//' COMPACT_MANIFEST	|
+tr -d "\012" >+COMPACT_MANIFEST
+echo "" >>+COMPACT_MANIFEST
+
+# This script is not part of the relocate and thus the final/destination paths in /usr/local/bin are used.
+rm -f MANIFEST
+cat <<-_XM_ >MANIFEST
+{
+	"name":"scc",
+	"origin":"sysutils/scc",
+	"version":"${scc_release}",
+	"comment":"${scc_comment}",
+	"maintainer":"${scc_maintainer}",
+	"arch":"${scc_arch}",
+	"www":"${scc_www}",
+	"prefix":"/usr/local",
+	"flatsize":${scc_size},
+	"licenselogic":"single",
+	"licenses":["GPL2"],
+	"desc":"${scc_description}",
+	"scripts":{
+		"pre-install":"[ -x /usr/local/bin/scc-log ] && /usr/local/bin/scc-log --preinstall; exit 0",
+		"post-install":"/usr/local/bin/scc-log --postinstall",
+		"deinstall":"rm -rf /usr/local/share/scc; exit 0"}
+	"files":{
+		FILE_MARKER:<file_name>:<sha256>
+	}
+}
+_XM_
+
+awk	'/FILE_MARKER:/	{ system( "cat checksum_list" ); next }
+			{ print }' MANIFEST			|
+sed -e 's/^[ 	]*//'						|
+tr -d "\012" >+MANIFEST
+echo "" >>+MANIFEST
+
+tar cf scc-${scc_release}.tar +COMPACT_MANIFEST +MANIFEST
+tar --append -P -C software --transform 's,^,/,' -f scc-${scc_release}.tar $(cat file_list) >/dev/null 2>/dev/null
+if [ $? -ne 0 ]
+then
+	# BSD tar
+	tar --append -P -C software -s ',^,/,' -f scc-${scc_release}.tar $(cat file_list) >/dev/null 2>/dev/null
+fi
+xz <scc-${scc_release}.tar >scc-${scc_release}.${os_label}.txz
+
+rm -rf scc-${scc_release}.tar software file_list checksum_list $(cat remove_list) +* MANIFEST COMPACT_MANIFEST install
+
+exit 0

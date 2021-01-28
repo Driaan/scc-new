@@ -1,0 +1,129 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-summary</TITLE></HEAD><BODY>
+<H1>scc-summary(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-summary - summarize SCC-snapshots
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-srv	1.19.44
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-summary [ -d|--directory &lt;scc_web_path&gt; ] [ -f|--force ] &lt;dir&gt;
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program extracts certain data from collected snapshots and log files
+	to produce html-files summarizing changes and properties of the systems
+	where SCC-snapshots have been collected.
+
+	The mode of the new files and the owner/group are derived from &lt;dir&gt;.
+	For the permissions, only the read-attributes are considered.
+
+	Extracting all top-level classifications can take some time. Therefore it
+	is only done once a week. Use the -f option to force the extraction.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	-d|--directory &lt;scc_web_path&gt;   Path for SCC-data under DocumentRoot,
+	                                Default is: "", meaning SCC-data resides
+	                                in the document-root of the web server.
+	-f|--force                      Force update. Regenerate list of top-level
+	                                classifications.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;dir&gt;     The directory with collected snapshots, where the
+	          summaries are produced.
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	This program uses the output of scc-rules and it should be called prior
+	to this program.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-summary [ -d|--directory &lt;scc_web_path&gt; ] [ -f|--force ] &lt;dir&gt;
+	A syntax error has been detected.
+
+	scc-summary: Syntax error, missing argument for option: &lt;option&gt;
+	The argument for &lt;option&gt; is missing.
+
+	scc-summary: directory &lt;dir&gt; does not exist
+	The base directory of the realm, does not exist.
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-summary is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	/var/opt/scc-srv/tmp - directory for temporary files
+	&lt;dir&gt; - directory for snapshots and log files
+	        scc-auto-realm-config.html - HTML version of scc-auto-realm.conf
+	        scc-summary.data - general data extracted from snapshots
+	        scc-rules.data - output from scc-rules
+	        index.html - main access to &lt;dir&gt;
+	        scc-summary-*.html - summary of snapshots sorted by category
+	        scc-log-index.html - main-index to changes per day
+	        scc-log-&lt;day&gt;.html - changes for &lt;day&gt; (yyyy-mm-dd)
+	        scc.&lt;hostname&gt;.cur - snapshots
+	        scc.&lt;hostname&gt;.log - logbooks
+	        scc.summary.csv - CSV with summary of snapshot data
+	        scc.log_date.csv - CSV with summary of runs and changes per date
+	        scc.log_host.csv - CSV with summary of runs and changes per host
+	&lt;dir&gt;/custom/scc-logo.png - logo to customize HTML-output
+	&lt;dir&gt;/custom/scc-realm.conf - configuration for &lt;dir&gt;
+	&lt;dir&gt;/custom/scc-auto-realm.conf - configuration for &lt;dir&gt;
+	&lt;dir&gt;/custom/scc-smt-select - configuration file for scc-smt
+	        when this file is absent, the index.html of the realm
+	        does not contain an entry for SMT.
+	&lt;dir&gt;/custom/index_start - additional html for index.html (after logo)
+	&lt;dir&gt;/custom/index_end - additional html for index.html 
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+	<A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+	<A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+	<A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6217 $
+
+</PRE>
+</BODY></HTML>

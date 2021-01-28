@@ -1,0 +1,678 @@
+#!/bin/sh
+# Shell script to collect general data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0000_s_general 6216 2019-03-21 20:47:50Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# sysctl -a references obsolete/deprecated variables on some systems.
+# Use the files in /proc/sys to retrieve just the existing variables.
+# Record the data in a file for use in the modules.
+#
+# Use global variable to share the file name between the SCC modules collecting (general)
+# and using the date (hardware, kernel and network).
+get_sysctl_data >${SYSCTL_DATA}
+
+##	START: GENERAL
+# update scc-log also when changing the following classification
+echo "fix:general::layout-version:${SCC_RELEASE}"
+
+echo "fix:general::hostname:${HOSTNAME}"
+
+if [ -x /bin/dnsdomainname ]
+then
+	DOMAIN=$(/bin/dnsdomainname 2>/dev/null)
+elif [ -x /bin/domainname -a "${OS_NAME}" = "Darwin" ]
+then
+	DOMAIN=$(/bin/domainname)		# Indicated by Antoine Davous.
+fi
+if [ -z "${DOMAIN:-}" ]
+then
+	DOMAIN=${hostname#*.}
+	if [ "${DOMAIN}" = "${hostname}" -a -f /etc/resolv.conf ]
+	then
+		DOMAIN=$(awk '/^domain/ { print $2 }' /etc/resolv.conf 2>/dev/null | tail -n 1)
+	fi
+	if [ "${DOMAIN}" = "${hostname}" -o -z "${DOMAIN}" ]
+	then
+		ns_exe="$(which nslookup 2>/dev/null)"
+		if [ -x "${ns_exe}" ]
+		then
+			DOMAIN=$(nslookup ${hostname} 2>/dev/null | sed -n "s/^Name.*${hostname}\.//p")
+		else
+			DOMAIN=""
+		fi
+	fi
+fi
+echo "fix:general::domain:${DOMAIN}"
+
+# Class should be identical with code in scc-log.
+# Preserve value provided with last --label option.
+grep "fix:general::label:" ${SCC_KEEP_CONFIG} 2>/dev/null	|
+tail -n 1							|
+tee -a ${SCC_KEEP_NEW}
+
+facter_exe="$(which facter 2>/dev/null)"
+virt_what_exe="$(which virt-what 2>/dev/null)"
+virtualization=""		# physical or unknown (no facter or virt-what)
+if [ -x "${facter_exe}" ]
+then
+	virtualization="$(${facter_exe} virtual 2>/dev/null)"
+fi
+if [ -z "${virtualization}" -a -x "${virt_what_exe}" ]
+then
+	virtualization="$(${virt_what_exe} 2>/dev/null | head -n 1)"
+	if [ $? -ne 0 ]
+	then
+		virtualization=""
+	fi
+fi
+if [ -z "${virtualization}" -a -f /proc/cpuinfo ]
+then
+	if [ "$(grep "^flags.* svm" /proc/cpuinfo)" ]
+	then
+		virtualization="physical"
+	elif [ "$(grep "^flags.* vmx" /proc/cpuinfo)" ]
+	then
+		virtualization="physical"
+	fi
+fi
+if [ -z "${virtualization}" -a -x /usr/sbin/virtinfo ]
+then
+	type="$(/usr/sbin/virtinfo -t 2>/dev/null | tr "[:upper:]" "[:lower:]")"
+	case "${type}" in
+	*ldoms*guest*)		virtualization="Ldom";;
+	*ldoms*control*)	virtualization="physical";;
+	esac
+fi
+if [ -z "${virtualization}" -a -x /usr/bin/zonename ]
+then
+	zone="$(/usr/bin/zonename 2>/dev/null)"
+	if [ "${zone}" -a "${zone}" != "global" ]
+	then
+		virtualization="zone"
+	fi
+fi
+if [ -z "${virtualization}" -a "${OS_NAME}" = "SunOS" -a "$(uname -v 2>/dev/null)" = "Generic_Virtual" ]
+then
+	virtualization="LDom/zone"
+fi
+if [ -z "${virtualization}" ]
+then
+	enterprise="$(uname -i 2>/dev/null | grep "SUNW,")"
+	if [ "${enterprise}" ]
+	then
+		virtualization="physical"
+	fi
+fi
+if [ -z "${virtualization}" -a -x /usr/sbin/prtdiag ]
+then
+	data="$(/usr/sbin/prtdiag 2>/dev/null | head -n 1 | tr "[:upper:]" "[:lower:]")"
+	case "${data}" in
+	*virtualbox*)	virtualization="virtualbox";;
+	*vmware*)	virtualization="VMware";;
+	*hvm*domu*)	virtualization="Xen";;
+	esac
+fi
+if [ -z "${virtualization}" ]
+then
+	if [ -x /usr/sbin/pciconf ]
+	then
+		/usr/sbin/pciconf -lv 2>/dev/null
+	elif [ -x /usr/sbin/dmidecode ]
+	then
+		/usr/sbin/dmidecode 2>/dev/null
+	elif [ -x /sbin/lspci ]
+	then
+		/sbin/lspci -v 2>/dev/null
+	elif [ -d /dev/disk/by-id ]
+	then
+		ls -l /dev/disk/by-id
+	fi > ${TMP1_FILE}
+
+	if [ "$(grep -i "virtualbox" ${TMP1_FILE})$(grep -i vbox ${TMP1_FILE})" ]
+	then
+		virtualization="virtualbox"
+	elif [ "$(grep -i "vmware" ${TMP1_FILE})" ]
+	then
+		virtualization="VMware"
+	elif [ "$(grep -i "hvm.*domu" ${TMP1_FILE})" ]
+	then
+		virtualization="Xen"
+	elif [ "$(grep -i "rhev" ${TMP1_FILE})" ]
+	then
+		virtualization="kvm"
+	elif [ "$(grep -i "ovirt" ${TMP1_FILE})" ]
+	then
+		virtualization="kvm"
+	elif [ "$(grep -i "qemu" ${TMP1_FILE})" ]
+	then
+		virtualization="qemu"
+	fi
+	rm -f ${TMP1_FILE}
+fi
+if [ -z "${virtualization}" -a -f /proc/cpuinfo ]
+then
+	if [ "$(grep hypervisor /proc/cpuinfo)" ]
+	then
+		virtualization="virtual"
+	fi
+fi
+if [ -z "${virtualization}" -a "$(uname)" = "VMkernel" ]                                        
+then                                                                                     
+	virtualization="physical"                                    
+fi                                                                  
+
+if [ "${virtualization}" ]
+then
+	echo "fix:general::virtualization:${virtualization}" >>${SCC_KEEP_NEW}		# preserve for other modules
+	echo "fix:general::virtualization:${virtualization}"
+fi
+
+echo "fix:general::nodename:$(uname -n)"
+scc_check_file /etc/nodename "fix:general::/etc/nodename:" "#"
+echo "fix:general::model-id:$(uname -m)"
+
+# RH7.2 installs the MesaDemo in /usr/bin. Program model is part of this demo.
+if [ -x /usr/bin/model -a "${OS_NAME}" != "Linux" ]
+then
+	echo "fix:general::model:$(/usr/bin/model)"
+elif [ "${OS_NAME}" = "SunOS" ]
+then
+	model="$(prtconf -vp 2>/dev/null | sed -n -e "s/'//g" -e 's/ (.*//' -e "s/.*banner-name: *//p" | tail -1)"
+	if [ -z "${model}" ]
+	then
+		model="$(prtconf -vp 2>/dev/null | sed -n -e "s/'//g" -e 's/ (.*//' -e "s/.*name: *//p" | head -1)"
+	fi
+	if [ -z "${model}" ]
+	then
+		model="$(uname -i 2>/dev/null | sed -e 's/.*,//')"
+	fi
+	echo "fix:general::model:${model}"
+elif [ "${OS_NAME}" = "AIX" ]
+then
+	# Contributed by Doug Probst.
+	echo "fix:general::model:$(lsattr -El sys0 -a modelname | cut -d"," -f2 | cut -d" " -f1)"
+elif [ -x /sbin/hwmgr ]
+then
+	# TRU64
+	echo "fix:general::model:$(/sbin/hwmgr get attribute -id 1 2>&1 | sed -n -e 's/^ *name = //p')"
+elif [ -x /usr/sbin/dmidecode ]
+then
+	model="$(/usr/sbin/dmidecode 2>/dev/null			|
+		grep -vi				\
+			-e 'Not Specified'		\
+			-e 'Not Applicable'		\
+			-e 'Not Available'		\
+			-e 'To Be Filled By O.E.M'	\
+			-e 'None'			\
+			-e 'unknown'				|
+	awk	'/^[ 	]*System Information/	{ started = 1; next }
+		/^[ 	]*Manufacturer/		{ if ( started ) { sub( ".*Manufacturer.[ 	]*", "" ); man = $0; prd=""; ver=""; } next }
+		/^[ 	]*Product Name/		{ if ( started ) { sub( ".*Product Name.[ 	]*", "" ); prd = $0 } next }
+		/^[ 	]*Version/		{ if ( started ) { sub( ".*Version.[ 	]*", "" ); ver = $0 } next }
+		/^Handle/			{ started = 0; next }
+		END	{
+				data = sprintf( "%s %s %s",  man, prd, ver )
+				gsub( "[ 	][ 	]*", " ", data )
+				print data
+			}')"
+	if [ "${model}" != "  " ]		# Two spaces separating 3 empty attributes
+	then
+		echo "fix:general::model:${model}"
+	fi
+elif [ -x /usr/bin/lshal ]
+then
+	#system.hardware.version = '1.2'  (string)
+	#system.hardware.product = 'VirtualBox'  (string)
+	#system.hardware.vendor = 'innotek GmbH'  (string)
+
+	model="$(lshal -l -u /org/freedesktop/Hal/devices/computer 2>/dev/null	|
+		sed	-e "s/'//g"	\
+			-e '/Not Specified/d'					|
+		awk	'/system.hardware.version/	{ ver=$3; next }
+			/system.hardware.product/	{ prod=$3; next }
+			/system.hardware.vendor/	{ vendor=$3; next }
+		END	{
+				data = sprintf( "%s %s %s",  vendor, prod, ver )
+				gsub( "[        ][      ]*", " ", data )
+				print data
+			}')"
+	if [ "${model}" != "  " ]		# Two spaces separating 3 empty attributes
+	then
+		echo "fix:general::model:${model}"
+	fi
+elif [ -d /sys/devices/virtual/dmi/id ]
+then
+	model="$(cat /sys/devices/virtual/dmi/id/sys_vendor /sys/devices/virtual/dmi/id/product_name /sys/devices/virtual/dmi/id/product_version 2>/dev/null	|
+		tr -s "\012" " ")"
+	echo "fix:general::model:${model}"
+elif [ -x /bin/esxcli ]
+then
+	echo "fix:general::model:$(/bin/esxcli hardware platform get | sed -n -e 's/^ *Product Name: *//p')"
+elif [ -f /var/run/dmesg.boot ]
+then
+	# For BSD systems, example line:
+	#bios0: VMware, Inc. VMware Virtual Platform
+	# Get the last line starting with bios0 and ignore the ROM list
+	sed -n -e '/ ROM /d' -e 's/^bios0: /fix:general::model:/p' /var/run/dmesg.boot	|
+	tail -n 1
+fi
+
+if [ -x /usr/bin/hostid ]
+then
+	echo "var:general::hostid:$(/usr/bin/hostid 2>/dev/null)"
+elif [ "${OS_NAME}" = "AIX" ]
+then
+	# Doug Probst: get the  serial number of the CEC, needed for all service calls.
+	echo "fix:general::serial number:$(lsattr -El sys0 -asystemid | cut -d"," -f2 | cut -d" " -f1)"
+elif [ "${OS_NAME}" != "Linux" ]
+then
+	echo "fix:general::serial number:$(uname -i 2>/dev/null)"
+fi
+
+if [ "${OS_NAME}" = "HP-UX" ]
+then
+	if [ -x /usr/contrib/bin/machinfo ]
+	then
+		/usr/contrib/bin/machinfo		|
+		sed -n -e 's/.*machine serial number = /fix:general::System Serial Number:/p'
+	else
+		scc_help_info "fix:general::" <<-_X_
+			The System Serial can be retrieved fast by means of machinfo.
+			When this program is absent, it is obtained via stm in the hardware module.
+			At the next run of scc it is  present under class "general".
+		_X_
+		serial="$(grep "fix:general::System Serial Number:" ${SCC_KEEP_CONFIG} 2>/dev/null | tail -n 1)"
+		if [ "${serial}" ]
+		then
+			echo "${serial}" >>${SCC_KEEP_NEW}
+			echo "${serial}"
+		fi
+	fi
+elif  [ "${OS_NAME}" = "OSF1" ]
+then
+	# Contributed by Mattijs de Ruijter.
+	echo "fix:general::System Serial Number:$(consvar -g sys_serial_num 2>/dev/null | awk '{ print $3 }')"
+fi
+
+if [ -x /usr/sbin/bootinfo ]
+then
+	echo "fix:general::physical key:$(/usr/sbin/bootinfo -k)"
+	echo "fix:general::architecture:$(/usr/sbin/bootinfo -T)"
+fi
+
+if [ -x /usr/sbin/psrinfo ]
+then
+	cpu_cnt=$(/usr/sbin/psrinfo | wc -l)
+elif [ -x /usr/sbin/lscfg ]
+then
+	cpu_cnt="$(/usr/sbin/lscfg | grep -c "^+ proc[0-9]*")"
+elif [ -f /proc/cpuinfo ]
+then
+	cpu_cnt="$(grep -c "^processor" /proc/cpuinfo)"
+elif [ -x /usr/bin/sar ]
+then
+	cpu_cnt=$(/usr/bin/sar -M 1 1 2>/dev/null | sed -e '1,/idle$/d' -e '/system/d' | wc -l)
+elif [ -f /proc/interrupts ]
+then
+	cpu_cnt=$(head -n 1 /proc/interrupts | wc -w)
+elif [ -x /usr/sbin/sizer ]
+then
+	cpu_cnt=$(/usr/sbin/sizer -p)
+else
+	cpu_cnt="?"
+	if [ -x /sbin/sysctl ]		# BSD systems
+	then
+		sysctl_cpu_cnt="$(/sbin/sysctl -n hw.ncpu 2>/dev/null)"
+		if [ "${sysctl_cpu_cnt}" ]
+		then
+			cpu_cnt="${sysctl_cpu_cnt}"
+		fi
+	fi
+fi
+echo "fix:general::cpu_cnt:${cpu_cnt##* }"
+
+if [ "${OS_NAME}" = "HP-UX" ]
+then
+	my_model="$(/usr/bin/model | awk -F/ '{ print $NF }')"
+	grep "^${my_model}[ 	]*" /usr/sam/lib/mo/sched.models /usr/lib/sched.models 2>/dev/null	|
+	head -n 1											|
+	sed -e 's/^/fix:general::cpu-type:/'
+
+	speed="$(echo "itick_per_usec/${HPUX_ADB_NMBR_FORMAT}" | adb ${HPUX_KERNEL} /dev/kmem 2>/dev/null | awk '/[0-9]$/ { print $2 }')"
+	if [ -n "${speed}" ]
+	then
+		echo "fix:general::cpu-speed:${speed} Mhz"
+	fi
+elif [ "${OS_NAME}" = "AIX" ]
+then
+	prtconf 2>/dev/null				|
+	awk -F:	'/CPU Type/		{ print prefix "cpu-type:" $2, "(" l ")" }
+		/Processor Type/	{ l = $2; }
+		/Processor Clock Speed/	{ print prefix "cpu-speed:" $2 }' prefix="fix:general::"
+elif [ -f /proc/cpuinfo ]
+then
+	awk '/^cpu.*H[zZ]/	{
+					print "var:general::cpu-speed:" $4, $2;	# MHz or GHz
+					exit
+				}' /proc/cpuinfo
+elif [ -x /sbin/sysctl ]
+then
+	sysctl_cpu_type="$(/sbin/sysctl -n hw.model 2>/dev/null)"
+	if [ "${sysctl_cpu_type}" ]
+	then
+		echo "fix:general::cpu-type::${sysctl_cpu_type}"
+	fi
+elif [ -x /usr/sbin/psrinfo ]
+then
+	# CPU speed can be variable on OpenSolaris.
+	/usr/sbin/psrinfo -v					|
+	sed -n	-e 's/,//'		\
+		-e 's/.*operates at /var:general::cpu-speed:/p'	|
+	head -n 1
+fi
+
+# Record directory paths to facilitate scc-pull.
+echo "fix:general::bin:${SCC_BIN}"
+echo "fix:general::data:${SCC_DATA}"
+
+echo "fix:general::OS-name:${OS_NAME}"
+echo "fix:general::license:$(uname -l 2>/dev/null)"
+
+if [ -x /usr/bin/oslevel ]
+then
+        # Doug Probst: added -r to display maintenance level.
+	release=$(/usr/bin/oslevel -r 2>/dev/null)
+elif [ -x /usr/sbin/sizer ]
+then
+	# TRU64: sizer -v returns more detailled data.
+	release="$(/usr/sbin/sizer -v | awk '{ if ( $3 ~ "^V" ) { print $3 } else { print $4 } }')"
+elif [ "${OS_NAME}" = "Linux" ]
+then
+	echo "fix:general::linux kernel version:$(uname -r)"
+elif [ "${OS_NAME}" = "Darwin" ]
+then
+	if [ -x /usr/bin/sw_vers ]
+	then
+		os_full_name="$(/usr/bin/sw_vers -productName)"
+		release="$(/usr/bin/sw_vers -productVersion)"
+	else
+		os_full_name="Mac OS X"
+		release="$(uname -r)"
+	fi
+	echo "fix:general::OS-fullname:${os_full_name}"
+else
+	release=$(uname -r)
+fi
+if [ "${OS_NAME}" != "Linux" ]
+then
+	echo "fix:general::OS-release:${release}"
+fi
+
+echo "fix:general::OS-version-level:$(uname -v)"
+
+if [ -x /usr/bin/sw_vers ]
+then
+        # Darwin: Mac OS X
+	/usr/bin/sw_vers 2>/dev/null			|
+	sed -e 's/^/fix:general::sw_vers:/'
+fi
+
+if [ "${OS_NAME}" = "HP-UX" ]
+then
+	hpux_trusted=0
+	if [ -x /usr/lbin/modprpw ]
+	then
+		/usr/lbin/modprpw >/dev/null 2>&1
+		if [ $? -eq 2 ]
+		then
+			hpux_trusted=1
+		fi
+	fi
+	echo "fix:general::hpux-trusted:${hpux_trusted}"
+fi
+
+distro_class="fix:general:"
+if [ -n "${SCC_LINUX_DISTRO}" ]			# Determined in scc-collect!
+then
+	echo "${distro_class}:linux distro name:${SCC_LINUX_DISTRO}"
+fi
+rm -f ${TMP1_FILE}
+scc_linux_distro "${distro_class}:linux distro"		|
+tee ${TMP1_FILE}
+if [ -s ${TMP1_FILE} ]
+then
+	linux_release="$(sed -n 's/.*linux distro version://p' <${TMP1_FILE})"
+	if [ -z "${linux_release}" ]
+	then
+		# Not specifically retrieved from distro/release file.
+		# Get the release from the last line containing a number.
+		linux_release="$(sed	-e 's/.*linux distro [^ ]*://'	\
+					-e '/ANSI_COLOR/d'		\
+					-e 's/"//g'			\
+					-e 's/^[^0-9]*//'		\
+					-e '/^ *$/d'			\
+						<${TMP1_FILE}			|
+				tail -n 1)"
+	fi
+	if [ "${linux_release}" ]
+	then
+		echo "fix:general::OS-release:${linux_release}"
+	fi
+fi
+rm -f ${TMP1_FILE}
+
+if [ "${OS_NAME}" = "SunOS" ]
+then
+	scc_check_file /etc/release "fix:general::/etc/release:" "#"		# Solaris
+fi
+
+scc_time_zone=""
+scc_date_zone="$(date '+%Z' 2>/dev/null)"
+if [ -x /usr/bin/nlsadm ]
+then
+	scc_time_zone="$(/usr/bin/nlsadm get-timezone 2>/dev/null)"
+elif [ -f /etc/sysconfig/clock ]
+then
+	scc_time_zone="$(sed -n -e '/^ZONE=/p' -e '/^TZ=/p' -e '/^TIMEZONE=/p' /etc/sysconfig/clock)"
+elif [ "${TZ:-}" ]
+then
+	scc_time_zone="${TZ}"
+elif [ "${scc_date_zone}" ]
+then
+	scc_time_zone="${scc_date_zone}"
+elif [ -f /etc/TIMEZONE ]
+then
+	scc_time_zone="$(sed -n -e 's/^TZ=//p' /etc/TIMEZONE)"
+elif [ -f /etc/timezone ]
+then
+	# On Sabayon this file does not contain a CR.
+	( cat /etc/timezone; echo )		|
+	scc_time_zone="$(sed	-e '/^$/d')"
+elif [ -h /etc/localtime ]
+then
+	scc_time_zone="$(ls -l /etc/localtime | sed -e 's@.*/@@')"
+fi
+if [ "${scc_time_zone}" ]
+then
+	# Keep for system-module
+	echo "fix:general::timezone:${scc_time_zone}"	|
+	tee -a ${SCC_KEEP_NEW}
+fi
+if [ -x /sbin/hwclock ]
+then
+	/sbin/hwclock -r 2>/dev/null		|
+	sed -e 's/^/var:general::hwclock:/'
+fi
+
+if [ -x /sbin/runlevel ]
+then
+	echo "fix:general::run level:$(/sbin/runlevel 2>/dev/null)"
+elif [ -x /sbin/getrunlvl ]
+then
+	echo "fix:general::run level:$(/sbin/getrunlvl)"
+else
+	case "${OS_NAME}" in
+	*BSD|DragonFly)	:	# No runlevels in BSD
+			;;
+	*)		echo "fix:general::run level:$(who -r 2>/dev/null | awk '{ print $3 }')"
+			;;
+	esac
+fi
+
+# Edit scc-localize to change the default setting of this variable.
+# There is not much use for a variable checksum of the root-passwd.
+# Do not add the checksum of the password to the snapshot when this variable is set to "var".
+if [ "${SCC_ROOT_PW:-}" != "var" ]
+then
+	if [ -f /tcb/files/auth/system/default -a -r /tcb/files/auth/system/default ]
+	then
+		# HP-UX trusted system
+		grep ":u_pwd" /tcb/files/auth/r/root
+	elif [ -f /etc/shadow -a -r /etc/shadow ]
+	then
+		# default shadow password file
+		grep "^root:" /etc/shadow
+	elif [ -f /etc/master.passwd -a -r /etc/master.passwd ]
+	then
+		# FreeBSD, NetBSD and OpenBSD
+		grep "^root:" /etc/master.passwd
+	else
+		# old-fashioned password file
+		grep "^root:" /etc/passwd 2>/dev/null
+	fi							|
+	scc_crypt						|
+	sed -e "s/^/fix:general::superuser password:/"
+fi
+
+bsd_os=""
+case "${OS_NAME}" in
+*BSD)	bsd_os="yes";;
+esac
+
+if [ "${OS_NAME}" = "AIX" ]
+then
+        # bootinfo should have worked but does not, this does (Doug Probst).
+	echo "fix:general::memory real:$(lsattr -El mem0 -a goodsize | awk '{ print $2 }') MB"
+elif [ "${bsd_os}" ]
+then
+	memory="$(sysctl hw.physmem 2>/dev/null | sed -e 's/.*[^0-9]//')"
+	echo "fix:general::memory real:$(( memory / 1024 / 1024 )) MB"
+elif [ "${OS_NAME}" = "HP-UX" ]
+then
+	# /usr/sam/lbin/getmem is not supported and does not work correctly for more than 512MB.
+
+	pg_size=$(getconf PAGE_SIZE 2>/dev/null)
+	pg_nmbr=$(echo "memory_installed_in_machine/${HPUX_ADB_NMBR_FORMAT}" | adb ${HPUX_KERNEL} /dev/kmem 2>/dev/null | awk '{ if ( NF == 2 ) print $2 }' )
+
+	# pg_nmbr does not include the entries in the Page Deallocation Table.
+	# The shell does not "round" the following calculation, it truncates.
+	# On systems with some pages deallocated, this results in odd memory sizes.
+	# To avoid this, increase the number of "alive" pages with the size of the PDT
+	# (50 on the systems I have seen).
+	# Avoid overflow by dividing $pg_size separately.
+	pg_nmbr="${pg_nmbr:-0}"
+	pg_size="${pg_size:-4096}"
+	memory=$(( ( pg_nmbr + 50 ) * ( pg_size / 1024 ) / 1024  ))
+	echo "fix:general::memory real:${memory} MB"
+
+	memory=$(dmesg 2>/dev/null | grep '^ *Physical:')
+	if [ "${memory}" ]
+	then
+		# Make this data variable, to avoid that "changes" get logged when
+		# this data disappears from the fixed sized kernel message buffer.
+		echo "var:general::memory real (dmesg):$(echo "${memory}" | awk '{ print $2 }')"
+		echo "var:general::memory lockable (dmesg):$(echo "${memory}" | awk '{ print $5 }')"
+		echo "var:general::memory available (dmesg):$(echo "${memory}" | awk '{ print $8 }')"
+	fi
+elif [ "${OS_NAME}" = "SunOS" ]
+then
+	memory="$(dmesg | grep '^mem =' | tail -n 1)"
+	if [ "${memory}" ]
+	then
+		echo "fix:general::memory real:${memory}"
+		echo "fix:general::memory available:$(dmesg | grep '^avail mem =' | tail -n 1)"
+	else
+		echo "fix:general::memory real:$(prtconf 2>/dev/null | sed -n -e 's/^Memory size: //p')"
+	fi
+elif [ -x /usr/bin/free ]
+then
+	memory="$(free -m 2>/dev/null | awk '/Mem/ { print $2 }')"
+	if [ -z "${memory}" ]
+	then
+		# Busybox version that does not support -m option, returns by default in KB.
+		memory="$(free 2>/dev/null | awk '/Mem/ { printf( "%d\n", $2 / 1024 ) }')"
+	fi
+	echo "fix:general::memory real:${memory} MB"
+elif [ -f /proc/meminfo ]
+then
+	echo "fix:general::memory:$(awk '/^MemTotal:/	{ $1=""; print }' /proc/meminfo 2>/dev/null)"
+elif [ -x /sbin/hwmgr ]
+then
+	echo "fix:general::memory:$(/sbin/hwmgr get attribute -id 1 2>&1 | sed -n -e 's/^memory//p')"
+fi
+
+if [ -x /usr/bin/pagesize ]
+then
+	echo "fix:general::memory pagesize:$(/usr/bin/pagesize)"
+fi
+
+echo "var:general::uptime:$(uptime 2>/dev/null | sed -e 's/.* up //' -e 's/,.*//' -e 's/^ *//')"
+boot_time="$(who -b 2>/dev/null | head -n 1)"
+if [ "${boot_time}" ]
+then
+	echo "var:general::boot time:${boot_time}"
+fi
+if [ -f /etc/rc.log ]
+then
+	echo "var:general::rclog:$(ls -l /etc/rc.log)"
+fi
+if [ -f /etc/shutdownlog ]
+then
+	echo "var:general::shutdownlog:$(ls -l /etc/shutdownlog)"
+fi
+
+exit 0

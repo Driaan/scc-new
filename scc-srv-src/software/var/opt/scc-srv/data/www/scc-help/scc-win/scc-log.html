@@ -1,0 +1,99 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc-log.pl 1 "SCC-WIN" </TITLE>
+</HEAD><BODY>
+<H1>scc-log.pl(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-log - collect SCC-data, determine differences and convert to HTML
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-win	1.10.38
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-log [ --comment &lt;remark&gt; ] [ --extra &lt;mod&gt; ] [ --timeout &lt;duration&gt; ] &lt;name&gt;
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program runs scc-collect.pl to collect SCC-data via WMI.
+	It compares the resulting data with the previous snapshot and
+	adds the differences to a logbook. Then the snapshot and the
+	logbook are converted to HTML.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	--comment &lt;remark&gt;      Comment for entry in logbook.
+	--extra &lt;mod&gt;           Execute additional, user modules.
+	--timeout &lt;duration&gt;    Max. seconds for processing. When this time
+	                        is exceeded, the program aborts.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;name&gt;          Collect data from system &lt;name&gt;.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following message to stderr:
+
+	Syntax error, use: scc-log [ --comment &lt;remark&gt; ] [ --extra &lt;mod&gt; ]
+	                           [ --timeout &lt;duration&gt; ] &lt;name&gt;
+	A syntax error was detected and reported.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 syntax error
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-log is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2006-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	tmp - directory for temporary files
+	doc/style.css - template style-sheet, copied to data
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-win-4.html">scc-win(4)</A>, <A HREF="scc-win-5.html">scc-win(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6241 $
+
+</PRE>
+</BODY></HTML>

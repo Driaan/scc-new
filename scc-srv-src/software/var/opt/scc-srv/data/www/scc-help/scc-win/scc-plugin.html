@@ -1,0 +1,88 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc-plugin.pl 1 "SCC-WIN" </TITLE>
+</HEAD><BODY>
+<H1>scc-plugin.pl(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-plugin - template for new user modules
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-win	1.10.38
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-plugin
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program is a template for new user modules. Copy this file
+	to the scc_modules folder and assign the proper name in the
+	format: scc_9999_u_&lt;name&gt;. Where 9999 is a 4-digit number
+	indicating the order of execution and &lt;name&gt; describes the 
+	data to be collected.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following message to stderr:
+
+	&lt;prog&gt;: WMI connection failed.
+	Unable to connect to WMI on the host. Check authorisation and
+	connectivity.
+
+	&lt;prog&gt;: unable to open &lt;file&gt;
+	Cannot open output file indicated by environment variable.
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	The file to write data in, is indicated by the environment
+	variable: $ENV{ SCC_PLUGIN_DATA }
+	This variable is set by scc-collect.pl.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-plugin is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2006-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-win-4.html">scc-win(4)</A>, <A HREF="scc-win-5.html">scc-win(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6241 $
+
+</PRE>
+</BODY></HTML>

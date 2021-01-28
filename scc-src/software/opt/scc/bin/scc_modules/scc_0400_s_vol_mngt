@@ -1,0 +1,1940 @@
+#!/bin/sh
+
+# Shell script to collect Volume Management data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0400_s_vol_mngt 6223 2019-04-17 18:29:28Z siemkorteweg $
+ 
+# The general structure of the Volume Management data is:
+# filesystems
+#	survey
+#	mount
+#	file
+#		config file/command 1
+#		...
+#		config file/command a
+#	filesys 1
+#	...
+#	filesys b
+# free space (optional)
+# volume 1
+#	general
+#	free space (optional)
+#	logical/physical component 1
+#	...
+#	logical/physical component c
+# ...
+# volume d
+# <Volume Management> general data 
+
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# Determine whether we use the real df or the busybox variant in this module.
+export busybox_df=
+busybox_check df
+if [ $? -ne 0 ]
+then
+	busybox_df="yes"
+fi
+
+# Determine whether Veritas Volume Manager is installed and active.
+# The presence of the executables does not mean the software is used.
+VXVM_ENABLED=0;				export VXVM_ENABLED
+if [ -x /usr/sbin/vxdg ]
+then
+	mode=$(/usr/sbin/vxdctl mode 2>/dev/null)
+	if [ "${mode}" = "mode: enabled" ]
+	then
+		VXVM_ENABLED=1
+	fi
+fi
+
+if [ "${OS_NAME}" = "HP-UX" ]
+then
+	bdf -l 2>/dev/null
+elif [ -x /bin/esxcli ]
+then
+	/bin/esxcli storage filesystem list
+elif [ "${busybox_df}" ]
+then
+	df			# no options supported
+elif [ "${OS_NAME}" = "OSF1" -o "${OS_NAME}" = "AIX" ]
+then
+	df -k 2>/dev/null
+elif [ "${OS_NAME}" = "Haiku" ]
+then
+	df --all
+else
+	df -kl 2>/dev/null	# SunOS, Linux, *BSD
+
+	# Get data from VmWare file systems (suggested by Hermann-Josef Beckers)
+	if [ -x /usr/sbin/vdf ]
+	then
+		/usr/sbin/vdf -h 2>/dev/null		|
+		sed -n	-e '/^vmfs/p'	\
+			-e '/ vmfs/p'
+	fi
+fi				|
+sed -e 's/^/var:Volume Management:file systems:survey::/'
+
+{
+	# When zones are used on Solaris10, additional mounts appear for each active zone.
+	# Avoid changes in the logbook by tagging the mounts for zones as variable data.
+	if [ -x /usr/sbin/zoneadm ]
+	then
+		/usr/sbin/zoneadm list -cv 2>/dev/null					|
+		awk '{ if ( $4 ~ "^/" && length( $4 ) > 1 ) print "zone", $4 }'
+	fi
+
+	# Mounts from the automounter will clobber the logbook, add data to mark them later as var data.
+	if [ -x /usr/sbin/automount ]
+	then
+		if [ "${OS_NAME}" = "SunOS" ]
+		then
+			# On SunOS there is no easy way to determine automounted shares,
+			# so we treat all NFS mounts as (variable) automounts.
+			grep -l automount ${PROC_FILE} >/dev/null 2>/dev/null
+			if [ $? -eq 0 ]
+			then
+				echo "automount /"
+			fi
+		else
+			timeout="$(which timeout 2>/dev/null)"
+			if [ -x "${timeout}" ]
+			then
+				timeout="${timeout} 60"
+			fi
+
+			${timeout} /usr/sbin/automount -m 2>/dev/null >${TMP1_FILE}
+			if [ $? -eq 0 -a -s ${TMP1_FILE} ]
+			then
+				# map entries:
+				#  <dir> | <filer>:<path>
+				#  <dir> | <options> <filer>:<path>
+				#  <dir> | <subdir1> <filer1>:<path1> <subdir2> <filer2>:<path2> ...
+				#  <dir> | <options> <subdir1> <filer1>:<path1> <subdir2> <filer2>:<path2> ...
+
+				awk     '/^Mount point:/	{
+									m_p = $3
+									if ( m_p ~ "^/-$" )
+									{
+										display=1;			# list all entries of direct map
+									}
+									else
+									{
+										print "automount " m_p "/";	# display mount point only
+										display=1
+									}
+								}
+					/ \| /			{
+									if ( display )
+									{
+										print "automount " m_p "/" $1
+										for ( i = 3;  i <= NF; i++ )
+										{
+											if ( $i !~ "^-" && $i !~ ".*:.*" )
+											{
+												print "automount " m_p "/" $1 "/" $i
+											}
+										}
+									}
+								 }' ${TMP1_FILE}	|
+				sed	-e 's@/-/@/@g'	\
+					-e 's@//@/@g'
+			else
+				# automount does not (yet) support the -m option.
+				# so we treat all NFS mounts as (variable) automounts.
+				echo "automount /"
+			fi
+			rm -f ${TMP1_FILE}
+		fi
+	fi
+
+	# Erase the "handle" that is attached to the options (dev=).
+	if [ "${OS_NAME}" = "AIX" ]
+	then
+		# Erase header and date and reverse columns
+		mount				|
+		awk	'{
+				#         /dev/hd4         /                jfs2   Nov 15 05:24 rw,log=/dev/hd8 
+				if ( NR <= 2 )
+				{
+					next
+				}
+				if ( NF == 7 )
+				{
+					print $2, "on", $1, $3, $7
+				}
+				else
+				{
+					print $3, "on", $1 ":" $2, $4, $7
+				}
+			}'
+	elif [ "${OS_NAME}" = "SunOS" ]
+	then
+		mount -v
+	elif [ "${OS_NAME}" != "Haiku" ]
+	then
+		mount
+	fi							|
+	sort							|
+	sed	-e '/ type autofs /d'			\
+		-e '/\/var\/lib\/mesos/d'		\
+		-e 's@/dev=[0-9a-f][0-9a-f]*@@'		\
+		-e 's@/sharezone=[0-9[0-9]*@@'		\
+		-e 's@ci=[0-9a-f][0-9a-f]*@ci=@'	\
+		-e 's@si=[0-9a-f][0-9a-f]*@si=@'	\
+		-e 's@size=[0-9][0-9]*@size=@'		\
+		-e 's/ on [A-Z][a-z][a-z] .*//'		\
+		-e 's@//@/@g'
+}	|
+awk	'/^zone /	{
+				pattern=sprintf( "^%s", $2 )
+				zone_list[ pattern ] = 1
+				next
+			}
+	/^automount /	{
+				pattern=sprintf( "^%s", $2 )
+				auto_path[ $2 ] = 1
+				auto_regexp[ pattern ] = 1
+				next
+			}
+			{
+				# Format is:
+				# <device> on <mount> type <type> (<options>)
+				prefix="fix"
+				if ( $1 == "securityfs" )
+				{
+					# On FC not mounted after reboot, but mounted after security command has been issued.
+					# Use var to avoid changes in the logbook.
+					prefix="var"
+				}
+				else if ( $1 ~ "docker" || $3 ~ "/var/lib/docker" || $3 ~ "/run/docker" )
+				{
+					prefix="var"
+				}
+				else if ( $1 ~ "^mfs:[0-9][0-9]*" )
+				{
+					prefix="var"
+				}
+				else if ( $0 ~ "/dev/loop.*squashfs" )
+				{
+					# /dev/loop1 on /opt/alarmclock type squashfs (ro,relatime)
+					prefix="var"
+				}
+				else if ( $3 ~ ".*:.*" || $3 ~ "^/vol" || $3 ~ "^/export" || $3 ~ "^/run/snapd/ns.*" )
+				{
+					prefix="var"
+				}
+				else if ( $1 == "tmpfs" && $3 ~ "^/run/user/*" )
+				{
+					prefix="var"			# tmpfs for IPC
+				}
+				else if ( $5 == "lofs" )
+				{
+					prefix="var"
+				}
+				else if ( $5 == "mvfs" )		# ClearCase (ad hoc) mount
+				{
+					prefix="var"
+				}
+				else if ( $5 == "zfs" && $1 ~ "^zone.*" )
+				{
+					prefix="var"
+				}
+				else
+				{
+					if ( $5 == "nfs" )
+					{
+						if ( auto_path[ $3 ] )				# from autodirect map?
+						{
+							prefix="var"
+						}
+						else
+						{
+							for ( d in auto_regexp )		# from non-direct maps?
+							{
+								if ( $3 ~ d )
+								{
+									prefix="var"
+									break
+								}
+							}
+						}
+					}
+					for ( vol in zone_list )
+					{
+						if ( $1 ~ vol || $3 ~ vol )
+						{
+							prefix="var"
+							break
+						}
+					}
+				}
+				print prefix label $0
+			}' label=":Volume Management:file systems:mount::"
+scc_check_file /etc/autofs_ldap_auth.conf "fix:Volume Management:file systems:file:/etc/autofs_ldap_auth.conf::" "#"
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli storage nfs list						|
+	sed -e 's/^/var:Volume Management:NFS volume:list::/'
+
+	/bin/esxcli storage nfs list						|
+	awk '{ if ( NR > 2 ) { print $1 } }'					|
+	while read vol
+	do
+		/bin/esxcli storage nfs param get -v ${vol}		|
+		sed -e "s/^/var:Volume Management:NFS volume:${vol}::/"
+	done
+fi
+
+if [ -f /etc/filesystems ]
+then
+	awk '/^\*/		{ next }
+		/^[ 	]*$/	{ next }
+		/^\//		{ fs = $1; next }
+				{
+					printf( "fix:Volume Management:file systems:file:/etc/filesystem::%s%s\n",
+						fs, $0 )
+				}' /etc/filesystems
+fi
+
+scc_check_file /etc/vfs "fix:Volume Management:file systems:file:/etc/vfs::" "#"
+scc_check_file /etc/mke2fs.conf "fix:Volume Management:file systems:file:/etc/mke2fs.conf::" "#"
+
+scc_check_file /etc/ccd.conf "fix:Volume Management:file systems:file:/etc/ccd.conf::" "#"
+scc_check_file /etc/portal.conf "fix:Volume Management:file systems:file:/etc/portal.conf::" "#"
+
+if [ -f /etc/fstab ]
+then
+	class="Volume Management:file systems:file:/etc/fstab"
+	scc_check_file /etc/fstab "fix:${class}::" "#"	|
+	sed -e 's/[ 	][ 	]*/ /g'			|
+	sort
+
+	echo "hlp:${class}::The contents has been sorted and multiple spaces have been replaced by a single space."
+
+elif [ -f /etc/vfstab ]
+then
+	scc_check_file /etc/vfstab "fix:Volume Management:file systems:file:/etc/vfstab::" "#"
+fi 
+
+if [ -x /usr/sbin/share -a "${OS_NAME}" != "HP-UX" ]
+then
+	/usr/sbin/share					|
+	sed	-e 's/^/fix:Volume Management:file systems:file:share-exports::/'	\
+		-e 's@^fix:\(.*/zones\)@var:\1@'
+elif [ -x /usr/sbin/exportfs ]
+then
+	/usr/sbin/exportfs 2>/dev/null			|
+	sed -e 's/^/fix:Volume Management:file systems:file:exportfs::/'
+else
+	scc_check_file /etc/dfs/dfstab "fix:Volume Management:file systems:file:/etc/dfs/dfstab::" "#"
+fi
+for file in /etc/exports /etc/dfs/dfstypes /etc/nfs/nfslog.conf /etc/nfssec.conf /etc/nfsmount.conf /etc/wrtab /etc/wrtab.d/*
+do
+	scc_check_file "${file}" "fix:Volume Management:file systems:file:${file}::" "#"
+done
+
+# SunOS and Linux have different automounter files.
+for master in /etc/auto_master /etc/auto.master
+do
+	if [ ! -f ${master} ]
+	then
+		continue
+	fi
+
+	# Show the contents of the file.
+	scc_check_file "${master}" "fix:Volume Management:file systems:file:automounter:${master}::" "#"
+
+	# Show the contents of the contained maps or files.
+	sed	-e '/^#/d'		\
+		-e '/^[ 	]*$/d'	\
+		-e 's/^+//' "${master}"		|
+	sort					|
+	while read nismap file
+	do
+		# We deal with the case of a file, not a NIS-map.
+		case "${nismap}" in
+		/*)	scc_check_file "${file}" "fix:Volume Management:file systems:file:automounter:${file}::" "#"
+			continue;;
+		*home*)	continue;;		# Ignore home maps to avoid too much data for large environments.
+		esac
+
+		if [ "${IS_NIS_CLIENT:-0}" -eq 1 ]
+		then
+			ypcat -k ${nismap} 2>/dev/null	|
+			sort				|
+			sed -e "s|^|fix:Volume Management:file systems:file:automounter:map ${nismap}::|"
+		fi
+
+	done
+
+	# On SunOS auto.master was used in previous versions of the automounter.
+	# Do not check auto.master when auto_master has been handled.
+	break
+done
+
+scc_check_file /etc/autofs.conf "fix:Volume Management:file systems:file:automounter:/etc/autofs.conf::" "#"
+
+# ivman: Ikke's Volume Manager
+# Ivman is a generic handler for HAL events. Originally for automounting.
+for file in /etc/ivman/*
+do
+	# XML-files; no comment character.
+	scc_check_file "${file}" "fix:Volume Management:file systems:file:${file}::" ""
+done
+
+if [ -x /usr/bin/cachefsstat ]
+then
+	/usr/bin/cachefsstat 2>/dev/null			|
+	sed	-e '/^[ 	]*$/d'	\
+		-e 's/^/var:Volume Management:file systems:file:cachefsstat::/'
+fi
+
+scc_check_file /etc/rmmount.conf "fix:Volume Management:file systems:file:/etc/rmmount.conf::" "#"
+scc_check_file /etc/vold.conf "fix:Volume Management:file systems:file:/etc/vold.conf::" "#"
+
+# Show the commandline to recreate the file system.
+if [ "${OS_NAME}" = "HP-UX" -o "${OS_NAME}" = "SunOS" ]
+then
+	mount						|
+	sort						|
+	sed -n -e 's@^\([^ ][^ ]*\) on /dev@\1 /dev@p'	|
+	while read fs device remainder
+	do
+		mkfs -m ${device} 2>/dev/null		|
+		sed -e "s@^@fix:Volume Management:file systems:${fs}::mkfs:	@"
+
+		if [ "${OS_NAME}" = "SunOS" ]
+		then
+			newfs -Nv ${device} 2>/dev/null		|
+			sed -e "s@^@fix:Volume Management:file systems:${fs}::newfs:	@"
+		fi
+	done
+fi
+
+if [ "${OS_NAME}" = "HP-UX" ]
+then
+	df -ln				|
+	sort				|
+	while read fs remainder
+	do
+		df -g ${fs} 2>/dev/null		|
+		sed -e "s@^@var:Volume Management:file systems:${fs}::@"
+	done
+elif [ "${busybox_df}" ]
+then
+	# cannot specify separate filesystems, no detailled information
+	df				|
+	awk	'{
+			if ( NR == 1 )
+			{
+				heading = $0
+				next
+			}
+			print "var:Volume Management:file systems:" $(NF) "::" heading
+			print "var:Volume Management:file systems:" $(NF) "::" $0
+		}'
+elif [ "${OS_NAME}" = "Linux" ]
+then
+	# Sample output of df -l:
+	#Filesystem           1K-blocks      Used Available Use% Mounted on
+	#/dev/mapper/VolGroup00-LogVol00
+       	#                	7579576   2728588   4465964  38% /
+	#/dev/sda1               101086     19424     76443  21% /boot
+	#none                    127384         0    127384   0% /dev/shm
+
+	if [ "${busybox_df}" ]
+	then
+		df 2>/dev/null
+	elif [ -x /usr/sbin/vdf ]
+	then
+		/usr/sbin/vdf 2>/dev/null
+	else
+		df -l 2>/dev/null
+	fi					|
+	sed -n				\
+		-e '/^Filesystem/d'	\
+		-e '/^none/d'		\
+		-e 's/.*%[ 	]*//p'		|
+	sort					|
+	while read fs
+	do
+		{
+			if [ "${busybox_df}" ]
+			then
+				df "${fs}"
+			else
+				# Get data from VmWare file systems (suggested by Hermann-Josef Beckers)
+				if [ -x /usr/sbin/vdf ]
+				then
+					case "${fs}" in
+					/vmfs/*)	/usr/sbin/vdf -P "${fs}"
+							;;
+					*)		df -lP "${fs}" 2>/dev/null	# Regular file system
+							df -lPi "${fs}" 2>/dev/null
+							;;
+					esac
+				else
+					df -lP "${fs}" 2>/dev/null
+					df -lPi "${fs}" 2>/dev/null
+				fi
+			fi
+		}				|
+		sed -e "s@^@var:Volume Management:file systems:${fs}::@"
+	done
+elif [ "${OS_NAME}" = "AIX" ]
+then
+	df				|
+	awk '/^\//	{ print $NF }'	|
+	sort				|
+	while read fs remainder
+	do
+		{
+			df -v -m "${fs}"
+			lsfs -q "${fs}"
+		}				|
+		sed -e "s@^@var:Volume Management:file systems:${fs}::@"
+
+		# Hermann-Josef Beckers reported that running defragfs -r took hours for large filesystems.
+		# Running with the -q option reduced this to minutes for all file systems. 
+		# As the resulting data is variable and does not appear in the logbook, we do not use defragfs any more.
+	done
+elif [ "${OS_NAME}" = "SunOS" ]
+then
+	# Get the names and types and ignore most data of "variable" file systems.
+	/usr/sbin/df -ln		|
+	sort				|
+	while read fs separator type remainder
+	do
+		if [ "${type}" = lofs ]
+		then
+			continue
+		fi
+
+		/usr/sbin/df -g ${fs} 2>/dev/null	|
+		sed -e "s@^@var:Volume Management:file systems:${fs}::@"
+	done
+fi
+# No detailed statistics available for NetBSD and FreeBSD.
+
+if [ -f /etc/mtab ]
+then
+	# Format is: device mountpoint type options
+	awk '{ print $1, $2, $3 }' /etc/mtab
+elif [ -f /etc/mnttab ]
+then
+	# Format is: device mountpoint type options
+	awk '{ print $1, $2, $3 }' /etc/mnttab
+elif [ "${OS_NAME}" = "FreeBSD" ]
+then
+	# Format is: device mountpoint type options
+	mount -p 2>/dev/null		|
+	awk '{ print $1, $2, $3 }'
+elif [ "${OS_NAME}" = "NetBSD" ]
+then
+	# Format is: /dev/da0s1g on /tmp (ufs, local, soft-updates)
+	mount 2>/dev/null		|
+	awk '/ ffs /	{ print $1, $3, $4 }'
+elif [ "${OS_NAME}" = "OpenBSD" ]
+then
+	# Format is: /dev/wd0a on / type ffs (local)
+	mount 2>/dev/null		|
+	awk '/ ffs /	{ print $1, $3, $5 }'
+elif [ "${OS_NAME}" = "DragonFly" ]
+then
+	# Device                Mountpoint      FStype  Options         Dump    Pass#
+	#/dev/ad0s1a            /               ufs     rw              1       1
+	awk     '{ print $1, $2, $3; }' /etc/fstab 2>/dev/null
+fi						|
+sort						|
+sed -e '/\/var\/lib\/mesos/d'			|
+while read dev mount type remainder
+do
+	prefix="fix"
+	case "${mount}" in
+	/var/lib/docker)	prefix="var";;
+	esac
+
+	if [ "${type}" = "hammer" -o "${type}" = "null" ]
+	then
+		if [ -x /sbin/hammer ]
+		then
+			/sbin/hammer -q version "${mount}" 2>/dev/null		|
+			sed -e "s@^@fix:Volume Management:file systems:${mount}::hammer version:	@"
+
+			# Ignore the variable sync-data.
+			/sbin/hammer pfs-status "${mount}" 2>/dev/null		|
+			sed	-e '/sync-beg-tid/d'		\
+				-e '/sync-end-tid/d'		\
+				-e "s@^@fix:Volume Management:file systems:${mount}::hammer pfs-status:	@"
+		fi
+	fi
+
+	if [ "${type}" = "btrfs" -a -x /sbin/btrfs ]
+	then
+		/sbin/btrfs filesystem show ${dev} 2>/dev/null		|
+		sed -e "s@^@var:Volume Management:file systems:${mount}::brtfs-show:	@"
+	fi
+
+	if [ "${type}" = "reiserfs" -a -x /sbin/dumpreiserfs ]
+	then
+		/sbin/dumpreiserfs -m ${dev} 2>&1		|
+		sed -e "s@^@var:Volume Management:file systems:${mount}::dumpreiserfs:	@"
+	fi
+
+	if [ "${type}" = "reiserfs" -a -x /sbin/debugreiserfs ]
+	then
+		/sbin/debugreiserfs -J ${dev} 2>&1		|
+		sed -e "s@^@var:Volume Management:file systems:${mount}::debugreiserfs:	@"
+	fi
+
+	if [ "${type}" = "ext2" -o "${type}" = "ext3" -o "${type}" = "ext4" ]
+	then
+		program=/sbin/dumpe2fs
+		if [ "${type}" = "ext4" -a -x /sbin/dumpe4fs ]
+		then
+			program=/sbin/dumpe4fs
+		fi
+		if [ -x "${program}" ]
+		then
+			# Some (small) distro's indicate a non-existing device in /etc/mtab. Consult /etc/fstab to obtain the correct device.
+			if [ ! -e "${dev}" -a -f /etc/fstab ]
+			then
+				dev="$(awk '{ if ( $2 == mount ) print $1; }' mount="${mount}" /etc/fstab | head -n 1 )"
+			fi
+
+			if [ "${dev}" ]
+			then
+				# Limit the (vast) output to the superblock and remove trailing ^M of possible error messages.
+				"${program}" -h ${dev} 2>&1			|
+				tr -d '\015'					|
+				sed -n  -e '1,/^$/p'                    	|
+				sed	-e '/count:/d'		\
+					-e '/block:/d'		\
+					-e '/blocks:/d'		\
+					-e '/inodes:/d'		\
+					-e '/checked:/d'	\
+					-e '/time:/d'		\
+					-e "s@^@var:Volume Management:file systems:${mount}::${program##*/}:	@"
+			fi
+		fi
+	fi
+
+	if [ "${type}" = "hfs" -a -x /usr/sbin/tunefs ]
+	then
+		/usr/sbin/tunefs -v ${dev} 2>/dev/null		|
+		sed -e "s@^@var:Volume Management:file systems:${mount}::tunefs:	@"
+	fi
+
+	if [ "${type}" = "vxfs" -a -x /usr/sbin/fsdb ]
+	then
+		echo "8192B.p S"				|
+		/usr/sbin/fsdb -F vxfs ${dev} 2>/dev/null	|
+		sed -e "s@^@var:Volume Management:file systems:${mount}::fsdb:	@"
+	fi
+
+	if [ "${type}" = "vxfs" -a -x /sbin/vxtunefs ]
+	then
+		/sbin/vxtunefs ${dev} 2>/dev/null		|
+		sed -e "s@^@${prefix}:Volume Management:file systems:${mount}::vxtunefs:	@"
+	fi
+
+	if [ "${type}" = "ufs" -a -x /sbin/tunefs ]
+	then
+		# Stdout is empty, all data is on stderr.
+		/sbin/tunefs -p ${dev} 2>&1			|
+		sed -e "s@^@${prefix}:Volume Management:file systems:${mount}::@"
+	fi
+
+	if [ "${type}" = "ffs" -a -x /usr/sbin/dumpfs ]
+	then
+		# Limit the (vast) output to the superblock.
+		/usr/sbin/dumpfs "${mount}" 2>/dev/null		|
+		sed -n -e '1,/^$/p'				|
+		sed	-e '/[ 	]*magic[ 	]/d'	\
+			-e '/[ 	]*fmod[ 	]/d'	\
+			-e '/[ 	]*nbfree[ 	]/d'		|
+		sed -e "s@^@${prefix}:Volume Management:file systems:${mount}::dumpfs:	@"
+	fi
+
+	if [ "${type}" = "ufs" -a -x /sbin/dumpfs ]
+	then
+		# Limit the (vast) output to the superblock.
+		/sbin/dumpfs "${mount}" 2>/dev/null		|
+		sed -n -e '1,/^$/p'				|
+		sed	-e '/[ 	]*magic[ 	]/d'	\
+			-e '/[ 	]*fmod[ 	]/d'	\
+			-e '/[ 	]*nbfree[ 	]/d'		|
+		sed -e "s@^@${prefix}:Volume Management:file systems:${mount}::dumpfs:	@"
+	fi
+
+	if [ "${type}" = "xfs" -a -x /usr/sbin/xfs_info ]
+	then
+		/usr/sbin/xfs_info ${mount} 2>/dev/null		|
+		sed -e "s@^@${prefix}:Volume Management:file systems:${mount}::xfs_info:	@"
+	fi
+done
+
+[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of file systems"
+
+# Collect all the file system devices and the swap devices in file $TMP3_FILE
+# The contents of this file are:
+# fs_data <file system> <mount_point> <type>
+# swap <device> <data>
+# free:<vg> <pv> <free> MB
+if [ "${OS_NAME}" = "OpenBSD" ]
+then
+	mount 2>/dev/null	|
+	grep "^/dev/"
+else
+	mount -l 2>/dev/null	|
+	grep -v "^Segmentation fault"	# suppress seg fault in SuSE 9.2 (Paul te Vaanholt)
+fi						|
+awk '{ printf( "%s %s\n", $1, $3 ) }'		|
+while read mountp device remainder
+do
+	type=$(fstyp -v ${device} 2>/dev/null	|
+		awk '/^version:/	{ v = $2 }
+					{ if ( NR == 1 ) t = $1 }
+			END	{ print t v }')
+			
+	echo "fs_data ${device} ${mountp} ${type}"
+done >${TMP3_FILE}
+
+if [ -x /usr/sbin/swapinfo ]
+then
+	/usr/sbin/swapinfo 2>/dev/null
+elif [ -x /sbin/swapctl ]
+then
+	/sbin/swapctl -l 2>/dev/null
+else
+	/sbin/swapon -s 2>/dev/null
+fi						|
+sed -n -e "s@.*/dev/@swap /dev/@p" >>${TMP3_FILE}
+
+if [ -f /etc/lvmtab ]
+then
+	vgdisplay -v 2>/dev/null			|
+	awk	'/Alternate/	{ next }	# Ignore alternate links
+		/VG Name/	{ vg = $NF; sub( "^/dev/", "", vg ); pv = "total"; next }
+		/PE Size/	{ pe_s = $NF; next }
+		/PV Name/	{ pv = $NF; next }
+		/Free PE/	{
+					if ( $NF > 0 )
+					{
+						printf( "free:%-10s %-20s %7d MB\n", vg, pv, pe_s * $NF )
+					}
+				}' >>${TMP3_FILE}
+
+	sed -n -e 's/^free:/var:Volume Management:free space::LVM:	/p' ${TMP3_FILE}
+fi
+
+if [ ${VXVM_ENABLED} -eq 1 ]
+then
+	/usr/sbin/vxdg -a free			|
+	sed -e 's/^/var:Volume Management:free space::VxVM:	/'
+fi
+
+if [ -f /etc/lvmtab -a ! -s /sbin/lvm ]
+then
+	#############################################
+	# Logical Volume Manager (HP-UX, not LVM 2) #
+	#############################################
+	
+	vgdisplay 2>${TMP1_FILE}		|
+	awk -F/ '/VG Name.*dev/	{ print $3 }'	|
+	sort -u					|
+	while read vg remainder
+	do
+		lv_list=$(vgdisplay -v ${vg} 2>/dev/null	|
+			sed -n -e "s@.*LV Name.*/dev/.*/@@p"	|
+			sort -k 1.5n)
+
+		pv_list=$(vgdisplay -v ${vg} 2>/dev/null	|
+			grep -v "Alternate"			|
+			awk -F/ '/PV Name/	{ print $4 }'	|
+			sort -u)
+
+		# Volume Management - <vg> - general
+		vgdisplay ${vg} 2>/dev/null			|
+		sed	-e '/^--/d'			\
+			-e '/^$/d'			\
+			-e '/Metadata Sequence No/d'	\
+			-e "s/^/fix:Volume Management:${vg}:general::vgdisplay	/"
+
+		# Volume Management - vg - free space
+		sed -n -e "s/^free:${vg}.*total/fix:Volume Management:${vg}:free space::total/p" ${TMP3_FILE}
+
+		sed -n -e "s/^free:${vg} //p" ${TMP3_FILE}	|
+		grep -v total					|
+		while read pv free remainder
+		do
+			pvdisplay -v ${pv} 2>/dev/null			|
+			sed -e '1,/Physical extents/d'			|
+			awk '/ free /	{
+						# The first field is a counter for the PE, this field is
+						# limited to 4 positions (prior to 11i). Use NR to count.
+						if ( ! header_shown )
+						{
+							printf( "fix:%s:%s:free space::%-20s %7d MB %7s %7s %7s\n",
+								l, v, p, f, "Cnt PE", "Start", "End" )
+							header_shown = 1
+						}
+						if ( ( cnt > 0 ) && ( end != ( NR - 1 - 1 ) ) )
+						{
+							printf( "fix:%s:%s:free space::%-20s %7s    %7d %7d %7d\n",
+								l, v, p, " ", cnt, start, end )
+							cnt = 0
+						}
+						if ( cnt == 0 )
+						{
+							start = NR - 1
+						}
+						end = NR - 1
+						cnt++
+					}
+				END	{
+						if ( ! header_shown )
+						{
+							printf( "fix:%s:%s:free space::%-20s %7d MB %7s %7s %7s\n",
+								l, v, p, f, "Cnt PE", "Start", "End" )
+						}
+						if ( ( cnt > 0 ) && ( end != ( $1 - 1 ) ) )
+						{
+							printf( "fix:%s:%s:free space::%-20s %7s    %7d %7d %7d\n",
+								l, v, p, " ", cnt, start, end )
+						}
+					}' l="Volume Management" v="${vg}" p="${pv}" f="${free}"
+		done	# while read pv: Volume Management - vg - free space
+
+		# Volume Management - <vg> - LV usage
+		# Summary per LV with usage.
+		for lv in ${lv_list}
+		do
+			lvdisplay /dev/${vg}/${lv} 2>/dev/null	|
+			awk	'/Mirror copies/	{
+								mirror = "NO"
+								if ( $NF > 0 )
+								{
+									mirror = $NF
+								}
+								next
+							}
+				/LV Size/		{ print "lv_data", l, $NF, mirror; next }' l="/dev/${vg}/${lv}"
+		done						|
+		awk	'/^fs_data/	{ fs[ $2 ] = $3; type[ $2 ] = $4; next }
+			/^swap/		{ fs[ $2 ] = "-"; type[ $2 ] = "swap"; next }
+			/^lv_data/	{
+						raw = 0
+						if ( length( type[ $2 ] ) == 0 )
+						{
+							fs[ $2 ] = "-"
+							type[ $2 ] = "raw"
+							raw = 1
+						}
+
+						split( $2, parts, "/" )
+						if ( prev_vg != parts[ 3 ] )
+						{
+							printf( "fix:%s:%s:LV usage::%-16s %-8s %7s    %7s %s\n",
+								l, parts[ 3 ], "LV", "FS-type", "Size", "Mirrors", "Mountpoint" )
+							prev_vg = parts[ 3 ]
+						}
+						printf( "fix:%s:%s:LV usage::%-16s %-8s %7d MB %7s %s\n",
+							l, parts[ 3 ], parts[ 4 ], type[ $2 ], $3, $4, fs[ $2 ] )
+						if ( raw )
+						{
+							printf( "fix:%s:%s:general::raw device:	%s\n",
+								l, parts[ 3 ], $2 )
+						}
+				}' l="Volume Management" ${TMP3_FILE} -
+
+		# Volume Management - <vg> - LV layout
+		# Summary per LV with mapping of logical extents to physical extents.
+		header_done=0
+		for lv in ${lv_list}
+		do
+			lvdisplay -v /dev/${vg}/${lv} 2>/dev/null >${TMP2_FILE}
+
+			# Check for stale/unavailable extents.
+			sed -n -e "/stale/p" -e "/unavailable/p" ${TMP2_FILE}	|
+			sed -e "s/^/fix:Volume Management:${vg}:logical-volume:${lv}::extend status	/"
+
+			striped=$(grep "Schedule.*striped" ${TMP2_FILE})
+			if [ "${striped}" ]
+			then
+				# Striped logical volumes have their extents "scattered" across
+				# several physical volumes. Just show the "global" distribution 
+				# of the logical volume.
+				sed -n -e '/Distribution of logical volume/,/^$/p' ${TMP2_FILE}	|
+				sed -e "s/^[ 	]*/fix:Volume Management:${vg}:LV layout::${lv}	/"
+				
+				continue		# No details.
+			fi
+
+			sed -e '1,/Logical extents/d' ${TMP2_FILE}		|
+			awk '{
+				if ( NR == 1 )
+				{
+					label = sprintf( "fix:%s:%s:LV layout", l, v )
+
+					if ( ! h )
+					{
+						printf( "%s::%-16s ", label, "LV" )
+
+						printf( "%-8.8s %7.7s %7.7s %7.7s    \n",
+							"Disk", "Cnt PE", "start", "end" )
+					}
+
+					next
+				}
+
+				printed = 0
+
+				# Layout:
+				#   00000 /dev/dsk/c2t3d0    00156 current
+				for ( i = 2; i <= NF; i += 3 )
+				{
+					data_shown[ i ] = 0
+					sub( "/dev/dsk/", "", $i )
+					nr_f = NF;	# Keep for the end-statement
+					if ( ( row[ $i ] > 0 ) && ( row[ $i ] != i ) )
+					{
+						printf( "fix:%s:%s:logical-volume:%s::%s %s\n",
+							l, v, lv, "WARNING for mirroring on ", $i )
+					}
+					if ( ( pv[ i ] != $i ) || ( end[ i ] != ( $( i + 1 ) - 1 ) ) )
+					{
+						if ( ! printed && length( pv[ i ] ) )
+						{
+							printf( "%s::%-16s ", label, lv )
+						}
+						# When DSK1 "continues" longer than DSK2, we print white space for 
+						# the first column:
+						# LE PE1 DSK1      PE2 DSK2
+						# 1  1   c0t0d0    1   c0t1d0
+						# 2  2   c0t0d0    1   c0t2d0
+						for ( j = 2; j < i; j += 3 )
+						{
+							if ( ! data_shown[ j ] )
+							{
+								data_shown[ j ] = 1
+								printf( "%-8.8s %7.7s %7.7s %7.7s    ",
+									" ", " ", " ", " " )
+							}
+						}
+						data_shown[ i ] = 1
+						if ( length( pv[ i ] ) )
+						{
+							printed = 1
+							printf( "%-8.8s %7d %7d %7d    ",
+								pv[ i ], cnt[ i ], start[ i ], end[ i ] )
+						}
+						pv[ i ] = $i
+						cnt[ i ] = 0
+						start[ i ] = $( i + 1 )
+						end[ i ] = 0
+					}
+					cnt[ i ]++
+					end[ i ] = $( i + 1 )
+				}
+				if ( printed )
+				{
+					printf( "\n" )
+				}
+			}
+			END	{
+					if ( length( label ) == 0 )
+					{
+						# Empty lvol, no data received and processed.
+						label = sprintf( "fix:%s:%s:LV layout", l, v )
+
+						if ( ! h )
+						{
+							printf( "%s::%-16s ", label, "LV" )
+
+							printf( "%-8.8s %7.7s %7.7s %7.7s    \n",
+								"Disk", "Cnt PE", "start", "end" )
+						}
+
+						printf( "%s::%-16s ", label, lv )
+						printf( "%-8.8s %7.7s %7.7s %7.7s    \n",
+							"-", "-", "-", "-" )
+					}
+					else
+					{
+						printf( "%s::%-16s ", label, lv )
+						for ( i = 2; i <= nr_f; i += 3 )
+						{
+							printf( "%-8.8s %7d %7d %7d    ",
+								pv[ i ], cnt[ i ], start[ i ], end[ i ] )
+						}
+						printf( "\n" )
+					}
+				}' h="${header_done}" l="Volume Management" lv="${lv}" v="${vg}"
+
+			header_done=1
+		done	# for lv in ${lv_list}
+		rm -f ${TMP2_FILE}
+
+		# Volume Management - <vg> - PV layout
+		# Summary with disks per physical volume group and alternate links
+		vgdisplay -v ${vg} 2>/dev/null			|
+		awk	'/^VG Name/	{ vg = $NF; sub( "/dev/", "", vg ); pvg = ""; next }
+			/PE Size/	{ pe_s = $NF; next }
+			/^Total PE/	{ v_size = pe_s * $NF; next }
+			/^Free PE/	{ printf( "1:vg:%s:%s:%s\n", vg, v_size, pe_s * $NF ); next }
+			/PVG Name/	{ pvg = $NF; next }
+			/PV Name/	{ 
+						if ( length( pvg ) == 0 )
+						{
+							prev_pv = pv
+							split( $0, parts, "/" )
+							if ( parts[ 4 ] ~ "Alternate" )
+							{
+								sub( "[ 	].*", "", parts[ 4 ] )
+								parts[ 4 ] = sprintf( "%s:%s", prev_pv, parts[ 4 ] )
+							}
+							else
+							{
+								#sub( "[ 	]*", ":", parts[ 4 ] )
+								parts[ 4 ] = sprintf( "%s:", parts[ 4 ] )
+							}
+							pv = parts[ 4 ]
+						}
+						else
+						{
+							sub( "/dev/dsk/", "", $NF )
+							printf( "2:pvg:%s:%s:%s\n", vg, pvg, $NF )
+						}
+						next
+					}
+			/^   Total PE/	{ p_size = pe_s * $NF; next }
+			/^   Free PE/	{
+						printf( "3:pv:%s:%s:%s:%s\n",
+							vg, pv, p_size, pe_s * $NF )
+						next
+					}'				|
+		sort -t: -k3,3 -k1,1					|
+		awk -F:	'/^1/	{	# Format of data is: 1:vg:<vg_name>:<vg_sizeMB>:<vg_freeMB>
+					vg_size = $4; vg_free = $5; next
+				}
+			/^2/	{	# Format of input is: 2:pvg:<vg_name>:<pvg_name>:<pv>
+					pvg[ $5 ] = $4; next
+				}
+			/^3/	{	# Format of input is:	3:pv:<vg_name>:<prim_pv>:<alt_pv>:<pv_sizeMB>:<pv_freeMB>
+					printf( "%s:%s:%s:%s:%s:%s:%s:%s\n",
+						$3, vg_size, vg_free, pvg[ $4 ], $4, $5, $6, $7 )
+				}'					|
+		sort -t: -k1,1 -k4,4 -k 5,5				|
+		awk -F:	'BEGIN	{
+					
+					printf( "%7s    %7s    %10s %10s %10s %7s    %7s\n",
+						"VGsize", "VGfree", "PVG", "Disk", "Alternate", "Size", "Free" )
+				}
+			{
+				# Formatting:
+				# - header
+				# - blank vg-data for subsequent lines
+				if ( NR > 1 )
+				{
+					vg_size = "";	vg_free = "";	label = ""
+				}
+				else
+				{
+					vg_size = $2;	vg_free = $3;	label = "MB"
+				}
+				pvg = ""
+				if ( $4 != prev_pvg )
+				{
+					pvg = $4
+					prev_pvg = $4
+				}
+				prev_vg = $1
+				printf( "%7s %2s %7s %2s %10s %10s %10s %7d MB %7d MB\n",
+					vg_size, label, vg_free, label, pvg, $5, $6, $7, $8 )
+			}'			|
+		sed -e "s/^/var:Volume Management:${vg}:PV layout::/"
+
+		ls -l /dev/${vg}/group 2>/dev/null					|
+		awk '{
+			printf( "fix:%s:%s:general::device-file	%s %s %s %s %s %s %s\n",
+				l, v , $1, $2, $3, $4, $5, $6, $NF )
+		}' l="Volume Management" v=${vg} -
+
+		# Volume Management - vg - logical-volume - lv
+		for lv in ${lv_list}
+		do
+			lvdisplay -v /dev/${vg}/${lv}		|
+			sed	-e '/^--/d'				\
+				-e '/^$/d'				\
+				-e '/^   [0-9][0-9][0-9][0-9]/d'	\
+				-e '/^   --- Logical/d'			\
+				-e '/^   L/d'				\
+				-e 's/^   //'				\
+				-e "s/^/fix:Volume Management:${vg}:logical-volume:${lv}::/"
+
+			ls -l /dev/${vg}/*${lv} 2>/dev/null			|
+			awk '{
+				printf( "fix:%s:%s:logical-volume:%s::device-file	%s %s %s %s %s %s %s\n",
+					l, v, lv, $1, $2, $3, $4, $5, $6, $NF )
+			}' l="Volume Management" v=${vg} lv=${lv} -
+		done	# for lv in ${lv_list}: Volume Management - vg - logical-volume - lv
+
+		# Volume Management - vg - physical-volume - pv
+		for pv in ${pv_list}
+		do
+			pvdisplay /dev/dsk/${pv} >${TMP2_FILE}
+			grep -l "Using Primary Link" ${TMP2_FILE} >/dev/null 2>/dev/null
+			if [ $? -eq 0 ]
+			then
+				# Do not report the detail for an alternate link.
+				sed -n -e '1,/^PV Name.*Alternate Link/p' ${TMP2_FILE}	|
+				sed -e "s/^/fix:Volume Management:${vg}:physical-volume:${pv}::/"
+			else
+				# pvdisplay most of the times reports: 'IO Timeout' as a label,
+				# but sometimes it reports: 'IO Timeout (Seconds)'.
+				# Erase the seconds whenever they appear as the label.
+				pvdisplay -v /dev/dsk/${pv}			|
+				sed	-e '/^--/d'						\
+					-e '/^$/d'						\
+					-e '/VG Name/d'						\
+					-e '/^   [0-9][0-9][0-9][0-9]/d'			\
+					-e '/^   --- Physical/d'				\
+					-e '/^   P/d'						\
+					-e 's/^   //'						\
+					-e 's/IO Timeout (Seconds)/IO Timeout          /'	\
+					-e "s/^/fix:Volume Management:${vg}:physical-volume:${pv}::/"
+			fi
+		done	# for pv in ${pv_list}: Volume Management - vg - physical-volume - pv
+	done 	# while read vg
+
+	sed -e 's/^/fix:Volume Management:messages::/' ${TMP1_FILE}
+
+	rm -f ${TMP1_FILE} ${TMP2_FILE}
+fi
+
+if [ -x /sbin/lvm.static -o -x /sbin/lvm ]		# Check for LVM v2 
+then 
+	#############################
+	# Logical Volume Manager II #
+	#############################
+	lvm_exe=/sbin/lvm.static
+	if [ ! -x "${lvm_exe}" ]
+	then
+		lvm_exe=/sbin/lvm
+	fi
+
+	# Show the total of free space for each logical volume:
+	${lvm_exe} vgs --noheadings --units m -v 2>/dev/null			|
+	awk	'{
+			sub( "M", "", $8 )
+			printf( "fix:Volume Management:free space::LVM2:	%s	%s MB\n", $1, $8 )
+		}'
+
+	# Make sure device mapper (LVM2) kernel module is loaded: 
+	if grep -l "device-mapper" /proc/devices 2>/dev/null >/dev/null
+	then 
+		${lvm_exe} vgs --noheadings 2>/dev/null		|
+		awk '{ print $1 }'				|
+		while read vg
+		do
+			# Display general vg data
+			${lvm_exe} vgdisplay "${vg}" 2>/dev/null		|
+			sed -e '/Metadata Sequence No/d'			|
+			sed -e "s@^@fix:Volume Management:${vg}:general::vgdisplay	@"
+
+			# Display free space on this vg
+			${lvm_exe} pvs -v --noheading --units m 2>/dev/null                |
+			awk	'{
+					if ( $2 == v )
+					{
+						sub( "M", "", $6 )
+						total += $6
+						printf( "%s:%s:free space::%20.20s %d MB\n", l, v, $1, $6 )
+					}
+				}
+				END	{
+						printf( "%s:%s:free space::%20.20s %d MB\n", l, v, "total", total )
+					}' l="fix:Volume Management" v="${vg}"
+
+			# Display the usage of all LV's on this VG
+			sed -e 's/^/fs_data /' /etc/fstab >${TMP2_FILE} 2>/dev/null
+			${lvm_exe} lvs --noheading --units m ${vg} 2>/dev/null		|
+			awk	'/^fs_data/	{
+							sub( ".*/", "", $2 )
+							mp_l[ $2 ] = $3
+							sub( "swap", "-", $4 )
+							type_l[ $2 ] = $4
+							next
+						}
+				{
+					mp = mp_l[ $1 ]
+					type = type_l[ $1 ]
+					if ( mp == "" )
+					{
+						mp = "-"
+						type = "raw"
+					}
+					sub( "M", "", $4 )
+					if ( ! heading )
+					{
+						printf( "%s::%-20.20s %7s %13s   %s\n",
+							l, "LV", "FS-type", "Size", "Mountpoint" )
+						heading = 1
+					}
+					size = sprintf( "%10d MB", $4 )
+					printf( "%s::%-20.20s %7s %-13s   %s\n",
+						l, $1, type, size, mp )
+				}' l="fix:Volume Management:${vg}:LV usage" ${TMP2_FILE} -
+			rm -f ${TMP2_FILE}
+
+			# Display all LV data
+			${lvm_exe} vgdisplay -v "${vg}" 2>/dev/null		|
+			awk	'/LV Path/	{ path = 1; print $3 }
+				/LV Name/	{ if ( ! path ) print $3 }'	|
+			sort -u							|
+			while read lv
+			do
+				if [ ! -d "${lv}" -a ! -h "${lv}" ]
+				then
+					continue		# Directory/Link can be absent on cluster nodes.
+				fi
+
+				lv_label="${lv##*/}"
+
+				${lvm_exe} lvdisplay --maps "${lv}" 2>/dev/null		|
+				sed	-e '1,/^  --- Segments/d'	\
+					-e 's/^  //'			\
+					-e '/^[ 	]$/d'		\
+					-e "s@^@fix:Volume Management:${vg}:LV layout::${lv_label}	@"
+
+				${lvm_exe} lvdisplay -v "${lv}" 2>/dev/null 						|
+				sed	-e "s/^  //"								\
+					-e "/^[ 	]*$/d"							\
+					-e "/^--- /d"								\
+					-e "s@^@fix:Volume Management:${vg}:logical volume:${lv_label}::@"		|
+				sed -e 's/fix:\(.*Allocated to snapshot\)/var:\1/'
+
+				ls -ld "${lv}"					|
+				sed	-e "s@.*${lv}@${lv}@"		\
+					-e "s@^@fix:Volume Management:${vg}:logical volume:${lv_label}::device file	@"
+
+				device="$(ls -ld "${lv}" | sed -e 's/.*\->[ 	]*//' -e 's@^\.\./@/dev/@')"
+				ls -ld "${device}"	|
+				awk '{
+					printf( "%s	%s %s %s %s %s %s %s\n",
+						l, $1, $2, $3, $4, $5, $6, $NF )
+				}' l="fix:Volume Management:${vg}:logical volume:${lv_label}::device file" -
+
+			done
+
+			# Display all PV data
+			${lvm_exe} vgdisplay -v "${vg}" 2>/dev/null	|
+			awk '/PV Name/ { print $3 }'			|
+			sort -u						|
+			while read pv
+			do
+				${lvm_exe} pvdisplay -v "${pv}" 2>/dev/null	|
+				sed	-e "s/^  //"								\
+					-e "/^[ 	]*$/d"							\
+					-e "/^--- /d"								\
+					-e "s@^@fix:Volume Management:${vg}:physical volume:${pv}::@"
+			done
+
+			${lvm_exe} lvs -o lv_name,lv_path,devices,lv_size,lv_major,lv_minor,lv_kernel_major,lv_kernel_minor,lv_uuid,origin ${vg} 2>/dev/null	|
+			sed -e "s/^/fix:Volume Management:${vg}:PV layout::/"
+		done
+
+		${lvm_exe} dumpconfig 2>/dev/null		|
+		sed -e 's/^/fix:Volume Management:LVM2 general::/'
+
+		${lvm_exe} version 2>/dev/null			|
+		sed -e 's/^/fix:Volume Management:LVM2 general::version:	/'
+	fi
+fi
+
+if [ -x /sbin/dmsetup ]
+then
+	/sbin/dmsetup info 2>/dev/null		|
+	awk	'/^Name/	{
+					name = $2
+					prefix = "fix"
+					if ( name ~ "^docker.*" )
+					{
+						prefix = "var"
+					}
+					next
+				}
+		/^$/		{ next; }
+				{
+					if ( length( name ) > 0 )
+					{
+						printf( "%s:Volume Management:dmsetup:%s::%s\n", prefix, name, $0 )
+					}
+				}'		|
+	sed	-e 's/^...:\(.*Event number:\)/var:\1/'	\
+		-e 's/^...:\(.*Open count:\)/var:\1/'
+fi
+
+if [ ${VXVM_ENABLED} -eq 1 ]
+then
+	#############################
+	# Veritas Volume Management #
+	#############################
+
+	/usr/sbin/vxdg -q list 2>/dev/null				|
+	while read dg remainder
+	do
+		/usr/sbin/vxdg list ${dg}			|
+		sed -e "s@^@fix:Volume Management:${dg}:general::vxdg	@"
+
+		/usr/sbin/vxdisk -g ${dg} list			|
+		sed -e "s@^@fix:Volume Management:${dg}:general::vxdisk	@"
+
+		/usr/sbin/vxinfo -p -g ${dg}			|
+		sed -e "s@^@fix:Volume Management:${dg}:general::vxinfo	@"
+
+		/usr/sbin/vxdg -g ${dg} -a free			|
+		sed -e "s@^@fix:Volume Management:${dg}:free space::@"
+
+		/usr/sbin/vxprint -l -v -g ${dg}						|
+		awk '/^Volume:/	{ printf( "vol_data /dev/vx/dsk/%s/%s\n", d, $2 ) }' d="${dg}"	|
+		awk	'/^fs_data/	{ fs[ $2 ] = $3; type[ $2 ] = $4; next }
+			/^vol_data/	{
+						raw = 0
+						if ( length( type[ $2 ] ) == 0 )
+						{
+							fs[ $2 ] = "-"
+							type[ $2 ] = "raw"
+							raw = 1
+						}
+
+						split( $2, parts, "/" )
+						if ( ! header_shown )
+						{
+							printf( "fix:%s:%s:Volume usage::%-16s %-8s %s\n",
+								l, parts[ 5 ], "Volume", "FS-type", "Mountpoint" )
+							header_shown = 1
+						}
+						printf( "fix:%s:%s:Volume usage::%-16s %-8s %s\n",
+							l, parts[ 5 ], parts[ 6 ], type[ $2 ], fs[ $2 ] )
+						if ( raw )
+						{
+							printf( "fix:%s:%s:general::raw device:	%s\n",
+								l, parts[ 5 ], $2 )
+						}
+					}' l="Volume Management" ${TMP3_FILE} -
+
+		vxprint -s -l -g "${dg}"			|
+		awk	'/^Subdisk:/	{ sd = $2; disk = "?"; vol = "?"; plex = "?"; next }
+			/^info:/	{
+						for ( i = 2; ( i <= NF ) && ( $i !~ "disk=" ); i++ )
+						{ }
+						if ( i <= NF )
+						{
+							split( $i, parts, "=" )
+							disk = parts[ 2 ]
+						}
+						for ( i = 2; ( i <= NF ) && ( $i !~ "offset=" ); i++ )
+						{ }
+						if ( i <= NF )
+						{
+							split( $i, parts, "=" )
+							offset = parts[ 2 ]
+						}
+						info = 1
+					}
+			/^assoc:/	{
+						for ( i = 2; ( i <= NF ) && ( $i !~ "vol=" ); i++ )
+						{ }
+						if ( i <= NF )
+						{
+							split( $i, parts, "=" )
+							vol = parts[ 2 ]
+						}
+
+						for ( i = 2; ( i <= NF ) && ( $i !~ "plex=" ); i++ )
+						{ }
+						if ( i <= NF )
+						{
+							split( $i, parts, "=" )
+							plex = parts[ 2 ]
+						}
+						info = 1
+					}
+					{
+						if ( info && disk != "?" && vol != "?" )
+						{
+							printf( "%s:%s:%s:%s:%s:%s\n",
+								d, vol, plex, sd, disk, offset )
+						}
+						info = 0
+					}' d="${dg}" >${TMP2_FILE}
+
+		sort -t: ${TMP2_FILE}					|
+		awk -F: '{
+				if ( NR == 1 )
+				{
+					printf( "%s::%-20s %-20s %-20s %-20s\n",
+						l, "Volume", "Plex", "Subdisk", "Disk" )
+				}
+				printf( "%s::%-20s %-20s %-20s %-20s\n",
+					l, $2, $3, $4, $5 )
+			}' l="fix:Volume Management:${dg}:Diskgroup layout"
+
+		sort -t: -k 5 -k 6n -k 4 -k 3 -k 2 -k 1 ${TMP2_FILE}	|
+		awk -F: '{
+				if ( NR == 1 )
+				{
+					printf( "%s::%-20s %-20s %-20s %-20s\n",
+						l, "Disk", "Subdisk", "Plex", "Volume" )
+				}
+				printf( "%s::%-20s %-20s %-20s %-20s\n",
+					l, $5, $4, $3, $2 )
+			}' l="fix:Volume Management:${dg}:Disk layout"
+
+		/usr/sbin/vxprint -l -v -g ${dg}			|
+		awk '/^Volume:/	{ vol = $2; next }
+			/^$/	{ next	}
+				{
+					printf( "fix:Volume Management:%s:volume:%s::%s\n", d, vol, $0 )
+				}' d=${dg}
+
+		/usr/sbin/vxprint -l -d -g ${dg}			|
+		awk '/^Disk:/	{ dsk = $2; next }
+			/^$/	{ next	}
+				{
+					printf( "fix:Volume Management:%s:disk:%s::%s\n", d, dsk, $0 )
+				}' d=${dg}
+
+		/usr/sbin/vxprint -l -s -g ${dg}			|
+		awk '/^Subdisk:/	{ sdsk = $2; next }
+			/^$/	{ next	}
+				{
+					printf( "fix:Volume Management:%s:subdisk:%s::%s\n", d, sdsk, $0 )
+				}' d=${dg}					|
+		sort
+
+		/usr/sbin/vxprint -l -p -g ${dg}			|
+		awk '/^Plex:/	{ plex = $2; next }
+			/^$/	{ next	}
+				{
+					printf( "fix:Volume Management:%s:plex:%s::%s\n", d, plex, $0 )
+				}' d=${dg}
+
+	done
+
+	# Determine the "raw" volumes (without a file system and not being used for swap)
+	(
+		/usr/sbin/vxdg -q list 2>/dev/null					|
+		while read dg remainder
+		do
+			/usr/sbin/vxprint -v -g ${dg} 2>/dev/null	|
+			awk '/^v /	{ print "all", d, "/dev/vx/dsk/" d "/" $2 }' d="${dg}"
+		done									|
+		sed -e 's@/rootdg/@/@'
+
+		mount 2>/dev/null							|
+		sed -n -e "s@^[^ ]* on /dev/vx/dsk/\([^ ]*\) .*@mount /dev/vx/dsk/\1@p"	|
+		sed -e 's@/rootdg/@/@'
+
+		/usr/sbin/swap -l 2>/dev/null						|
+		sed -n -e "s@^/dev/vx/dsk/\([^ ]*\) .*@swap /dev/vx/dsk/\1@p"		|
+		sed -e 's@/rootdg/@/@'
+	)			|
+	awk	'/^all /	{ raw[ $3 ] = 1; dg[ $3 ] = $2; next }
+		/^mount /	{ raw[ $2 ] = 0; next }
+		/^swap /	{ raw[ $2 ] = 0; next }
+		END	{
+				for ( v in raw )
+				{
+					if ( raw[ v ] )
+					{
+						print "fix:Volume Management:" dg[ v ] ":general::raw device:	" v
+					}
+				}
+			}'	|
+	sort
+fi
+
+if [ -f /etc/lvmtab ]
+then
+	strings </etc/lvmtab			|
+	sed -n -e 's@^/dev/@fix:Volume Management:LVM general::/etc/lvmtab:	/dev/@p'
+fi
+scc_check_file /etc/lvmpvg "fix:Volume Management:LVM general::/etc/lvmpvg:	" "#"
+
+if [ ${VXVM_ENABLED} -eq 1 ]
+then
+	# Veritas Volume Manager
+
+	/usr/sbin/vxdctl list 2>/dev/null			|
+	sed -e 's/^/fix:Volume Management:VxVM general::volboot:	/'
+
+	/usr/sbin/vxiod 2>/dev/null				|
+	sed -e 's/^/fix:Volume Management:VxVM general::IO daemons:	/'
+
+	if [ -x /usr/sbin/vxserial ]	# Not present on HP-UX
+	then
+		/usr/sbin/vxserial -p				|
+		sed	-e '/^[ 	]*$/d'		\
+			-e 's/\(Expiration.*\) (.*/\1/'	\
+			-e 's/^/fix:Volume Management:VxVM general::vxserial:	/'
+	fi
+
+	if [ -x /sbin/vxlicense ]
+	then
+		/sbin/vxlicense -p 2>/dev/null			|
+		awk '/^[ 	]*$/	{ next }
+					{ p="fix" }
+			/Expiration/	{ p="var" }
+					{
+						print p ":Volume Management:VxVM general::vxlicense:	" $0
+					}'
+	fi
+
+	scc_check_file /etc/vx/cntrls.exclude	"fix:Volume Management:VxVM general::/etc/vx/cntrls.exclude:	" "#"
+	scc_check_file /etc/vx/disks.exclude	"fix:Volume Management:VxVM general::/etc/vx/disks.exclude:	" "#"
+	scc_check_file /etc/vx/tunefstab	"fix:Volume Management:VxVM general::/etc/vx/tunefstab:	" "#"
+	scc_check_file /etc/vx/volboot		"fix:Volume Management:VxVM general::/etc/vx/volboot:	" "#"
+	scc_check_file /etc/vx/vxdmp.exclude	"fix:Volume Management:VxVM general::/etc/vx/vxdmp.exclude:	" "#"
+	scc_check_file /etc/vx/vxvm.exclude	"fix:Volume Management:VxVM general::/etc/vx/vxvm.exclude:	" "#"
+	scc_check_file /etc/vx/vxrelocd		"fix:Volume Management:VxVM general::/etc/vx/vxrelocd:	" "#"
+
+	strings /etc/vx/array.info 2>/dev/null	|
+	sed -e "s@^@fix:Volume Management:VxVM general::/etc/vx/array.info:	@"
+
+	for file in /etc/vx/elm/*.lic
+	do
+		# Contents appear to be changed on a daily basis. Record as variable.
+		scc_check_file "${file}" "var:Volume Management:VxVM general::${file}:" "#"
+	done
+fi
+
+rm -f ${TMP1_FILE} ${TMP2_FILE}
+
+# Solstice Disk Suite: Sun Volume Manager.
+cur_path="${PATH}"
+if [ -x /usr/opt/SUNWmd/sbin/metastat ]
+then
+	PATH=${PATH}:/usr/opt/SUNWmd/sbin	# Solaris 7
+fi
+
+if [ -x /usr/sbin/metastat -o -x /usr/opt/SUNWmd/sbin/metastat ]
+then
+	# Show the data of the "local" diskset.
+	# Get all the "main"-devices.
+	metastat -p 2>/dev/null						|
+	awk '{
+			if ( $2 ~ "^[0-9][0-9]*$" )
+			{
+				next
+			}
+			print $1
+		}' >${TMP1_FILE}
+
+	(
+		swap -l 2>/dev/null		|
+		awk '/^\/dev/ { print "swap", $1 }'
+
+		df -k 2>/dev/null		|
+		sed -e 's/^/df	/'
+
+		while read device
+		do
+			metastat "${device}" 2>/dev/null	|
+			awk '/Size/	{
+						printf( "size	/dev/md/dsk/%s	%d\n",
+							d, $2 / 2048 )
+						exit
+					}' d="${device}"
+
+			fstyp /dev/md/dsk/${device} 2>/dev/null			|
+			sed -e "s@^@type	/dev/md/dsk/${device}	@"
+		done <${TMP1_FILE}
+
+		sed -e 's@^@metadevice	/dev/md/dsk/@' ${TMP1_FILE}
+	)							|
+	awk	'/^swap/	{ raw[ $2 ]=1; type[ $2 ]="swap"; next }
+		/^df/		{ raw[ $2 ]=0; mountp[ $2 ]=$NF; next; }
+		/^type/		{ raw[ $2 ]=0; type[ $2 ]=$3; next }
+		/^size/		{ size[ $2 ]=$3; next }
+		/^metadevice/	{
+					if ( ! header_shown )
+					{
+						printf( "%s%s		%s	%7.7s		%s\n",
+							l, "Device", "Type", "Size", "Mountpoint" )
+						header_shown=1
+					}
+					if ( length( type[ $2 ] ) == 0 )
+					{
+						type[ $2 ]="raw"
+					}
+					if ( size[ $2 ] == 0 )
+					{
+						size_p="          "
+					}
+					else
+					{
+						size_p=sprintf( "%7d MB", size[ $2 ] )
+					}
+					printf( "%s%s	%s	%s	%s\n",
+						l, $2, type[ $2 ], size_p, mountp[ $2 ] )
+				}' l="fix:Volume Management:local:metadevice usage::"
+
+	if [ -s ${TMP1_FILE} ]
+	then
+		while read device
+		do
+			metastat "${device}" 2>&1							|
+			sed -e "s@^@fix:Volume Management:local:metadevices:${device}::metastat:	@"
+		done <${TMP1_FILE}
+
+		# Get all the disk-sets.
+		metaset 2>/dev/null						|
+		sed -n -e "s/.*name = //p"					|
+		sed -e "s/,.*//"						|
+		sort								|
+		while read dset remainder
+		do
+			# Get all the "main"-devices.
+			metastat -p -s "${dset}" 2>/dev/null				|
+			awk '{
+					if ( $2 ~ "^[0-9][0-9]*$" )
+					{
+						next
+					}
+					print $1
+				}'							|
+			while read device
+			do
+				metastat -s "${dset}" "${device}" 2>&1				|
+				sed -e "s@^@fix:Volume Management:${dset}:metadevices:${device}::metastat:	@"
+			done
+
+			metaset -s "${dset}" 2>/dev/null				|
+			sed -e "s/^/fix:Volume Management:${dset}:general::metaset:	/"
+		done
+
+		metastat -p 2>&1						|
+		sed -e 's/^/fix:Volume Management:SVM general:recovery::/'
+
+		metadb 2>&1							|
+		sed -e 's/^/fix:Volume Management:SVM general:database::/'
+
+		metahs -i 2>&1							|
+		sed	-e '/^[ 	]*$/d'	\
+			 -e 's/^/fix:Volume Management:SVM general:hot spares::/'
+	fi
+	rm -f ${TMP1_FILE}
+fi
+PATH="${cur_path}"
+
+if [ -d /etc/lvm ]
+then
+	for f in devpath lvm.conf md.cf md.ctrlmap md.tab mddb.cf runtime.cf
+	do
+		scc_check_file "/etc/lvm/${f}" "fix:Volume Management:SVM general:/etc/lvm/${f}::" "#"
+	done
+fi
+
+rm -f ${TMP1_FILE}
+
+if [ -x /usr/sbin/lsvg ]
+then
+	##############################
+	# AIX Logical Volume Manager #
+	##############################
+
+	# Structure of the classifications:
+	# <volume>:general::
+	# <volume>:logical-volume:<lv>::
+	# <volume>:physical-volume:<pv>::
+	# <volume>:PV layout:<pv>::
+
+	/usr/sbin/lsvg 2>/dev/null			|
+	while read vg remainder
+	do
+		( /usr/sbin/lsvg ${vg} 2>${TMP1_FILE}; /usr/sbin/lsvg -p ${vg} 2>/dev/null )	|
+		sed "s/^/fix:Volume Management:${vg}:general::lsvg	/"
+
+		if [ -s ${TMP1_FILE} ]
+		then
+			sed -e "s/^/fix:messages::lsvg ${vg} :/" ${TMP1_FILE}
+		fi
+
+		/usr/sbin/lsvg -l ${vg} 2>/dev/null	|
+		sed -e '1,2d'				|
+		sort					|
+		while read lv remainder
+		do
+			( /usr/sbin/lslv ${lv}; lslv -l ${lv} )		|
+			sed "s/^/fix:Volume Management:${vg}:logical-volume:${lv}::/"
+		done
+	done
+
+	/usr/sbin/lspv 2>/dev/null			|
+	while read pv PVID vg status
+	do
+		/usr/sbin/lspv ${pv}			|
+		sed -e "s/^/fix:Volume Management:${vg}:physical-volume:${pv}::/"
+
+		/usr/sbin/lspv -p ${pv}			|
+		sed -e "s/^/fix:Volume Management:${vg}:PV layout:${pv}::/"
+	done
+fi
+rm -f ${TMP1_FILE}
+
+if [ -x /sbin/advfs/vdf ]
+then
+	############################
+	# TRU64 Volumen Management #
+	############################
+
+	for domain in /etc/fdmns/*
+	do
+		if [ -d "${domain}" ]
+		then
+			dom=${domain##*/}
+
+			# Erase the last 4 fields to avoid variable usage data.
+			/sbin/advfs/vdf -k -l "${dom}" 2>/dev/null	|
+			sed	-e '/^[ 	]*$/d'		\
+				-e 's/[ 	]*$//'		\
+				-e 's/[ 	]*[^ 	]*$//'	\
+				-e 's/[ 	]*[^ 	]*$//'	\
+				-e 's/[ 	]*[^ 	]*$//'	\
+				-e 's/[ 	]*[^ 	]*$//'	\
+				-e "s/^/fix:Volume Management:${dom}:vdf::/"
+
+			# Show all data as variable.
+			/sbin/advfs/vdf -k -l "${dom}" 2>&1		|
+			sed	-e '/^[ 	]*$/d'	\
+				-e "s/^/var:Volume Management:${dom}:vdf::/"
+
+			/sbin/showfdmn -k "${dom}" 2>&1			|
+			sed -e "s/^/var:Volume Management:${dom}:showfdmn::/"
+		fi
+	done
+fi
+
+if [ -x /sbin/evms ]
+then
+	#######################################
+	# Enterprise Volume Management System #
+	#######################################
+
+	# Structure of the classifications:
+	# volume <volume>:general::
+	# volume <volume>:segment <segment>::
+	# volume <volume>:object <object>::
+	# volume <volume>:region <region>::
+	# logical disk <disk>:general::
+	# logical disk <disk>:segment <segment>::
+	# logical disk <disk>:object <object>::
+	# logical disk <disk>:region <region>::
+	# EVMS:general:<file>::
+
+	echo "query:volumes" >${TMP1_FILE}
+	evms -f ${TMP1_FILE} 2>/dev/null			|
+	awk	'/^Volume Name/	{
+					sub( "Volume Name.*:[ 	]*", "" )
+					vol=$0
+					next
+				}
+				{
+					if ( vol != "" )
+					{
+						printf( "fix:Volume Management:volume %s:general::%s\n", vol, $0 )
+					}
+					next
+				}'
+
+	evms -f ${TMP1_FILE} 2>/dev/null		|
+	sed -n -e 's/^Volume Name.*:[ 	]*//p'		|
+	sort						|
+	while read volume
+	do
+		echo "query:children,${volume}" >${TMP2_FILE}
+		evms -f ${TMP2_FILE} 2>/dev/null		|
+		awk	'/^$/			{ name = ""; next }
+			/^Segment Name:/	{ type = "segment"; name= $3; next; }
+			/^Region Name:/		{ type = "region"; name= $3; next; }
+			/^Object Name:/		{ type = "object"; name= $3; next; }
+						{
+							if ( name != "" )
+							{
+								printf( "fix:Volume Management:volume %s:%s %s::%s\n", v, type, name, $0 )
+							}
+						}' v="${volume}"
+	done
+
+	echo "query:disks" >${TMP1_FILE}
+	evms -f ${TMP1_FILE} 2>/dev/null		|
+	sed -n -e 's/^Logical Disk Name:[ 	]*//p'	|
+	sort						|
+	while read disk
+	do
+		echo "query:disks,disk=${disk}" >${TMP2_FILE}
+		evms -f ${TMP2_FILE} 2>/dev/null		|
+		awk	'/^$/			{ name = ""; next }
+			/^Logical Disk Name:/	{ name = $4; next }
+						{
+							if ( name != "" )
+							{
+								printf( "fix:Volume Management:logical disk %s:general::%s\n", name, $0 )
+							}
+						}'
+
+		echo "query:parent,${disk}" >${TMP2_FILE}
+		evms -f ${TMP2_FILE} 2>/dev/null		|
+		awk	'/^$/			{ name = ""; next }
+			/^Segment Name:/	{ type = "segment"; name= $3; next; }
+			/^Region Name:/		{ type = "region"; name= $3; next; }
+			/^Object Name:/		{ type = "object"; name= $3; next; }
+						{
+							if ( name != "" )
+							{
+								printf( "fix:Volume Management:logical disk %s:%s %s::%s\n", d, type, name, $0 )
+							}
+						}' d="${disk}"
+	done
+
+	scc_check_file /etc/evms.conf "fix:Volume Management:EVMS general:/etc/evms.conf::" "#"
+
+	echo "query:plugins" >${TMP1_FILE}
+	evms -f ${TMP1_FILE} 2>/dev/null			|
+	sed -e 's/^/fix:Volume Management:EVMS general:plugins::/'
+
+	rm -f ${TMP1_FILE}
+fi
+
+rm -f ${TMP3_FILE}
+
+if [ -x /usr/bin/stratis ]
+then
+	/usr/bin/stratis blockdev list 2>/dev/null		|
+	sed -e 's/^/fix:Volume Management:stratis:blockdev::/'
+
+	/usr/bin/stratis pool list 2>/dev/null			|
+	sed -e 's/^/var:Volume Management:stratis:pool::/'
+
+	/usr/bin/stratis fs list 2>/dev/null			|
+	sed -e 's/^/var:Volume Management:stratis:fs::/'
+fi
+
+scc_check_file /etc/vmware/locker.conf "fix:Volume Management:scratch location:/etc/vmware/locker.conf::" "#"
+
+# ZFS Solaris
+if [ -x /usr/sbin/zpool ]
+then
+	vol_f="fix:Volume Management"
+	vol_v="var:Volume Management"
+
+	/usr/sbin/zpool list 2>/dev/null				|
+	sed -e "s|^|${vol_v}:ZFS:survey::|"
+
+	/usr/sbin/zpool list -H 2>/dev/null				|
+	grep -v "no pools available"					|
+	while read pool remainder
+	do
+		# Display all items in the pool.
+		/usr/sbin/zfs list -r ${pool} 2>/dev/null		|
+		sed -e "s|^|${vol_v}:${pool}:survey::|"
+
+		/usr/sbin/zpool status ${pool}			|
+		sed -e "s|^|${vol_v}:${pool}:status::|"
+
+		# The heading contains the string NAME, replace this with the name of the pool.
+		/usr/sbin/zpool get all ${pool}				|
+		sed	-e "s|^NAME |${pool} |"			\
+			-e 's/  */:properties::/'		\
+			-e "s|^|${vol_f}:|"				|
+		sed	-e 's/^fix:\(.*::used\)/var:\1/'	\
+			-e 's/^fix:\(.*::allocated\)/var:\1/'	\
+			-e 's/^fix:\(.*::available\)/var:\1/'	\
+			-e 's/^fix:\(.*::capacity\)/var:\1/'	\
+			-e 's/^fix:\(.*::dedupratio\)/var:\1/'	\
+			-e 's/^fix:\(.*::free\)/var:\1/'
+
+		if [ "${pool}" = "zones" ]
+		then
+			break		# Leave the details of zones to running SCC in the zones.
+		fi
+
+		# Display all properties of the items in the pool.
+		for type in volume filesystem snapshot
+		do
+			# We cannot limit the type list to a specific pool.
+			# So we list all and limit the output to the current pool.
+			/usr/sbin/zfs list -H -t ${type} 2>/dev/null		|
+			sed	-n				\
+				-e "s|^${pool} .*|${pool}|p"	\
+				-e "s|^\(${pool}/[^ 	]*\).*|\1|p"		|
+			while read item remainder
+			do
+				# The heading contains the string NAME, replace this with the name of the item.
+				#  Usage and other variable data are tagged "var".
+				/usr/sbin/zfs get all ${item}					|
+				sed	-e "s|^NAME  *|${item} |"			\
+					-e 's/  */::/'					\
+					-e "s|^|${vol_f}:${pool}:${type}:|"			|
+				sed	-e 's/^fix:\(.*::available\)/var:\1/'		\
+					-e 's/^fix:\(.*::compressratio\)/var:\1/'	\
+					-e 's/^fix:\(.*::creation\)/var:\1/'		\
+					-e 's/^fix:\(.*::logicalreferenced\)/var:\1/'	\
+					-e 's/^fix:\(.*::logicalused\)/var:\1/'		\
+					-e 's/^fix:\(.*::referenced\)/var:\1/'		\
+					-e 's/^fix:\(.*::used\)/var:\1/'		\
+					-e 's/^fix:\(.*::written\)/var:\1/'
+			done
+		done
+	done
+fi
+
+exit 0

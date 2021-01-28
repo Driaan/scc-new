@@ -1,0 +1,188 @@
+#!/bin/sh
+
+# Alter source-tree to install scc in alternate directories.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: relocate 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man		change via ${SCC_SW} or --sw option
+#								or --sw_bin --sw_doc and --sw_man
+#	software/etc/opt/scc	conf and newconfig		change via ${SCC_CONF} or --conf option
+#	software/var/opt/scc	data				change via ${SCC_DATA} or --data option
+#
+# After using this program, the directory contains the new hierarchy, ready to call one of the generate scripts.
+#
+# This script is either called from a generate script or via the build script in the development environment.
+# In the latter case we remove all generate scripts that use relocate as these scripts have to be adapted manually.
+
+# Use options or edit the following lines to install the software in other directories than the default.
+# Then call this script, followed by calling the appropriate generate-script.
+# Note that this script will not work correctly when SCC_DATA or SCC_CONF contain the string: "/opt/scc".
+# Be sure to use absolute paths for the following variables.
+#SCC_DATA=""		# for example: /usr/pkg/share/scc/data	is data
+#SCC_CONF=""		# for example: /usr/pkg/etc/scc		contains conf and newconfig
+#SCC_SW=""		# for example: /usr/pkg			contains bin, doc and man
+#SCC_SW_BIN=""		# for example: /usr/local/bin		is bin
+#SCC_SW_DOC=""		# for example: /usr/local/doc/scc	is doc
+#SCC_SW_MAN=""		# for example: /usr/local/man		is man
+export SCC_DATA SCC_CONF SCC_SW SCC_SW_BIN SCC_SW_DOC SCC_SW_MAN
+
+# We have to ignore the gen-scc script that is calling us (provided by the --ign option).
+ignore="NoFileHasThisName"
+no_modules_dir=""
+no_conf_sub_dir=""
+while [ $# -gt 0 ]
+do
+	case "${1}" in
+	--no_conf_sub_dir)	no_conf_sub_dir="-e s@etc/opt/scc/conf@etc/opt/scc@  -e s@etc/opt/scc/newconfig@etc/opt/scc@"
+				shift 1;;
+	--conf)			SCC_CONF="${2}"
+				shift 2;;
+	--data)			SCC_DATA="${2}"
+				shift 2;;
+	--ign)			ignore="${2}"	
+				shift 2;;
+	--no_mod_dir)		no_modules_dir="-e s@/scc_modules@@"
+				shift 1;;
+	--sw)			SCC_SW="${2}"
+				SCC_SW_BIN="${SCC_SW}/bin"
+				SCC_SW_DOC="${SCC_SW}/doc"
+				SCC_SW_MAN="${SCC_SW}/man"
+				shift 2;;
+	--sw_bin)		SCC_SW_BIN="${2}"
+				shift 2;;
+	--sw_doc)		SCC_SW_DOC="${2}"
+				shift 2;;
+	--sw_man)		SCC_SW_MAN="${2}"
+				shift 2;;
+	*)			echo "${0}: unknown option: ${1}, available options are: --no_conf_sub_dir --conf --data --ign --no_mod_dir --sw [ --sw_bin --sw_doc --sw_man ]" >&2
+				exit 2;;
+	esac
+done
+
+if [ -z "${SCC_DATA}" -o -z "${SCC_SW}${SCC_SW_BIN}${SCC_SW_DOC}${SCC_SW_MAN}" -o -z "${SCC_CONF}" ]
+then
+	echo "customize ${0} to alter directory settings or use options" >&2
+	exit 2
+fi
+
+case "${SCC_DATA}${SCC_CONF}" in
+*/opt/scc*)	echo "data and config paths should not contain /opt/scc" >&2
+		exit 2;;
+esac
+
+# Remove the generate scripts (except the argument of the --ign option) calling relocate:
+grep -l "./relocate " *gen*	|
+grep -v "${ignore}"		|
+xargs rm -f
+
+if [ -n "${no_conf_sub_dir}" ]
+then
+	mv software/etc/opt/scc/newconfig/* software/etc/opt/scc
+	rmdir software/etc/opt/scc/conf
+	rmdir software/etc/opt/scc/newconfig
+fi
+
+if [ -n "${no_modules_dir}" ]
+then
+	mv software/opt/scc/bin/scc_modules/* software/opt/scc/bin
+	rmdir software/opt/scc/bin/scc_modules
+fi
+
+# Replace the default paths with the indicated paths.
+find . -type f					|
+sed	-e "/relocate/d"	\
+	-e "/CHANGELOG/d"	\
+	-e "/${ignore}/d"			|
+while read file
+do
+	sed	${no_conf_sub_dir}			\
+		-e "s@/var/opt/scc/data@${SCC_DATA}@g"	\
+		-e "s@var/opt/scc/data@${SCC_DATA#/}@g"	\
+		-e "s@/var/opt/scc@${SCC_DATA%/data}@g"	\
+		-e "s@var/opt/scc@${SCC_DATA%/data}@g"	\
+		-e "s@/etc/opt/scc@${SCC_CONF}@g"	\
+		-e "s@etc/opt/scc@${SCC_CONF#/}@g"	\
+		-e "s@/opt/scc/bin@${SCC_SW_BIN}@g"	\
+		-e "s@opt/scc/bin@${SCC_SW_BIN#/}@g"	\
+		-e "s@/opt/scc/doc@${SCC_SW_DOC}@g"	\
+		-e "s@opt/scc/doc@${SCC_SW_DOC#/}@g"	\
+		-e "s@/opt/scc/man@${SCC_SW_MAN}@g"	\
+		-e "s@opt/scc/man@${SCC_SW_MAN#/}@g"	\
+		-e "s@/opt/scc@${SCC_SW}@g"		\
+		-e "s@opt/scc@${SCC_SW#/}@g"		\
+		${no_modules_dir}			\
+			<${file}			\
+			>${file}.tmp
+
+	# Preserve the original timestamp and permissions.
+	timestamp="_timestamp_"
+	touch -r ${file} ${timestamp} 2>/dev/null
+	chmod u+w ${file}
+	>${file}
+	cat ${file}.tmp >>${file}
+	chmod u-w ${file}
+	touch -r ${timestamp} ${file} 2>/dev/null
+	rm -f ${file}.tmp ${timestamp}
+done
+
+# The software/ directory should reflect the new layout, move all files.
+cd software
+
+if [ "${SCC_SW_BIN}" ]
+then
+	# Assume that the combination for bin, doc and man are set:
+
+	mkdir -p ./${SCC_SW_BIN}
+	mv opt/scc/bin/* ./${SCC_SW_BIN}
+
+	mkdir -p ./${SCC_SW_DOC}
+	mv opt/scc/doc/* ./${SCC_SW_DOC}
+
+	mkdir -p ./${SCC_SW_MAN}
+	mv opt/scc/man/* ./${SCC_SW_MAN}
+else
+	mkdir -p ./${SCC_SW}
+	mv opt/scc/* ./${SCC_SW}
+fi
+rm -rf opt/scc
+
+mkdir -p ./${SCC_DATA}
+mv var/opt/scc/data/* ./${SCC_DATA}
+rm -rf var/opt/scc
+
+mkdir -p ./${SCC_CONF}
+mv etc/opt/scc/* ./${SCC_CONF}
+rm -rf etc/opt/scc
+
+# Remove the possibly empty top directories of the old (default) layout.
+for dir in opt var/opt var etc/opt etc
+do
+	rmdir ${dir} 2>/dev/null
+done
+
+exit 0

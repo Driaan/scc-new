@@ -1,0 +1,184 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-changes</TITLE></HEAD><BODY>
+<H1>scc-changes(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-changes - split logbooks into files per change
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-srv	1.19.44
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-changes [ -k|--keep &lt;days&gt; ] [ -s|--skip ]
+	     [ -p|--prog &lt;program&gt; [ -d|--dest &lt;destination&gt; ] [ -m|--mode &lt;mode&gt; ] [ -u|--user &lt;user&gt; ]
+	     [ -L|--list &lt;list&gt; | -F|--file &lt;file&gt; ]
+	     &lt;realm&gt;
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program extracts changes from all logbooks in a realm into separate
+	files for further processing. The identification of the changes that were extracted 
+	during previous runs is maintained in file scc.changes in the processed realm.
+	The change files reside in the subdirectory "changes" of the specified realm.
+	The format of the name of the change files is: scc.&lt;host&gt;.&lt;date&gt;_&lt;time&gt;.log.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	-k|--keep &lt;days&gt;        Keep files in staging area for max &lt;days&gt; days.
+	-s|--skip               Record identification of all present changes in the known changes 
+	                        file without creating (and processing) their change files.
+	                        When the -p option is used, a summary of ignored changes is emailed.
+
+	To process the change files once they are in the staging area:
+
+	-p|--prog &lt;program&gt;     Program for further processing, possible values for &lt;program&gt;:
+	                        mail    email each change file and a summary of skipped changes
+	                        cp      copy change files to directory
+	-d|--dest &lt;destination&gt; Destination for processing change files. Destination:
+	                        mail    email address.
+	                        cp      directory
+	-m|--mode &lt;mode&gt;        Mode of copied change files, default: 0700.
+	-u|--user &lt;user&gt;        User of copied change files, default: root.
+
+	Without specifying any of the above options, all changes (systems and dates) are
+	recorded in file scc.changes in the realm directory.
+
+	To specify the systems in the realm to be processed:
+
+	-F|--file &lt;file&gt;        The file contains a list of systems in realm &lt;realm&gt;, one system
+	                        per line. Empty and comment lines (starting with "#") are ignored.
+	                        Requires full path of file. Processing in &lt;realm&gt; is limited to
+	                        the specified systems.
+	-L|--list &lt;list&gt;        Comma separated list of systems in realm &lt;realm&gt;. Processing is
+	                        limited to the specified systems.
+
+	Without specifying any of the above options, all systems in &lt;realm&gt; are processed.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;realm&gt;                 Realm to process. Without the -F and -L options, all systems in
+	                        the realm are processed.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-changes &lt;options&gt;
+	A syntax error has been detected and reported.
+
+	scc-changes: unable to combine -L and -F options
+	Use either one of these options.
+
+	scc-changes: realm name should not contain &#39;/&#39;: &lt;realm&gt;
+	Supply the name of the realm, not the directory path.
+
+	scc-changes: cannot find realm &lt;realm&gt;
+	The directory indicated with the argument cannot be found in
+	/var/opt/scc-srv/data/www.
+
+	scc-change: unknown file with -F option: &lt;file&gt;
+	Correct the specified file name.
+
+	scc-changes: unsupported method: &lt;prog&gt;
+	The value provided with the -p option is not supported.
+
+	scc-changes: unknown directory for cp: &lt;dest&gt;
+	Directory specified with -d option cannot be found.
+
+	scc-changes: -p option requires -d option
+	Specifiy a destination when processing the new change files.
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	This program processes SCC logbooks in a realm and should be called after
+	scc-update has run. To email the change files, a working MTA should be present.
+
+	The contents of the change files depend upon the logbook. When unified diff
+	is used for the logbook, context lines (prefix "ctx") are also present in the change files.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	The possible exit values are:
+		0: success
+		1: syntax error
+		2: general runtime error
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-changes is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2014-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> EXAMPLES</H2>
+<PRE>
+
+	To start auditing the changes of realm SOX and accept all current configurations
+	including all changes, use the --skip option:
+
+		scc-changes --skip SOX
+
+	Schedule the next command line with cron to email further changes:
+
+		scc-changes --prog mail --dest auditors@company.com SOX
+
+	When the changes of the new system "newhost" should be audited, add it
+	to this SOX realm and accept/skip the current changes in its logbook:
+
+		scc-realm --add --list newhost SOX
+		scc-changes --list newhost --skip SOX
+
+	Subsequent, scheduled calls of scc-changes will detect new changes for newhost.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	/var/opt/scc-srv/data/www - base-directory for all realms
+	  &lt;realm&gt; - base directory of realm
+	    scc.*.log - log files to process
+	    scc.changes - file containing the host-date-time data of processed changes
+	    changes/ - directory with change files
+	      scc-&lt;host&gt;.&lt;date&gt;.&lt;time&gt;.log - change file
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+	<A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+	<A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+	<A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6217 $
+
+</PRE>
+</BODY></HTML>

@@ -1,0 +1,109 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc-collect.pl 1 "SCC-WIN" </TITLE>
+</HEAD><BODY>
+<H1>scc-collect.pl(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-collect - collect system configuration in a SCC-snapshot
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-win	1.10.38
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-collect [ --extra &lt;mod&gt; ]
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program collects configuration data from a system and writes
+	it to stdout as a SCC-snapshot. A snapshot is a file containing 
+	configuration data. Each line of configuration-data is prefixed with
+	a classification. Refer to <A HREF="scc-win-4.html">scc-win(4)</A> for a detailed description of the
+	format of the contents of a snapshot.
+
+	Part of the classification is an indicator whether the data is fixed 
+	or variable. This makes it possible to compare snapshots and report 
+	any difference in the configuration data that was supposed to be fixed.
+
+	The entire process of creating a new snapshot, comparing it with the
+	previous one and adding the differences to a logbook is done by 
+	<A HREF="scc-log.html">scc-log(1)</A>.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	None.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	--extra &lt;mod&gt;	Execute additional, user modules.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		2 runtime error
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-collect is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2006-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	bin/scc_modules - directory with modules
+		scc_[0-9][0-9][0-9][0-9]_s_*
+		modules distributed with scc and always executed
+		scc_[0-9][0-9][0-9][0-9]_u_*
+		user plug-ins, only executed with -e option
+	tmp - directory for temporary files
+	data - directory for data files
+		scc.&lt;hostname&gt;.cur - current SCC-snapshot
+		scc.&lt;hostname&gt;.html - current SCC-snapshot in HTML-format
+		scc.&lt;hostname&gt;.old - previous SCC-snapshot
+		scc.&lt;hostname&gt;.new - new (temporary) SCC-snapshot
+		scc.&lt;hostname&gt;.log - logbook for changes in SCC-snapshot
+		scc.&lt;hostname&gt;.log.html - logbook in HTML-format
+		scc.&lt;hostname&gt;.keep - data kept from a previous run
+		plugin_data - subdirectory for data from user modules
+			scc.&lt;hostname&gt;.&lt;mod&gt; - data from &lt;host&gt; for module &lt;mod&gt;
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-win-4.html">scc-win(4)</A>, <A HREF="scc-win-5.html">scc-win(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6241 $
+
+</PRE>
+</BODY></HTML>

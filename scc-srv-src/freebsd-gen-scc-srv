@@ -1,0 +1,175 @@
+#!/bin/sh
+
+# Generate FreeBSD package to install scc-srv by means of pkg_add.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: freebsd-gen-scc-srv 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install				pre/post install scripts
+#	software/opt/scc-srv		bin, doc and man
+#	software/var/opt/scc-srv	conf, data and newconfig
+#
+# Program relocate is used to change this default hierarchy into FreeBSD practices:
+#
+#	install					post install scripts
+#	software/usr/local			bin, doc and man
+#	software/usr/local/share/scc-srv	conf, data and newconfig
+#
+# After using this program, the directory contains the file:
+#
+#	scc-srv-1.19.44.FreeBSD.tgz
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+VERSION=${1:-1.19.44}
+
+my_md5()
+{
+	exe="$(which md5sum 2>/dev/null)"
+	if [ -x "${exe}" ]
+	then
+		"${exe}" "${1}" | awk '{ print $1 }'
+	else
+		exe="$(which md5 2>/dev/null)"
+		if [ -x "${exe}" ]
+		then
+			"${exe}" "${1}" | awk '{ print $4 }'
+		fi
+	fi
+}
+
+./relocate --data /usr/local/share/scc-srv --sw /usr/local --ign ${ProgName}
+
+# This script should leave the working directory empty: collect all file names
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >remove_list
+echo remove_list >>remove_list
+
+suffix="FreeBSD"
+PKG=scc-srv-${VERSION}.${suffix}
+
+find software -type f			|
+xargs wc -c				|
+awk '/total/ { print $1 }'>+SIZE_PKG
+cp +SIZE_PKG +SIZE_ALL
+
+mv software/usr/local/* .
+cp install/BSDinstall +INSTALL
+mv install/BSDinstall +DEINSTALL
+
+# Use separate sub directory to avoid conflicts with scc-srv concerning CHANGELOG and COPYRIGHT files.
+mkdir -p doc/scc-srv
+mv doc/* doc/scc-srv/ >/dev/null 2>/dev/null
+
+cat >+BUILD_INFO <<-_X_
+	BUILD_DATE=$(date '+%Y-%m-%d %H:%M:%S +0000')
+	BUILD_HOST=$(uname -a)
+	CATEGORIES=system
+	HOMEPAGE=https://sourceforge.net/projects/sysconfcollect
+	LOCALBASE=/
+	MAINTAINER=siemkorteweg@users.sourceforge.net
+	OPSYS=FreeBSD
+	PKGTOOLS_VERSION=20000000
+_X_
+# Use an "old" PKGTOOLS_VERSION to avoid that our version is too new for the systems.
+
+echo "System Configuration Collector Server ${VERSION}" >+COMMENT
+{
+	echo "scc server offers a web-interface for the scc data that is sent to the server."
+	echo ""
+	echo "Homepage:"
+	echo "https://sourceforge.net/projects/sysconfcollect"
+} >+DESC
+
+LIST="+CONTENTS"
+PKG_FILES="+CONTENTS +COMMENT +DESC +INSTALL +DEINSTALL +BUILD_INFO +SIZE_PKG +SIZE_ALL"
+
+cat >${LIST} <<-_X_
+	@cwd /usr/local
+	@name scc-srv-${VERSION}
+	@owner root
+	@group wheel
+_X_
+
+# We should not tar directories, so we collect the names of files in a file for use with tar.
+>file_list
+for f in $(find bin -type f; find man -type f; find doc -type f; find share -type f)
+do
+	echo ${f}
+	echo "@comment MD5:$(my_md5 ${f})"
+
+	echo ${f} >>file_list
+done >>${LIST}
+
+cat >>${LIST} <<-_X_
+	@ignore
+	+BUILD_INFO
+	@comment MD5:$(my_md5 ./+BUILD_INFO)
+	@ignore
+	+COMMENT
+	@comment MD5:$(my_md5 ./+COMMENT)
+	@ignore
+	+DESC
+	@comment MD5:$(my_md5 ./+DESC)
+	@ignore
+	+INSTALL
+	@comment MD5:$(my_md5 ./+INSTALL)
+	@ignore
+	+DEINSTALL
+	@comment MD5:$(my_md5 ./+DEINSTALL)
+	@ignore
+	+SIZE_PKG
+	@comment MD5:$(my_md5 ./+SIZE_PKG)
+	@ignore
+	+SIZE_ALL
+	@comment MD5:$(my_md5 ./+SIZE_ALL)
+_X_
+
+tar cf ${PKG} ${PKG_FILES}
+tar uf ${PKG} $(cat file_list)
+gzip -S .tgz ${PKG}
+
+rm -rf bin doc etc man share software $(cat file_list) file_list $(cat remove_list) +* install
+
+exit 0

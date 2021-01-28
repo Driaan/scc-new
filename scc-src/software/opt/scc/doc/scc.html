@@ -1,0 +1,393 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc 1 "SCC" </TITLE>
+</HEAD><BODY>
+<H1>scc(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc - collect and send snapshot-files to server
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc	1.26.73
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc [ -a|--alternate &lt;alt&gt; ] [ -c|--comment &lt;remark&gt; ] [ -d|--delay &lt;delay&gt; ]
+	        [ -e|--extra &lt;mod&gt; ] [ -S|--selection &lt;mod&gt; ] [ -f|--fqdn ]
+	        [ -F|--from &lt;from&gt; ] [ -h|--help ] [ -i|--smtp &lt;smtp&gt; ]
+	        [ -I|--ident &lt;ident&gt; ] [ -k|--key &lt;key&gt; ]
+	        [ -l|--label &lt;label&gt; ]
+	        [ -m|--max_age &lt;max&gt; ] [ -n|--norun ] [ -o|--option &lt;option&gt; ]
+	        [ -p|--prog &lt;prog&gt; ] [ -P|--port &lt;port&gt; ] [ -r|--restart ]
+	        [ -s|--destination &lt;dest&gt; ] [ -t|--test ]
+	        [ -u|--user &lt;user&gt; ] [ -v|--virtual &lt;host&gt; ] [ -V|--version ]
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	Run the program scc-log and optionally send the resulting files 
+	to the destination. By default the files are prepared for a pull by
+	scc-srv. Other transfer mechanisms are ftp, rcp, scp and cp. When 
+	scc-log exits with an error, no files are transferred.
+
+	The security setup of the server receiving the files is very
+	important. Refer to the documentation of scc-srv for the setup
+	of the server.
+
+	The collection of scc-data from the system is done by means of
+	modules. Two kinds of modules exist, user and system modules. 
+	The system modules are installed and run by scc. To extend the
+	reach of the snapshots, user modules can be added to collect
+	additional data. Refer to <A HREF="scc-collect.html">scc-collect(1)</A> for more details. To
+	run all user modules, use the following command-line:
+
+		scc -e "*"
+
+	When a specific user module requires much time, you can run
+	it less frequent. The data from the last run of the module is
+	kept in file /var/opt/scc/data/plugin_data/&lt;module&gt; and inserted
+	into the snapshot when the user module is not selected to run.
+
+	Suppose you have three user modules, named:
+
+		scc_0550_u_abc
+		scc_0650_u_def
+		scc_0750_u_ghi
+
+	Where module scc_0650_u_def should be run only once a week,
+	while you want scc to run daily. You can use the following
+	cronjobs to achieve this:
+
+		0 6 1-6 * * /opt/scc/bin/scc -e "scc_0[57]50_u_"
+		0 6 0   * * /opt/scc/bin/scc -e "*"
+
+	You have to use the naming convention and shell filename
+	generation wildcards to specify multiple modules to run.
+
+	When stdin is not a terminal, after running scc-log, a random 
+	delay is used to sleep before the files are transferred to the
+	destination. This avoids flooding the receiving system when all
+	your systems start scc at the same time.
+	The transferred files are tarred, compressed and uuencoded when
+	sent via email. For RedHat, uuencode is part of 
+	Applications/Archiving.
+
+	The files to be transferred can be several MB. Check the mail-
+	connectivity first by using the -t option. This will send empty files.
+	Use the -p option with "smtp" to use the SMTP-protocol directly and
+	skip the mail-transport facility of the client.
+
+	Refer to the manual page of <A HREF="scc-log.html">scc-log(1)</A> for troubleshooting
+	when scc seems to "hang".
+
+	Use the environment variable SCC_PROFILING to add timing data
+	to the snapshot. This enables you to locate possible performance
+	bottlenecks. The default value activates profiling and performance
+	data is added to the snapshot.
+
+	scc-collect and its modules use sensible defaults to avoid that 
+	many systems require a configuration file. When the defaults are
+	insufficient, copy /etc/opt/scc/newconfig/scc-localize to
+	/etc/opt/scc/conf/scc-localize and uncomment the required variables.
+	When the --no_conf_sub_dir option was used with the relocate script,
+	the copy is not required.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	-a|--alternate &lt;alt&gt;      Use &lt;alt&gt; as directory where from snapshots
+	                          and logbooks of alternate systems are to
+	                          be transferred to the scc-server.
+	                          The -f option is ignored. The program
+	                          that produces the alternate snapshots is
+	                          responsible for the correct format and
+	                          contents of the scc-data.
+	                          When the files are symbolic links, they are
+	                          removed after transferring their contents.
+	                          For each system &lt;s&gt;, this directory should
+	                          contain the files: scc.&lt;s&gt;.cur, scc.&lt;s&gt;.log,
+	                          scc.&lt;s&gt;.html and scc.&lt;s&gt;.log.html
+	                          Implies the -n option.
+	-c|--comment &lt;remark&gt;     Add a remark to the logbook, indicating
+	                          a "specific" reason to run scc. To mark the
+	                          implementation of RFC "123" on a system, use:
+
+                                 scc                # record changes up to this moment
+                                 # perform the tasks required by the RFC
+                                 scc -c "RFC 123"   # record changes due to RFC
+
+	-d|--delay &lt;delay&gt;        Maximum delay (in seconds) to wait before the
+	                          collection of data starts.
+	-e|--extra &lt;mod&gt;          scc-collect runs all system modules and matching &lt;mod&gt; user modules.
+	                          Where &lt;mod&gt; can contain shell filename wildcards. When used in 
+	                          combination with the -v option, make sure that each 
+	                          invocation activates the same set of user modules.
+	-S|--selection &lt;mod&gt;      Run selected (system or user) module(s) for virtual host (-v).
+	                          Where &lt;mod&gt; can contain shell filename wildcards.
+	                          To detect and process layout version changes, use the -r option
+	                          on the next invocation or include module general in the selection.
+	-f|--fqdn                 Use the full qualified name, not the short
+	                          hostname, when sending files to the SCC server.
+	                          On the SCC client, all filenames contain the 
+	                          short hostname only.
+	-h|--help                 Display the syntax and exit.
+	-F|--from &lt;from&gt;          Mail-address used as sender of mailed data.
+	                          Default value is &lt;root@host.domain.com&gt;.
+	-i|--smtp &lt;smtp&gt;          SMTP-server to connect to; implies "-p smtp".
+	                          Use the -F option when the SMTP-server does
+	                          not allow relaying and the domain of the system
+	                          differs from the domain of the SMP-server.
+	                          Check the logfile in /var/opt/scc/data.
+	-I|--ident &lt;ident&gt;        Identity file for scp; implies "-p scp"
+	-k|--key &lt;key&gt;            File containing public key of scc-server;
+	                          used to encrypt the data that is sent to scc-srv.
+	                          Refer to the documentation of scc-srv for details.
+	                          Add the key-file to scc-localize (SCC_KEY_FILE) to make sure
+	                          that all invocations of scc (and scc-log during upgrades) 
+	                          lead to encrypted data for scc-pull.
+	-l|--label &lt;label&gt;        Label to indicate the function of the system. Use &lt;label&gt;
+	                          in the webinterface of scc-srv to select/group systems.
+	                          The label is preserved for next runs until this option is
+	                          used again.
+	-m|--max_age &lt;max&gt;        Entries in the log-file, that are older
+	                          than &lt;max&gt; months, are deleted
+	-n|--norun                Do not collect new SCC-data. Send the files
+	                          right away.
+	-o|--option no_hosts      No strict host checking for scp. Implies -p scp.
+	                          Dropbear ignores the ssh/scp options used for this.
+	-p|--prog &lt;prog&gt;          Use &lt;prog&gt; to send the files in a specific
+	                          packaged bundle to scc-server. Default value
+	                          for &lt;prog&gt; is pull. Supported values are:
+	                            cp      copy to local directory &lt;dest&gt;
+	                            ftp     transfer to &lt;dir&gt; on &lt;host&gt; by using ~/.netrc
+	                            mail    email to scc-server
+	                            pull    local transfer to /var/opt/scc/data/transfer;
+	                                    transfer is done later by scc-srv.
+	                                    Ignores -s options.
+	                            rcp     remote-copy to scc-server
+	                            scp     SSH-copy to scc-server
+	                            smtp    use SMTP to connect directly to port
+	                                    25 of host-part of &lt;dest&gt; or to &lt;smtp&gt;
+	                                    of -i option. Optionally use the port
+	                                    specified with the -P option.
+	                                    Logfile in /var/opt/scc/data/smtp.log
+	-P|--port &lt;port&gt;          The non-default port for -p scp|smtp.
+	-r|--restart              Restart collection by removing the existing/current
+	                          snapshot. This option is usefull for systems with
+	                          frequent changes where you want the latest snapshot
+	                          on scc-srv.
+	-s|--destination &lt;dest&gt;   Destination to send the files to. The format 
+	                          depends upon the transfer program:
+	                            cp          local directory: /var/opt/scc-srv/data
+	                            ftp         destination: &lt;host&gt;:&lt;dir&gt;
+	                            mail|smtp   email-address: scc@myserver.com
+	                                        With smptp, use the -F option when
+	                                        the domain of &lt;dest&gt; differs from the
+	                                        domain of the SMTP-server (-i option).
+	                            rcp|scp     destination: &lt;user&gt;@&lt;host&gt;:&lt;dir&gt;
+	                                        The &lt;user&gt; and &lt;dir&gt; parts are optional.
+	                                        Optional use the port for scp specified
+	                                        with the -P option.
+	                          When the directory part is omitted for cp, ftp, rcp and
+	                          scp, the data directory of scc is used to determine the
+	                          default data directory of scc-srv.
+	-t|--test                 Test connectivity by sending empty files, no delay 
+	                          is used (implies -d 0) and no data is collected.
+	-u|--user &lt;user&gt;          To be used with -p pull option. The files can be 
+	                          transferred by &lt;user&gt;.
+	-v|--virtual &lt;host&gt;       Do not use the hostname of the system, as base for
+	                          all scc-files, use &lt;host&gt; instead. This option should
+	                          be used to run specific user modules with frequently
+	                          changing data using the -e option. This avoids
+	                          "changes" in the scc-data of the system itself.
+	                          This option requires the -e option.
+	                          Note that the resulting files differ from the regular
+	                          SCC data and html files.
+	-V|--version              Print version of program and exit
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	None.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	The program issues the following messages to stderr:
+
+	Syntax error, use: scc &lt;options&gt;
+	A syntax error has been detected and reported.
+
+	scc: Syntax error, missing argument for option &lt;option&gt;
+	The indicated option is missing argument(s).
+
+	scc: non-numeric interval
+	A non-numeric value has been specified for &lt;delay&gt;.
+
+	scc: wrong format with of mail-address: &lt;address&gt;
+	The mail-address (supplied with the -F or the -s option) does not 
+	start with "&lt;" or does not end with "&gt;".
+
+	scc: non-numeric argument for -m option: &lt;max&gt;
+	Use only numeric arguments for -m option.
+
+	scc: unknown transfer-method: &lt;prog&gt;
+	The argument of the -p option has an unsupported value.
+
+	scc: missing destination for method &lt;prog&gt;
+	Add the --dest option to specify a destination.
+
+	scc: cannot use -S option without -v option
+	Limiting system modules only makes sense for a virtual host run.
+
+	scc: use -e and/or -S option with -v option
+	The -v option can only be used when the -e and/or -S option is used.
+
+	scc: mail not found
+	This program is used to sent scc data to scc-srv.
+
+	scc: uuencode not found
+	This program is used to sent scc data to scc-srv. On RedHat
+	it is part of: Applications/Archiving.
+
+	scc: openssl not found
+	This program is used when the -k option is used to encrypt the data to 
+	be sent via email. When openssl is not found in PATH, no data is sent.
+
+	scc: cannot find nc and telnet to transfer data
+	One of these programs is used to send data via smtp to scc-srv.
+
+	scc: scp not found
+	This program is used to send the scc data to scc-srv.
+
+	scc: cannot use -t option combined with -a option
+	Do not combine the -a and the -t option.
+
+	scc: cannot access target directory: &lt;dest&gt;
+	The target directory for the copy does not exist.
+
+	scc: cannot determine domainname
+	The domainname cannot be determined while using the -f option.
+
+	scc: cannot access &lt;alt&gt;
+	The directory for scc-data of alternate systems cannot be accessed.
+
+	scc: cannot access identity/key-file &lt;ident&gt;
+	The indicated file cannot be accessed.
+
+	scc: unknown user: &lt;user&gt;
+	The supplied username is not a known user.
+
+	scc: no data to transfer, run scc without -n option
+	The transfer directory does not contain any files. Rerun scc (without 
+	the -n option) to collect data in the transfer directory.
+
+	scc: non-root users cannot use the -u option
+	Use the -u option only when invoking as root.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+</PRE>
+<H2> EXAMPLES</H2>
+<PRE>
+
+	To take a daily snapshot and transfer the files to myserver, use a 
+	cronjob like:
+
+	   0 23 * * * /opt/scc/bin/scc -s "&lt;scc-transfer@otherserver.mydom&gt;"
+
+	This runs scc-log daily and transfers the files to otherserver.
+	On otherserver the alias file should contain a line like:
+
+	   scc-transfer: "|/opt/scc-srv/bin/scc-receive-mail"
+
+	Refer to the manual page of scc-srv for the proper setup of the
+	server part of SCC.
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	The names of the files that are sent to the scc-server, must be
+	known in the server-software also: scc-transfer.gz, scc-transfer.Z
+	or scc-transfer depending on the presence of compression software.
+	Refer to the manual page of scc-srv for the setup of the scc-server.
+
+	The files that are send to the server, do not contain the style.css
+	and main index.html file as this transfer to the sever is meant to
+	process the data from the client.
+
+	This program uses gzip or compress to compress the data.
+	It uses uuencode to transfer the data through email.
+	Either netcat (nc) or telnet are used with transfer via smtp.
+
+	Use environment variable SCC_DATA to specify an alternative directory
+	for the SCC data files. Should be an absolute path.
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 
+	2019 Siem Korteweg.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	- /var/opt/scc/data - directory for data files
+		scc.&lt;hostname&gt;.cur - current SCC-snapshot
+		scc.&lt;hostname&gt;.html - current SCC-snapshot in HTML-format
+		scc.&lt;hostname&gt;.log - logbook for changes in SCC-snapshots
+		scc.&lt;hostname&gt;.log.html - logbook in HTML-format
+		smtp.log - logfile for transport with -p smtp
+	The filename on the scc-server is: scc.&lt;hostname&gt;.tar.gz When
+	gzip is not found, compress is used and ".gz" is changed in ".Z".
+	When compress is also not found, cat is used and ".gz" is removed
+	from the filename. When the -f option is used, the DNS-domain is
+	added to the remote filenames.
+	When rcp/scp are used, the file scc.&lt;hostname&gt;.signal is used to
+	indicate the completed transfer of the scc-data on the server.
+	- /var/opt/scc/data/transfer - directory for pull and transfer
+	- /var/opt/scc/data/plugin_data/&lt;module&gt; - output of user module
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-cmp.html">scc-cmp(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-4.html">scc(4)</A>, <A HREF="scc-5.html">scc(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6271 $
+
+</PRE>
+</BODY></HTML>

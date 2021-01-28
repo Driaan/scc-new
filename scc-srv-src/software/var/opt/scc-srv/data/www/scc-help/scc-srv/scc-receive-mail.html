@@ -1,0 +1,142 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-receive-mail</TITLE></HEAD><BODY>
+<H1>scc-receive-mail(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-receive-mail - receive snapshot-files through email
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-srv	1.19.44
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-receive-mail [ &lt;dir&gt; ]
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	Receive snapshot-files sent by scc via email. The program is activated 
+	through an email-alias, transferred files are put in &lt;dir&gt;.
+
+	The files to be transferred can be several MB. Check the mail-
+	connectivity first by using the -t option for scc. This will 
+	send empty files.
+
+	When the sendmail restricted shell (smrsh) option is enabled, only
+	programs in the directory /etc/smrsh can be activated through an
+	email alias. Link this program and cat, as that is the only 
+	sub-program that is used:
+
+	        cd /etc/smrsh
+	        ln -s /opt/scc-srv/bin/scc-receive-mail .
+	        ln -s $(which cat) .
+
+	When selinux is enabled, make sure that the mail daemon has permission
+	to create files in the destination directory:
+
+	        chcon -R system_u:object_r:mail_spool_t:s0 &lt;dir&gt;
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	None.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;dir&gt;   destination directory for the received files, make sure
+	        that this directory has the proper permissions when
+		accessed by a program executed via an email alias.
+	        Default directory is /var/opt/scc-srv/transfer/mail.
+
+</PRE>
+<H2> WARNING</H2>
+<PRE>
+
+	Use of this alias-construct, makes it possible that a Denial Of
+	Service is started by sending large amounts of snapshots to the
+	server.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program does not issue any messages. It&#39;s structure is very
+	simple and there are limited options to issue messages when 
+	activated though an email alias.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns 0 to avoid returning all files 
+	to the sender upon detecting an error. Errors are not signalled.
+
+</PRE>
+<H2> EXAMPLES</H2>
+<PRE>
+
+	To take a daily snapshot and transfer the files to myserver, use a 
+	cronjob like:
+
+	   0 23 * * * /opt/scc/bin/scc -s scc-transfer@mysrv.mydom
+
+	This runs scc-log daily and transfers the files to mysrv. On this 
+	system the alias file should contain a line like:
+
+	   scc-transfer: "|/opt/scc-srv/bin/scc-receive-mail "
+
+	Note that scc-receive-mail is run through postfix/sendmail, and does
+	not run as root. On a HP-UX/sendmail system, the program is launched
+	as daemon/other on a RedHat/sendmail as mail/mail. Use the appropriate 
+	permissions for the directories and scc-receive-mail.
+
+	To reduce the likelihood of DOS-attacks, you should use a non-obvious 
+	email-alias and not the alias from this documentation.
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-receive-mail is free software under the terms of the GNU General 
+	Public License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	/var/opt/scc-srv/data/transfer/mail - directory to receive files
+	/var/opt/scc-srv/data/log/scc-receive-mail.log - log file with stdout and stderr
+	/var/opt/scc-srv/tmp - directory for temporary files
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+	<A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+	<A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+	<A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6217 $
+
+</PRE>
+</BODY></HTML>

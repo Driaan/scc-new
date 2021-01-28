@@ -1,0 +1,810 @@
+#!/bin/sh
+
+# Shell script to collect Oracle data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0800_s_oracle 6216 2019-03-21 20:47:50Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# Make sure we avoid connect problems
+unset TWO_TASK
+export ORAENV_ASK="NO"
+
+export fixclass="fix:software:oracle"
+export varclass="var:software:oracle"
+
+for d in /etc /var/opt/oracle
+do
+	scc_check_file "${d}/oraInst.loc" "${fixclass}:${d}/oraInst.loc::" "#"
+	scc_check_file "${d}/srvConfig.loc" "${fixclass}:${d}/srvConfig.loc::" "#"
+done
+
+if [ -z "${ORATAB:-}" ]
+then
+	if [ -f /etc/oratab ]
+	then
+		ORATAB=/etc/oratab
+	elif [ -f /var/opt/oracle/oratab ]
+	then
+		ORATAB=/var/opt/oracle/oratab
+	else
+		ORATAB=""
+	fi
+fi
+
+ORATAB_DIR="${ORATAB%/*}"
+
+scc_check_file "${ORATAB}" "${fixclass}:${ORATAB}::" "#"
+if [ -d "${ORATAB_DIR}" ]
+then
+	for ORAFILE in listener.ora tnsnames.ora sqlnet.ora tnsnav.ora
+	do
+		scc_check_file "${ORATAB_DIR}/${ORAFILE}" "${fixclass}:sql-net:${ORATAB_DIR}/${ORAFILE}::" "#"
+	done
+fi
+
+# Store the directories that we checked for the listener.ora, tnsnames.ora, ....
+echo "${ORATAB_DIR}" > ${TMP1_FILE}
+
+if [ -n "${TNS_ADMIN:-}" -a "${TNS_ADMIN:-}" != "${ORATAB_DIR}" ]
+then
+	for ORAFILE in listener.ora tnsnames.ora sqlnet.ora tnsnav.ora
+	do
+		scc_check_file "${TNS_ADMIN}/${ORAFILE}" "${fixclass}:sql-net:${TNS_ADMIN}/${ORAFILE}::" "#"
+	done
+	echo "${TNS_ADMIN}" >> ${TMP1_FILE}
+fi
+
+scc_oracle_sids						|
+while read ORACLE_USER ORACLE_SID ORACLE_HOME
+do
+	export ORACLE_HOME ORACLE_SID ORACLE_USER
+
+	if [ "${ORACLE_USER}" = "_" -a "${ORACLE_SID}" = "_" ] 
+	then 
+		# client files 
+		scc_check_file "${ORACLE_HOME}/network/admin/tnsnames.ora" "${fixclass}:${ORACLE_HOME}:network/admin/tnsnames.ora::" # 
+
+		sed -n -e 's/^[ 	]*ifile.*=//p'                          \
+		${ORACLE_HOME}/network/admin/tnsnames.ora 2>/dev/null           	|
+		while read ORAFILE 
+		do 
+			scc_check_file "${ORAFILE}" "${fixclass}:${ORACLE_HOME}:init file:${ORAFILE##*/}::" "#" 
+		done 
+
+		continue 
+	fi 
+
+	class="${fixclass}:${ORACLE_SID}:general"
+
+	echo "${class}::\$ORACLE_SID:	${ORACLE_SID}"
+	echo "${class}::\$ORACLE_HOME:	${ORACLE_HOME}"
+	echo "${class}::Unix user:	${ORACLE_USER}"
+
+	init_file="${ORACLE_HOME}/dbs/init${ORACLE_SID}.ora"
+	scc_check_file "${init_file}" "${fixclass}:${ORACLE_SID}:${init_file}::" "#"
+
+	alt_sp="$(sed -n -e "s/^spfile *= *//p" "${init_file}" 2>/dev/null)"
+	sp_file="${ORACLE_HOME}/dbs/spfile${ORACLE_SID}.ora"
+	if [ "${alt_sp}" = "${sp_file}" ]
+	then
+		alt_sp=""			# Avoid collecting twice.
+	fi
+	for file in "${sp_file}" "${alt_sp}"
+	do
+		if [ -f "${file}" ]
+		then
+			# Erik-Jan Taal:
+			# $SID\.__.* parameters (cache sizes etc.) are automatically
+			# sized using sga_target in 10g so it's best to record them as
+			# var: if they're present.
+			strings "${file}"							|
+			sed	-e "s/#.*//"					\
+				-e "s/[ 	]*$//"				\
+				-e "/^$/d"					\
+				-e "s@^@${fixclass}:${ORACLE_SID}:${file}::@"	\
+				-e "s/^fix:\(.*\.__.\)/var:\1/"
+		fi
+	done
+
+	# Sometimes ORACLE_HOME is referred to as "?"
+	( cat "${init_file}" 2>/dev/null; strings "${sp_file}" "${alt_sp}" 2>/dev/null )	|
+	sed -n -e "s@?@${ORACLE_HOME}@" -e "s/ifile[ 	]*=[ 	]*//p"				|
+	sort -u											|
+	while read ifile
+	do
+		scc_check_file "${ifile}" "${fixclass}:${ORACLE_SID}:${ifile}::" "#"
+	done
+
+	if [ -x $ORACLE_HOME/bin/adapters ]
+	then
+		# Check whether the current ${ORACLE_HOME} is already checked for adapaters
+		if [ $(grep -c "^${ORACLE_HOME}\$" ${TMP1_FILE}) -eq 0 ]
+		then
+			$ORACLE_HOME/bin/adapters 2>/dev/null			|
+			sed -e "s/^/${fixclass}:${ORACLE_SID}:adapters::/"
+		fi
+	fi
+
+	if [ "${ORACLE_USER}" = "_" ]			# Oracle user could not be determined.
+	then
+		continue
+	fi
+
+	# Use the oracle user for executing svrmgrl and sqlplus.
+	# When they are executed as root, they are spawned as user daemon,
+	# which may result in file and directory permission problems.
+	if [ -x "${ORACLE_HOME}/bin/svrmgrl" ]
+	then
+		echo "${class}::"
+
+		su ${ORACLE_USER} -c "${ORACLE_HOME}/bin/svrmgrl command=exit 2>/dev/null" |
+		sed	-e '/^[ 	]*$/d'	\
+			-e '/Copyright/d'	\
+			-e "s/^/${class}::svrmgrl:	/"
+	fi
+
+	ORA_VERSION="?"
+	if [ -x "${ORACLE_HOME}/bin/sqlplus" ]
+	then
+		echo "${class}::"
+
+		export force_sqlplus_query="yes"
+		scc_oracle_query "prompt Copyright"             |
+		sed -n -e "s/^\(SQL.*\) - Production on .*/${class}::sqlplus:   \1/p"
+		force_sqlplus_query=""
+
+		ORA_VERSION="$(${ORACLE_HOME}/bin/sqlplus -?						|
+			awk '/Plus: Release/ { split( $3, p, "." ); printf( "%s%s\n", p[ 1 ], p[ 2 ] )}')"
+	fi
+	echo "${class}::oracle version:	${ORA_VERSION}"
+
+	# list init.ora and init<SID>.ora
+	for file in init.ora init${ORACLE_SID}.ora
+	do
+		scc_check_file "${ORACLE_HOME}/dbs/${file}" "${fixclass}:${ORACLE_SID}:init file:${file}::" "#"
+	done
+
+	# list files included within init-files
+	sed -n -e 's/^[ 	]*ifile.*=//p'		\
+		${ORACLE_HOME}/dbs/init.ora		\
+		${ORACLE_HOME}/dbs/init${ORACLE_SID}.ora 2>/dev/null	|
+	while read ORAFILE
+	do
+		scc_check_file "${ORAFILE}" "${fixclass}:${ORACLE_SID}:init file:${ORAFILE}::" "#"
+	done
+
+	# check if .ora files are listed already, if not, list them
+	# Check whether the current ${ORACLE_HOME} is already checked for *.ora.
+	if [ $(grep -c "^${ORACLE_HOME}\$" ${TMP1_FILE}) -eq 0 ]
+	then
+		for ORAFILE in listener.ora tnsnames.ora sqlnet.ora tnsnav.ora
+		do
+			file="${ORACLE_HOME}/network/admin/${ORAFILE}"
+			scc_check_file "${file}" "${fixclass}:${ORACLE_SID}:sql-net:${file}::" "#"
+		done
+		echo "${ORACLE_HOME}" >> ${TMP1_FILE}	# Mark as checked
+	fi
+
+	##################################################################
+	SP_FILE="${ORACLE_HOME}/scc_sp_$$"
+	scc_oracle_query "create pfile='${SP_FILE}' from spfile;" >/dev/null 2>/dev/null
+
+	# Erik-Jan Taal:
+	# $SID\.__.* parameters (cache sizes etc.) are automatically
+	# sized using sga_target in 10g so it's best to record them as
+	# var: if they're present.
+	class="${fixclass}:${ORACLE_SID}:spfile::"
+	if [ -f ${SP_FILE} ]
+	then
+		sed	-e 's/--*$/-/'			\
+			-e "s/^/${class}/"		\
+			-e 's/^fix:\(.*\.__.\)/var:\1/'	\
+				<${SP_FILE}
+		rm -f ${SP_FILE}
+	else
+		echo "${class}unable to create spfile"
+	fi
+
+	##################################################################
+	scc_oracle_query "show sga"				|
+	sed	-e "s/^/${fixclass}:${ORACLE_SID}:SGA::/"	|
+	sed	-e "s/^fix:\(.*::Variable\)/var:\1/"	\
+		-e "s/^fix:\(.*::Database Buffers\)/var:\1/"
+
+	##################################################################
+	cat >${TMP3_FILE} <<_X_
+		select
+			*
+		from
+			sys.v\$option
+		order by
+			PARAMETER;
+_X_
+	class="${fixclass}:${ORACLE_SID}:option::"
+
+	scc_oracle_query "${TMP3_FILE}"				|
+	sed	-e 's/--*$/-/'		\
+		-e "s/^/${class}/"
+
+	scc_help_info "${class}" <${TMP3_FILE}
+	rm -f ${TMP3_FILE}
+
+	##################################################################
+	cat >${TMP3_FILE} <<_X_
+		select
+			substr( NAME, 1, 30 )	NAME,
+			VALUE
+		from
+			sys.v\$parameter
+		order by
+			NAME;
+_X_
+	class="${fixclass}:${ORACLE_SID}:parameter::"
+
+	scc_oracle_query "${TMP3_FILE}"				|
+	sed	-e 's/--*$/-/'		\
+		-e "s/^/${class}/"
+
+	scc_help_info "${class}" <${TMP3_FILE}
+	rm -f ${TMP3_FILE}
+
+	##################################################################
+	cat >${TMP3_FILE} <<_X_
+		select
+			LOG_MODE
+		from
+			SYS.V\$DATABASE;
+_X_
+	class="${fixclass}:${ORACLE_SID}:logmode::"
+
+	scc_oracle_query "${TMP3_FILE}"				|
+	sed	-e 's/--*$/-/'		\
+		-e "s/^/${class}/"
+
+	scc_help_info "${class}" <${TMP3_FILE}
+	rm -f ${TMP3_FILE}
+
+	##################################################################
+	# Refer to OracleFAQ for this query (and more).
+	cat >${TMP3_FILE} <<_X_
+		select
+			GRANTEE,
+			PRIVILEGE,
+			ADMIN_OPTION
+		from
+			SYS.DBA_SYS_PRIVS 
+		where
+			grantee not in ('SYS', 'SYSTEM', 'OUTLN', 'AQ_ADMINISTRATOR_ROLE',
+					'DBA', 'EXP_FULL_DATABASE', 'IMP_FULL_DATABASE',
+					'OEM_MONITOR', 'CTXSYS', 'DBSNMP', 'IFSSYS',
+					'IFSSYS\$CM', 'MDSYS', 'ORDPLUGINS', 'ORDSYS',
+					'TIMESERIES_DBA')
+		order by
+			1, 2, 3;
+_X_
+	class="${fixclass}:${ORACLE_SID}:privilege::"
+
+	scc_oracle_query "${TMP3_FILE}"				|
+	sed	-e 's/--*$/-/'		\
+		-e "s/^/${class}/"
+
+	scc_help_info "${class}" <${TMP3_FILE}
+	rm -f ${TMP3_FILE}
+
+	##################################################################
+	cat >${TMP3_FILE} <<_X_
+		select
+			substr( PRODUCT, 1, 40 )	PRODUCT,
+			substr( VERSION, 1, 15 )	VERSION,
+			substr( STATUS, 1, 15 )		STATUS
+		from
+			PRODUCT_COMPONENT_VERSION
+		order by
+			1;
+_X_
+	class="${fixclass}:${ORACLE_SID}:product::"
+
+	scc_oracle_query "${TMP3_FILE}"				|
+	sed	-e 's/--*$/-/'		\
+		-e "s/^/${class}/"
+	rm -f ${TMP3_FILE}
+
+	##################################################################
+	class="${fixclass}:${ORACLE_SID}:installed products::"
+	if [ -x ${ORACLE_HOME}/orainst/inspdver ]
+	then
+		${ORACLE_HOME}/orainst/inspdver 2>/dev/null		|
+		sed -e "s/^/${class}/"
+	else
+		scc_check_file "${ORACLE_HOME}/install/unix.rgs" "${class}" "#"
+	fi
+
+	##################################################################
+	cat >${TMP3_FILE} <<_X_
+		select
+			*
+		from
+			sys.v\$version
+		order by
+			1;
+_X_
+	class="${fixclass}:${ORACLE_SID}:version::"
+
+	scc_oracle_query "${TMP3_FILE}"				|
+	sed	-e 's/--*$/-/'		\
+		-e "s/^/${class}/"
+	rm -f ${TMP3_FILE}
+
+	##################################################################
+	query="\
+		select
+			TABLESPACE_NAME,
+			BYTES,
+			USER_BYTES,
+			STATUS,
+			AUTOEXTENSIBLE,
+			MAXBYTES,
+			MAXBLOCKS,
+			INCREMENT_BY,
+			FILE_NAME
+		from
+			DBA_DATA_FILES
+		where
+			AUTOEXTENSIBLE='NO'
+		order by
+			FILE_NAME;"
+	class="${fixclass}:${ORACLE_SID}:database files sizes::"
+
+	# FILE_NAME is a "long" column, reduce multiple "-" from the header.
+	scc_oracle_query "${query}"		|
+	sed	-e "s/--*$/-/"		\
+		-e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	# now the auto-extensible files with var-classification.
+	query="\
+		select
+			TABLESPACE_NAME,
+			BYTES,
+			USER_BYTES,
+			STATUS,
+			AUTOEXTENSIBLE,
+			MAXBYTES,
+			MAXBLOCKS,
+			INCREMENT_BY,
+			FILE_NAME
+		from
+			DBA_DATA_FILES
+		where
+			AUTOEXTENSIBLE='YES'
+		order by
+			FILE_NAME;"
+	class="${varclass}:${ORACLE_SID}:database files sizes::"
+
+	# FILE_NAME is a "long" column, reduce multiple "-" from the header.
+	scc_oracle_query "${query}"		|
+	sed	-e "s/--*$/-/"		\
+		-e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	query="\
+		select
+			TABLESPACE_NAME,
+			BYTES,
+			USER_BYTES,
+			STATUS,
+			AUTOEXTENSIBLE,
+			MAXBYTES,
+			MAXBLOCKS,
+			INCREMENT_BY,
+			FILE_NAME
+		from
+			DBA_TEMP_FILES
+		where
+			AUTOEXTENSIBLE='NO'
+		order by
+			FILE_NAME;"
+	class="${fixclass}:${ORACLE_SID}:database temp files sizes::"
+
+	# FILE_NAME is a "long" column, reduce multiple "-" from the header.
+	scc_oracle_query "${query}"		|
+	sed	-e "s/--*$/-/"		\
+		-e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	# now the auto-extensible temporary files with var-classification.
+	query="\
+		select
+			TABLESPACE_NAME,
+			BYTES,
+			USER_BYTES,
+			STATUS,
+			AUTOEXTENSIBLE,
+			MAXBYTES,
+			MAXBLOCKS,
+			INCREMENT_BY,
+			FILE_NAME
+		from
+			DBA_TEMP_FILES
+		where
+			AUTOEXTENSIBLE='YES'
+		order by
+			FILE_NAME;"
+	class="${varclass}:${ORACLE_SID}:database temp files sizes::"
+
+	# FILE_NAME is a "long" column, reduce multiple "-" from the header.
+	scc_oracle_query "${query}"		|
+	sed	-e "s/--*$/-/"		\
+		-e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	query="\
+		select
+			DB_LINK,
+			OWNER,
+			USERNAME,
+			HOST
+		from
+			DBA_DB_LINKS
+		order by
+			1;"
+
+	class="${fixclass}:${ORACLE_SID}:database links::"
+
+	# HOST is a "long" column, reduce multiple "-" from the header.
+	scc_oracle_query "${query}"		|
+	sed	-e "s/--*$/-/"		\
+		-e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	extra_col=""
+	do_opatch=0
+	case "${ORA_VERSION}" in
+	81*)	do_query=1
+		;;
+	9*)	do_query=1
+		extra_col=", SEGMENT_SPACE_MANAGEMENT"
+                do_opatch=1
+		;;
+	1*)	do_query=1
+		extra_col=", SEGMENT_SPACE_MANAGEMENT, BIGFILE"
+                do_opatch=1
+		;;
+	*)	do_query=0
+		;;
+	esac
+
+	# Alexander Fuchs suggested to use the opatch utility and contributed code.
+
+	# Determine the oraInst.loc file to be used with opatch.
+	oraInst_loc=""
+	for d in /etc /var/opt/oracle
+	do
+		# Check for an oraInst.loc specific for this SID.
+		if [ -f "${d}/oraInst.loc.${ORACLE_SID}" ]
+		then
+			oraInst_loc="${d}/oraInst.loc.${ORACLE_SID}"
+
+			scc_check_file "${oraInst_loc}" "${fixclass}:${oraInst_loc}::" "#"
+
+			break
+		fi
+
+		# Check for the generic one.
+		if [ -f "${d}/oraInst.loc" ]
+		then
+			oraInst_loc="${d}/oraInst.loc"
+			break
+		fi
+	done
+
+	##################################################################
+	# mod. fua, 14.07.2006, added the "OPatch lsinventory"
+	if [ ${do_opatch} -eq 1 ]
+	then
+		(
+			# Extend our PATH with candidate directories for opatch.
+			# It can be installed in any directory :(.
+			PATH="${PATH}:${ORACLE_HOME}/bin:/oracle/OPatch"
+
+			opatch_exe="$(which opatch 2>/dev/null)"
+			if [ -x "${opatch_exe}" -a -f "${oraInst_loc}" ]
+			then
+				class="${fixclass}:${ORACLE_SID}:OPatch::"
+
+				# Record the version of opatch
+				$OPATCH version			|
+				sed -n -e "s/^OPatch Version:/${class}version	: /p" 
+
+				# run opatch for this ORACLE_SID
+				su ${ORACLE_USER} -c "cd /tmp;
+					${opatch_exe} lsinventory -invPtrLoc \"${oraInst_loc}\"" 2>/dev/null	|
+				sed	-e '1,/^Result:/ d'		\
+					-e '/^[\s\t]*$/d'		\
+					-e '/^OPatch succeeded./d'	\
+					-e '/^toLoad  :/d'		\
+					-e "s/^/${class}/"
+
+				# Add the help info to the snapshot.
+				echo "su ${ORACLE_USER} -c \"cd /tmp; ${opatch_exe} lsinventory -invPtrLoc ${oraInst_loc}\""	|
+				scc_help_info "${class}"
+			fi
+		)
+	fi
+
+	##################################################################
+	if [ ${do_query} -eq 1 ]
+	then
+		cat >${TMP3_FILE} <<EOF
+			select
+				TABLESPACE_NAME,
+				CONTENTS,
+				INITIAL_EXTENT,
+				NEXT_EXTENT,
+				ALLOCATION_TYPE ${extra_col}
+			from
+				DBA_TABLESPACES
+			order by
+				1,2;
+EOF
+		class="${fixclass}:${ORACLE_SID}:tablespace::"
+
+		scc_oracle_query "${TMP3_FILE}"		|
+		sed -e "s/^/${class}/"
+
+		echo "${query}"				|
+		scc_help_info "${class}"
+	fi
+
+	##################################################################
+	query="\
+		select
+			TABLESPACE_NAME,
+			TABLE_NAME,
+			OWNER,
+			CLUSTER_NAME
+		from
+			ALL_TABLES
+		where
+			( OWNER			!= 'SYSTEM'	) AND
+			( OWNER			!= 'SYS'	) AND
+			( TABLESPACE_NAME	is NOT NULL	) AND
+			( TABLESPACE_NAME	!= 'SYSTEM'	)
+		order by
+			1, 2, 3, 4;"
+	class="${fixclass}:${ORACLE_SID}:table::"
+
+	scc_oracle_query "${query}"		|
+	sed -e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	query="\
+		select
+			OWNER,
+			SEGMENT_NAME,
+			TABLESPACE_NAME,
+			STATUS,
+			INITIAL_EXTENT,
+			NEXT_EXTENT,
+			MIN_EXTENTS,
+			PCT_INCREASE
+		from
+			DBA_ROLLBACK_SEGS
+		order by
+			1, 2, 3;"
+	class="${fixclass}:${ORACLE_SID}:rollback segments::"
+
+	scc_oracle_query "${query}"		|
+	sed -e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	query="\
+		select
+			*
+		from
+			DBA_SYS_PRIVS
+		where
+			( ADMIN_OPTION	= 'YES'		) AND
+			( GRANTEE	!= 'DBA'	)
+		order by
+			1, 2;"
+	class="${fixclass}:${ORACLE_SID}:admin privileges::"
+
+	scc_oracle_query "${query}"		|
+	sed -e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	query="\
+		select
+			TABLE_OWNER,
+			TABLE_NAME,
+			TRIGGER_NAME,
+			TRIGGER_TYPE,
+			STATUS,
+			TRIGGERING_EVENT
+		from
+			DBA_TRIGGERS
+		order by
+			1, 2, 3;"
+	class="${fixclass}:${ORACLE_SID}:triggers::"
+
+	scc_oracle_query "${query}"		|
+	sed	-e "s/--*$/-/"		\
+		-e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+	##################################################################
+	if [ ${ORA_LIST_USERS:-1} = 1 ]
+	then
+		scc_oracle_query "select USERNAME from ALL_USERS order by USERNAME;" |
+		sed -e "s/^/${fixclass}:${ORACLE_SID}:users::/"
+	fi
+
+	##################################################################
+	query="\
+		select
+			OWNER,
+			OBJECT_NAME,
+			OBJECT_TYPE,
+			STATUS
+		from
+			ALL_OBJECTS
+		where
+			STATUS='INVALID'
+		order by
+			OWNER, OBJECT_NAME;"
+	class="${fixclass}:${ORACLE_SID}:invalid objects::"
+
+	scc_oracle_query "${query}"		|
+	sed -e "s/^/${class}/"
+
+	echo "${query}"				|
+	scc_help_info "${class}"
+
+done	# while read ORACLE_USER ORACLE_SID ORACLE_HOME
+rm -f ${TMP1_FILE}
+
+ora_inst="${ORATAB%/*}/oraInst.loc"
+if [ -f "${ora_inst}" ]
+then
+        # Get the xmlfiles from the inventory.
+        inventory="$(sed -n -e 's/^inventory_loc=//p' "${ora_inst}")/ContentsXML"
+	
+	for file in "${inventory}"/*xml
+	do
+		if [ "${file##/*}" = "comps.xml" ]
+		then
+			# This is a very large file, just get the components and record their properties
+			#<COMP NAME="oracle.ldap.client" VER="11.2.0.1.0" BUILD_NUMBER="0" REP_VER="0.0.0.0.0" ... INST_LOC="/opt/oracle/oracle/product/11.2.0/database">
+			awk -F=	'/^<COMP NAME=/ {
+					component=$2;
+					sub( " [A-Z_][A-Z_]*$", "", component );
+					gsub( "\"", "", component );
+					for ( i = 3; i <= NF; i++ )
+					{
+						key=$(i-1);
+						sub( ".* ", "", key );
+						value=$i;
+						sub( " [A-Z_][A-Z_]*$", "", value );
+						gsub( "\"", "", value );
+						if ( i == NF )
+						{
+							sub( ">$", "", value );
+						}
+						printf( "%s%::s:%-15.15s : %s\n", l, component, key, value );
+					}
+				}' l="${fixclass}:inventory:${file}" "${file}"		|
+			sort -f
+		else
+			scc_check_file "${file}" "${fixclass}:inventory:${file}::" "#"
+		fi
+	done
+fi
+
+# Erik-Jan Taal:
+# Script to dump OID TNS names entries for use with scc. Based on information from: 
+# http://dbaspot.com/forums/oracle-server/65098-dump-ldap-into-tnsnames-ora-automatically-2.html#post1422139
+# which was written by: michaelshank
+sed -n -e 's|^.*[0-9]* \(/.*\)/bin/oidldapd .* -p \([0-9]*\) .*|\1 \2|p' ${PROC_FILE}	|
+scc_keep "oracle:oidldapd:" 10								|
+while read home port
+do
+	# Try to find sub_dn (Not really necessary for 9i, but supposedly for 10g+, can't test this however.
+	if [ -f "${home}/inventory/ContentsXML/configtools.xml" ]
+	then
+		sub_dn=$(sed -n -e 's|&[a-z]*;||g' -e 's|^.*<SILENT CMD=.* subscriberdn=.*\(dc=.*dc=.*\) -silent.*|\1|p' ${home}/inventory/ContentsXML/configtools.xml)
+	else
+		for file in "${home}"/inventory/Components21/oracle.oid/*/context.xml
+		do
+			if [ -f "${file}" ]
+			then
+				sub_dn="$(sed -n -e 's|^.*NAME="s_subdn".* VAL="\(.*\)" ADV=.*|\1|p' ${file})"
+				break
+			fi
+		done
+	fi
+
+	ldap_search="${home}/bin/ldapsearch"
+	if [ -n "${sub_dn}" -a -x "${ldap_search}" ]
+	then
+		ldap_sid="${home##*/}"
+		## If using version 10g, you may need something like this:
+		#ldap_base_dn="cn=OracleContext,${sub_dn}"
+		## however I don't have version 10g to test it against.
+		# For 9i however, the following seems to suffice
+		ldap_base_dn="cn=OracleContext"
+		ORACLE_HOME="${home}" ${ldap_search} -h localhost -p ${port} -b "${ldap_base_dn}" -s one -v "objectclass=orclNetService" 2>/dev/null	|
+		sed -e "s|^|${fixclass}:OID TNS names entries:${ldap_sid}::|"
+	fi
+done
+
+exit 0

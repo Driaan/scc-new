@@ -1,0 +1,75 @@
+#!/bin/sh
+
+# Shell script to produce source tree of scc-software.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: src-gen-scc 6216 2019-03-21 20:47:50Z siemkorteweg $
+ 
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# After using this program, the directory contains one file:
+#
+#	scc-1.26.73.src.tar
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+VERSION=${1:-1.26.73}
+
+TAR_FILE=scc-${VERSION}.src.tar;	export TAR_FILE
+SRC_DIR=scc-${VERSION};			export SRC_DIR
+
+umask 022
+
+rm -f MANIFEST
+find . -type f | sort >MANIFEST
+
+# Put everything in a single sub-directory.
+mkdir ${SRC_DIR}
+mv * ${SRC_DIR} 2>/dev/null		# Ignore error concerning ${SRC_DIR}
+
+tar cf ${TAR_FILE} ${SRC_DIR}
+gzip ${TAR_FILE}
+chmod 444 ${TAR_FILE}.gz
+
+rm -rf ${SRC_DIR}
+
+exit 0

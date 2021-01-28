@@ -1,0 +1,94 @@
+.TH scc-debug 1 "SCC-SRV" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-debug - collect configuration and logging data of the web-interface
+
+.SH  RELEASE
+.nf
+
+	scc-srv	1.19.44
+
+.SH  SYNOPSIS
+.nf
+
+	scc-debug <dir>
+
+.SH  DESCRIPTION
+.nf
+
+	This program collects configuration and optional logging data for analysis
+	when the web-interface does not work correctly. The data is produced on 
+	stdout and can be used to remotely assist in the analysis of problems.
+
+.SH  OPTIONS
+.nf
+
+	None.
+
+.SH  ARGUMENTS
+.nf
+
+	<dir>           The top-directory of scc-srv data from in the web hierarchy.
+	                For example /var/www/html/applications/scc or /srv/www/htdocs/applications/scc.
+
+.SH  DIAGNOSTICS
+.nf
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-debug <dir>
+	A syntax error has been detected.
+
+	scc-debug: directory '<dir>' not found
+	The specified directory is not found.
+
+	scc-debug: realm '<dir>'/All not found
+	The specified directory does not contain the realm All. Use the correct directory
+	or link the scc-srv data file hierarchy and the webserver hierarchy.
+
+.SH  RETURN VALUE
+.nf
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+.SH  FILES
+.nf
+
+	/var/opt/scc-srv/data/transfer - base-directory for transferred data
+	/var/opt/scc-srv/data/www - base-directory for separate realms
+	/var/opt/scc-srv/data/log/scc.cgi.log - log file for CGI-script
+	/var/opt/scc-srv/data/log/scc-transfer.log - default log file
+
+	Argument: <dir> top directory of scc-srv in the web-hierarchy
+	/var/opt/scc-srv/conf/scc.conf - configuration file, records
+	        the settings of the -d option
+	/var/opt/scc-srv/data/transfer/mail_user_group - record -m option for upgrade of
+	        scc-srv
+
+.SH  COPYRIGHT
+.nf
+
+	scc-update is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2010-2018 QNH, 2019 Siem Korteweg.
+
+.SH  SEE ALSO
+.nf
+
+	scc-baseline(1), scc-changes(1), scc-debug(1), scc-pull(1), scc-realm(1),
+	scc-receive-mail(1), scc-rules(1), scc-setup(1), scc-smt(1), scc-summary(1),
+	scc-syscmp(1), scc-transfer(1), scc-update(1), scc-wrapper.cgi(1), scc.cgi(1),
+	scc-srv(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6217 $
+

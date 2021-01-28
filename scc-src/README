@@ -1,0 +1,52 @@
+This file decsribes the hierarchy of the source tarball when it is unpacked.
+Note that the sourceforge SVN hierarchy differs from the hierarchy in this source tarball.
+
+This directory contains the scripts to produce packaged scc. Directory 'install'
+contains the pre- and post-install scripts. Directory 'software' contains the
+hierarchy of the installable scripts of scc.
+
+Please refer to file software/opt/scc/doc/README for details of the installation
+and use of scc.
+
+The source tarball hierarchy can be used to install an unpackaged version of the
+software by means of the command:
+
+	./scc-install
+
+Please note that this copies the files from the software/opt/scc hierarchy 
+to /opt/scc. A warning is issued when using the source install on a system 
+with a packaged version of scc. The output from '/opt/scc/bin/scc --version'
+and 'rpm -q scc' or 'pkginfo -l scc' will differ. Correct this by again 
+installing a packaged version of scc.
+
+Packaging the software in native systems formats should be done with the following
+programs (in alphabetical order):
+
+	- debian-gen-scc	DEB for Debian
+	- dragonflybsd-gen-scc	TGZ for DragonFlyBSD
+	- freebsd-gen-scc	TGZ for FreeBSD
+	- hpux-gen-scc		SD-UX format for HP-UX
+	- netbsd-gen-scc	TGZ for NetBSD
+	- openbsd-gen-scc	TGZ for OpenBSD
+	- pacman-gen-scc	.pkg.tar.gz for ArchLinux
+	- puppy-gen-scc		PET for PuppyLinux
+	- rpm-gen-scc		RPM
+	- slackware-gen-scc	TGZ for Slackware
+	- src-gen-scc		source format
+	- sunos-gen-scc		package format for Solaris
+	- ttylinux-gen-scc	TBZ for ttylinux
+
+These commands should be used in the top directory of the untarred source tarball.
+The resulting package, rpm, depot or tgz-file is located in this top directory,
+while other files and subdirectories are removed. Use script scc_gen_all to
+generate all packages in the subdirectory "packages". This script does not remove
+other files and subdirectories and reports and skips formats whose specific 
+packaging tools are absent.
+
+To install scc in non-default directories you have to use the relocate script. Refer
+to the script for details. After that call one packaging script or scc_gen_all, that
+skips the generate scripts that already use the relocate script.
+
+Customization of the software is preferably done after retrieving the software
+from the SVN repository at SourceForge. Refer to the README file in the trunk
+directory of scc for further details.

@@ -1,0 +1,113 @@
+.TH scc-summary 1 "SCC-SRV" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-summary - summarize SCC-snapshots
+
+.SH  RELEASE
+.nf
+
+	scc-srv	1.19.44
+
+.SH  SYNOPSIS
+.nf
+
+	scc-summary [ -d|--directory <scc_web_path> ] [ -f|--force ] <dir>
+
+.SH  DESCRIPTION
+.nf
+
+	This program extracts certain data from collected snapshots and log files
+	to produce html-files summarizing changes and properties of the systems
+	where SCC-snapshots have been collected.
+
+	The mode of the new files and the owner/group are derived from <dir>.
+	For the permissions, only the read-attributes are considered.
+
+	Extracting all top-level classifications can take some time. Therefore it
+	is only done once a week. Use the -f option to force the extraction.
+
+.SH  OPTIONS
+.nf
+
+	-d|--directory <scc_web_path>   Path for SCC-data under DocumentRoot,
+	                                Default is: "", meaning SCC-data resides
+	                                in the document-root of the web server.
+	-f|--force                      Force update. Regenerate list of top-level
+	                                classifications.
+
+.SH  ARGUMENTS
+.nf
+
+	<dir>     The directory with collected snapshots, where the
+	          summaries are produced.
+
+.SH  EXTERNAL INFLUENCES
+.nf
+
+	This program uses the output of scc-rules and it should be called prior
+	to this program.
+
+.SH  DIAGNOSTICS
+.nf
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-summary [ -d|--directory <scc_web_path> ] [ -f|--force ] <dir>
+	A syntax error has been detected.
+
+	scc-summary: Syntax error, missing argument for option: <option>
+	The argument for <option> is missing.
+
+	scc-summary: directory <dir> does not exist
+	The base directory of the realm, does not exist.
+
+.SH  COPYRIGHT
+.nf
+
+	scc-summary is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+.SH  FILES
+.nf
+
+	/var/opt/scc-srv/tmp - directory for temporary files
+	<dir> - directory for snapshots and log files
+	        scc-auto-realm-config.html - HTML version of scc-auto-realm.conf
+	        scc-summary.data - general data extracted from snapshots
+	        scc-rules.data - output from scc-rules
+	        index.html - main access to <dir>
+	        scc-summary-*.html - summary of snapshots sorted by category
+	        scc-log-index.html - main-index to changes per day
+	        scc-log-<day>.html - changes for <day> (yyyy-mm-dd)
+	        scc.<hostname>.cur - snapshots
+	        scc.<hostname>.log - logbooks
+	        scc.summary.csv - CSV with summary of snapshot data
+	        scc.log_date.csv - CSV with summary of runs and changes per date
+	        scc.log_host.csv - CSV with summary of runs and changes per host
+	<dir>/custom/scc-logo.png - logo to customize HTML-output
+	<dir>/custom/scc-realm.conf - configuration for <dir>
+	<dir>/custom/scc-auto-realm.conf - configuration for <dir>
+	<dir>/custom/scc-smt-select - configuration file for scc-smt
+	        when this file is absent, the index.html of the realm
+	        does not contain an entry for SMT.
+	<dir>/custom/index_start - additional html for index.html (after logo)
+	<dir>/custom/index_end - additional html for index.html 
+
+.SH  SEE ALSO
+.nf
+
+	scc-baseline(1), scc-changes(1), scc-debug(1), scc-pull(1), scc-realm(1),
+	scc-receive-mail(1), scc-rules(1), scc-setup(1), scc-smt(1), scc-summary(1),
+	scc-syscmp(1), scc-transfer(1), scc-update(1), scc-wrapper.cgi(1), scc.cgi(1),
+	scc-srv(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6217 $
+

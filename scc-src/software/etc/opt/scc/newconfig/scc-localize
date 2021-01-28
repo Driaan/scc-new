@@ -1,0 +1,210 @@
+# Script to customize the collection of data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc-localize 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# Purpose of this file:
+# scc-collect and its modules use sensible defaults to avoid that 
+# many systems require a configuration file. When the defaults are
+# insufficient, copy /etc/opt/scc/newconfig/scc-localize
+# to /etc/opt/scc/conf/scc-localize and uncomment the required variables.
+# When the software has been relocated during packaging and the --no_conf_sub_dir
+# option was used, the copy is not required.
+
+set -u
+
+##############################################################################
+#	General variables 
+##############################################################################
+
+# The scripts use a limited list of directories to search for programs.
+# Adjust the following line to extend this list.
+export SCC_PATH=""
+# Access to additional directories should be restricted to root.
+# This mechanism replaces the separate variables in this file used until version 1.11.20.
+if [ -n "${SCC_PATH}" ]
+then
+	PATH="${PATH}:${SCC_PATH}"
+fi
+# Add the default EMC Symmetrix directory:
+if [ -d /usr/symcli/bin ]
+then
+	PATH=${PATH}:/usr/symcli/bin
+fi
+
+export SCC_PROFILING="yes"
+# To remove timing info from the snapshot (under class "stats:profiling::")
+# uncomment the following line:
+# export SCC_PROFILING=""
+
+export SCC_CLASS_MAP=""
+# Uncomment and change the following variable to "map" classifications. 
+# Each line should contain <src_classation>|<dest_classification>.
+# Empty lines and lines starting with "#" are ignored.
+# Errors during processing are signalled via "var:messages::" in the snapshot.
+#
+# Examples are:
+# - to change ":software:oracle:" into ":oracle:", use: ":software:oracle:|:oracle:"
+# - to avoid changes in cronjob data, use: "fix:software:cron:|var:software:cron:"
+#
+# Note:
+# - use scc-log -r after changing the contents of this variable to avoid many changes in the logbook
+#   at the cost of not recording the change of scc-localize in the logbook
+# - be aware that mapping the ":software:installed *:" classifications will impact scc-smt in scc-srv
+#
+#export SCC_CLASS_MAP="
+#"
+
+export SCC_ROOT_PW=""
+# On some systems the root password is changed frequently. Any value different from "var"
+# avoids collecting a checksum of the root password.
+# Uncomment the following variable to avoid collecting a checksum of the root password:
+# export SCC_ROOT_PW=var
+
+# Account data from accounts with UID < MAX_SYS_ACCOUNT_ID have fixed data,
+# other accounts var data. Uncomment the following line to change the defaults
+# set in scc-collect.
+#export MAX_SYS_ACCOUNT_ID=1000
+
+# Indicate whether the entries in the logbook are determined with "context" diff (-u option).
+# Uncomment the following line to activate this option (provided diff supports this option).
+#export SCC_CONTEXT_DIFF="yes"
+
+# Indicate whether transfer data should be encrypted by means of the path of the public key file
+# of scc-srv. Refer to scc-srv(5) for the details concerning this file. An empty variable means
+# "NO" encryption. Change the contents of this variable to the full path of the public key.
+export SCC_KEY_FILE=""
+
+# When two hosts share the same hostname, uncomment the following variable and assign
+# an unique alias for this host. All scc-files in SCC_DATA use the hostname, only the
+# transferred files to scc-srv are renamed.
+#export SCC_HOST_ALIAS=unique
+
+# Variable data in snapshots can be shown in a different color. 
+# The specification of the color has moved to the style.css.
+
+##############################################################################
+#	Variables for Oracle
+##############################################################################
+
+export ORATAB=/etc/oratab
+# The default locations for the oratab file are /etc/oratab or
+# /var/opt/oracle/oratab. Uncomment and change the ORATAB variable if this file 
+# is in another location.
+# export ORATAB=/etc/oratab
+
+export ORA_USE_PROFILE=0
+# Usually the Oracle commands (svrmgrl / sqlplus) can be executed with
+# a su -c command, without using the .profile. ORACLE_SID and ORACLE_HOME
+# are set anyway before calling su, so the .profile is not needed for that.
+# However, sometimes critical settings and commands for for example memory
+# windows are executed by the .profile, and in this case ORA_USE_PROFILE
+# must be set to 1. If so, make sure the .profile for the oracle user does
+# not contain TTY setting commands and the like if executed by su.
+# export ORA_USE_PROFILE=1
+
+# Usually the SQL*Net config files are located in either /etc (/var/opt/oracle),
+# $ORACLE_HOME/network/admin, or both, but if they are located elsewhere,
+# use TNS_ADMIN to specify that location
+# export TNS_ADMIN=
+
+# By default all Oracle users are listed. To suppres this, set ORA_LIST_USERS
+# to 0
+# export ORA_LIST_USERS=0
+
+##############################################################################
+#	Variables for hardware chapter
+##############################################################################
+
+export IGNORE_NO_HW=0
+# With ioscan on HP-UX, detached hardware gets the state NO_HW. In some
+# circumstances this should be ignored, for example on a SAN with BC / BCV /
+# snapshot functionality. If so, set IGNORE_NO_HW to 1.
+# export IGNORE_NO_HW=1
+
+export SCC_CONREP_TEMPLATE=
+# To specify a non-default template for conrep, uncomment the following line and
+# specify the full path of a template file.
+# export SCC_CONREP_TEMPLATE=
+
+export SCC_IGNORE_STM=no
+# On some systems, (unpatched versions of) stm often hang. When upgrading
+# cannot be done immediately, set the following variable to ignore stm. As the
+# stm-data is variable in the snapshot, it does not matter for the logboook.
+# export SCC_IGNORE_STM=yes
+
+export SCC_IGNORE_ACUCLI=no
+# To skip the collection of the HP Proliant Support Pack data, uncomment the
+# following line.
+# export SCC_IGNORE_ACUCLI=yes
+
+##############################################################################
+#	Variables for network chapter
+##############################################################################
+
+export SCC_VAR_ROUTE_DATA=no
+# Systems connected to networks with many ICMP redirects, suffer from many
+# changes in the logbooks as these new routes are not marked dynamic.
+# Uncomment the following variable to set all network routing output from netstat
+# as variable data. The configuration of the static routes is captured in the
+# networking configuration files.
+# export SCC_VAR_ROUTE_DATA=yes
+
+export SCC_IGNORE_CDP=no
+# When Cisco Discovery Protocol is not in use, the collection of this data
+# requires a timeout. Uncomment the following variable to skip the collection
+# of CDP data.
+# export SCC_IGNORE_CDP=yes
+
+##############################################################################
+#	Variables for OV Operations manager user-module
+##############################################################################
+
+export OPCDWN=1
+# By default the plug-in creates a configuration download. If this is
+# already done automatically (for backup purposes) the download
+# can be disabled by setting OPCDWN to 0.
+# export OPCDWN=0
+
+export OPCDWN_DIR="${SCC_TMP}/opcsplit"
+# By default the following directory is used for configuration downloads:
+# ${SCC_TMP}/opcsplit. If a download should be used from a different location,
+# set the OPCDWN_DIR directory to that path.
+# export OPCDWN_DIR=
+
+##############################################################################
+#	Variables for software system-module
+##############################################################################
+
+export SCC_SCR_DETAILS="no"
+# Uncomment the following line to activate the collection of System Configuration Repository details.
+# export SCC_SCR_DETAILS="yes"
+
+# To avoid many changes in the logbook when dynamic iptables rules are added/deleted, all "dynamic" data is
+# tagged variable. You can "label" your FW data by adding the following to all your iptables commands
+#       -m comment --comment "your label".
+# Change the contents of the following variable when you use another label.
+export SCC_FW_DYNAMIC_RULE="Dynamic_rule"
+
+# Do not exit, as this script is sourced.

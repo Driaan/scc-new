@@ -1,0 +1,2584 @@
+Changes from scc-srv 1.17.5 (2017-07-03) to 1.18.87 (2017-12-19)
+================================================================
+  general:
+    Generate html 5
+    Adopt FAQ and manual pages from release 1.9.35 of scc-win.
+    Remove optional semicolons.
+    Remove scc-pack.
+    Consistent formatting of whitespace in manual pages.
+  build:
+    Start new release.
+    Correct production of manual pages.
+  FAQ.html:
+    How to remove scc-srv from your system
+  man_scc.html:
+    Use correct custom directory in html pages for the manual pages.
+  man_scc-srv.html:
+    Use correct custom directory in html pages for the manual pages.
+  man_scc-win.html:
+    Use correct custom directory in html pages for the manual pages.
+  scc.cgi:
+    Display hostnames in monospace font.
+    Correct awk script.
+    Display additional system attributes in search results.
+    Specify contents of scc-summary.data
+    Specify contents of scc-smt.data
+    Use consistent top-url.
+    Define TOP-url at higher level.
+  scc-changes:
+    Preserve system specification method.
+  scc-pull:
+    Clarify -k option in manual page.
+    Avoid errors for non-root invocation.
+    More accurate error message for empty file with -F option.
+    Eliminate useless cat and fix file check.
+  scc-realm:
+    Add option to list systems in a realm.
+    Use -r option for rename example in manpage.
+    Correct messages and send all of them to stderr.
+    Provide messages for non-root usage.
+    Optionally add domain to listing of systems in a realm.
+    Specify contents of scc-summary.data
+    Stop adding system files when first one is missing.
+    Ensure correct ownership and Selinux context of config html and csv files.
+  scc-rules:
+    Display configuration as separate html page.
+    Display hostnames in monospace font.
+    Ensure valid selinux context and tidy content of generated config html files.
+    Specify contents of scc-summary.data
+    Use scc-summary.data to determine list of systems
+    Correct path to logo for configuration pages.
+    Ensure that realm index contains correct Rules entry.
+  scc-setup:
+    Extend for debian 8.
+    Handle Debian setups.
+    Add -r (remove) option to remove the scc-srv integration from Apache
+  scc-smt:
+    Display configuration as separate html page.
+    Display hostnames in monospace font.
+    Ensure valid selinux context and tidy content of generated config html files.
+    Generate correct html for systems without SMT data.
+    Display additional system attributes in tables.
+    Use scc-summary.data to determine list of systems
+    Correct production of scc-smt.data
+    Correct path to logo for configuration pages.
+    Ensure correct ownership and Selinux context of config html and csv files.
+  scc-summary:
+    Avoid messages on realms without systems.
+    Avoid messages for empty realms.
+    Indicate realm in index file of each realm.
+    Display auto-realm (de)select systems configuration.
+    Left align of virtualization column in summaries.
+    Display hostnames in monospace font.
+    Ensure valid selinux context and tidy content of generated config html files.
+    Display additional system attributes in tables.
+    Use functions to clarify overview
+    Code optimization.
+    Correct copyright notice
+    Ensure that realm index contains correct Rules entry.
+    Inspect more lines of data to generate summary data.
+  scc-transfer:
+    Add -u and -m options to deprecate scc-pack.
+    Do not replace existing SCC data with minimal data (-m option).
+    For -m option derive hostname and domain from provided host from -u option
+    Ignore chcon messages
+    Add -r (remove) option to remove the scc-srv integration from Apache
+  scc-update:
+    Ensure valid selinux context and tidy content of generated config html files.
+    Specify contents of scc-summary.data
+
+Changes from scc-srv 1.16.106 (2017-06-25) to 1.17.5 (2017-07-03)
+=================================================================
+  build:
+    Start new release.
+  scc-pull:
+    Support new package format of SCC client data (default in scc 1.24).
+
+Changes from scc-srv 1.15.30 (2015-12-24) to 1.16.106 (2017-06-25)
+==================================================================
+  general:
+    shellcheck: several corrections.
+    Adopt FAQ and manual pages from release 1.23.185 of scc.
+  build:
+    Start new release.
+  FAQ.html:
+    Extend FAQ about failing scc-pull with -u option.
+    Add 'How do I get data from systems with identical hostnames?'
+  pkg_files/rpm-gen-scc-srv:
+    Ensure clean verification.
+  scc.cgi:
+    Add comments to structure coding blocks.
+    Add table sorted on number of hits to search results.
+    All URL's in the search results open a new tab to avoid searching all data again when going back to search resaults.
+    Skip #hits text when searching a single system.
+    Clearer display of searched log data. Minor code refactoring.
+    Add button to realm index to ignore the default limitation on the number of displayed search results per system.
+  scc-changes:
+    Report missing realm on stderr.
+  scc.conf:
+    Add ssh configuration file to scc.conf for usage by scc-pull.
+  scc-pack:
+    Make exit consistent with manual page.
+  scc-pull:
+    Ignore saved snapshots with -R option.
+    Add -o ssh_opt to specify ssh/scp option file.
+    Optional progress logging.
+    Use timeout to avoid hanging clients and transfers (suggested by Marco Breedeveld).
+    Combine -q and -i options with set of ssh-options.
+    Correct path of scc-pull.log on client.
+    Add ssh configuration file to scc.conf for usage by scc-pull.
+    Add suggestion for determining systems to manual page.
+    Unique temporary pull destination to allow parallel pulls.
+    Allow non-root user.
+    Support multiple combinations of -F, -L and -R options to specify systems.
+  scc-realm:
+    Add rename option for realms.
+    Runtime errors on stderr.
+  scc-realm-index.html:
+    Add button to realm index to ignore the default limitation on the number of displayed search results per system.
+  scc-rules:
+    Add OS and date of last run to tables with the rules results.
+  scc-rules.conf:
+    Include var messages in rules configuration.
+    Catch fix and variable messages in a single check.
+  scc-smt:
+    Add CSV file with SMT data.
+    Make sure that summary data of hosts is shown in smt index file.
+  scc-srv.5:
+    'Transfer through a firewall' added.
+  scc-summary:
+    Add CSV files on log-index page with runs and changes per date/host.
+    Count 'identical' results also for total runs.
+    Add button to realm index to ignore the default limitation on the number of displayed search results per system.
+    Add virtualization to summaries.
+    Remove obsolete code for Linux distro version.
+  scc-transfer:
+    Make sure that log file specified with -l option exists.
+    Make sure that transfer routine determines its own context.
+    Use accurate timestamp for logging.
+    Correct comments.
+  scc-update:
+    Remove debug code.
+    Detect and report insufficient permissions.
+    Correct syntax messages.
+    Add logging.
+
+Changes from scc-srv 1.14.68 (2015-12-01) to 1.15.30 (2015-12-24)
+=================================================================
+  general:
+    Adopt FAQ and manual pages from release 1.22.19 of scc.
+    Adopt FAQ and manual pages from release 1.8.11 of scc-win.
+  build:
+    Support mail transfer when selinux is active.
+  pkg_files/BSDinstall:
+    Support mail transfer when selinux is active.
+  pkg_files/rpm-gen-scc-srv:
+    Support mail transfer when selinux is active.
+  pkg_files/slackware-gen-scc-srv:
+    Support mail transfer when selinux is active.
+  scc-receive-mail:
+    Support mail transfer when selinux is active.
+  scc-summary:
+    Use TITLE tag for all change and last run references.
+    Erase comma from csv summary data.
+  scc-transfer:
+    Split unpacking of scc data and the transfer to the website.
+    Support new packaging by scc clients.
+    Handle simultaneous transfer of old and new packaging format of scc-data.
+    Remove LF from recipe file from Windows systems.
+    Correct processing of encrypted data.
+  scc-update:
+    Do not change ownership of SCC_TMP (/tmp)
+    Support mail transfer when selinux is active.
+
+Changes from scc-srv 1.13.35 (2015-06-22) to 1.14.68 (2015-12-01)
+=================================================================
+  general:
+    Consistent option handling.
+    Adopt FAQ and manual pages from release 1.21.110 of scc.
+  build:
+    Start new release.
+    Implement automatic updates of main index.html in the postinstall.
+    Refer to index html files for manual pages for scc, scc-srv and scc-win.
+    Add FAQ to web-pages with lists of manual pages.
+  favicon.ico:
+    New logo and favicon.ico.
+  index.html:
+    Implement automatic updates of main index.html in the postinstall.
+    Refer to index html files for manual pages for scc, scc-srv and scc-win.
+  man_scc.html:
+    Refer to index html files for manual pages for scc, scc-srv and scc-win.
+    Add FAQ to web-pages with lists of manual pages.
+  man_scc-srv.html:
+    Refer to index html files for manual pages for scc, scc-srv and scc-win.
+    Add FAQ to web-pages with lists of manual pages.
+  man_scc-win.html:
+    Refer to index html files for manual pages for scc, scc-srv and scc-win.
+    Typo.
+    Add FAQ to web-pages with lists of manual pages.
+  pkg_files/rpm-gen-scc-srv:
+    Implement automatic updates of main index.html in the postinstall.
+    Summarize changes.
+  pkg_files/sunos-gen-scc-srv:
+    Make sure packages files are owned by root:root (requested by Frans Postma).
+  scc-changes:
+    Extended manual page for default actions.
+  scc-logo.png:
+    New logo and favicon.ico.
+  scc-pull:
+    Use the same options as in scc-realm to select systems. -L option is now used for a list and not for a file!
+    Use half of the server delay for the client delay to avoid that all systems from a realm run simultaneously.
+    Support - for stdin with -F option.
+    Add -o hostname option to ignore other client data and signal files from scc-split.conf (suggested by Frank Postma).
+  scc-realm:
+    Implement automatic updates of main index.html in the postinstall.
+    Correct typo in manual page.
+    Call semanage only when creating the realm and remove selinux customization when removing the realm.
+    Ignore semanage when selinux is disabled (contributed by Paul Lowrie).
+  scc-receive-mail:
+    Record stdout and stderr in log file.
+  scc-summary:
+    Display link to list of realms. Shorter title of generated pages. Generate correct MULTIPLE attribute of SELECT.
+    Summary data is also available for download in CSV format.
+  scc-summary-index.html:
+    Summary data is also available for download in CSV format.
+  scc-transfer:
+    Remove old csv file with statistics of the previous set of files.
+    Create directory for transfer with errors (reported by Frans Postma).
+    Check for existence of private key file before unpacking data (requested by Frans Postma).
+  scc-update:
+    Implement automatic updates of main index.html in the postinstall.
+    Use multiple calls of semanage instead of the -i option to support older versions of Selinux (suggested by Frans Postma).
+    Ignore semanage when selinux is disabled (contributed by Paul Lowrie).
+    Optionally skip transfer before updating summaries.
+
+Changes from scc-srv 1.12.70 (2014-07-02) to 1.13.35 (2015-06-22)
+=================================================================
+  general:
+    Extend copyright to 2015.
+    Prepare for separate relocate on DATA and TMP.
+    Use /tmp for temporary files instead of /var/opt/scc-srv/tmp.
+    Add scc-changes(1) to the SEE ALSO section of the manual page.
+  build:
+    Start new release.
+    Re-implemented option handling and show more extensive help-info.
+    Add FAQ.
+    Add scc-changes to source tar.
+  FAQ.html:
+    Add FAQ.
+    Remove statcounter code.
+    Mention pull, push and mixed method of transferring data from clients to server.
+    Add question about randomizing run on many clients.
+    Indicate how to transfer data from client to server.
+    Refer to website at SourceForge.
+  index.html:
+    Refer to website at SourceForge.
+  pkg_files/pacman-gen-scc-srv:
+    Change paths of packaged files to support relocate.
+  pkg_files/postinstall:
+    Add ID and URL info.
+  pkg_files/preremove:
+    Add ID and URL info.
+  pkg_files/relocate:
+    Support packages with relative paths for scc.
+    Indicate how to change reloaction via options.
+  pkg_files/rpm-gen-scc-srv:
+    Use correct Source specification and add %changelog.
+  pkg_files/slackware-gen-scc-srv:
+    Change paths of packaged files to support relocate.
+  pkg_files/ttylinux-gen-scc-srv:
+    Change paths of packaged files to support relocate.
+  scc.cgi:
+    In table with search results in all systems, add url to search results of each separate system.
+    Make sure that searching for a single system from the search results from all systems works for special characters.
+    Generate more strict HTML.
+  scc-changes:
+    New script to process changes in client logbooks for auditors.
+    Set SVN keywords.
+    Correct syntax in manual page.
+  scc-debug:
+    Add selinux context of all scc-srv data directories.
+  scc-help/scc/:
+    Adopt FAQ and manual pages from release 1.20.125 of scc.
+  scc-help/scc-win/:
+    Adopt FAQ and manual pages from release 1.7.57 of scc-win.
+  scc-pull:
+    Avoid hanging scp and ssh via -o ConnectTimeout.
+    Extend manual page for no_hosts option and dropbear.
+    Use BatchMode=yes without tty to avoid unattended waiting for passwords.
+  scc-realm:
+    Clarify message of existing directory of new realm.
+    More strict selinux file contexts for cgi-bin and temporary files.
+    Generate more strict HTML.
+  scc-rules:
+    Add check for saved snapshots and log files.
+    Avoid white space between multiple data lines of a system
+  scc-rules.conf:
+    Add check for saved snapshots and log files.
+    Generate more strict HTML.
+  scc-smt:
+    Add date and time of last run to tables containing all systems with the specific product versions.
+    Correct name and version determination for Debian packages (triggered by Ton Schoots).
+  scc-srv.5:
+    Mention that removing the software does not remove the data hierarchy.
+    Mention pull, push and mixed method of transferring data from clients to server.
+    Indicate how to transfer data from client to server.
+  scc-summary:
+    Ignore case when sorting on OS column.
+    Add column with first run on client.
+    Correct the display of the first and last run dates.
+    Retrieve first run date with a single system in a realm.
+    Ignore changes for log files containing binary data.
+  scc-transfer:
+    Support multiple transfer from a host for remote compare.
+    Remove obsolete code as scc-log2html does not require diff anymore.
+    Indicate that alternative source directory requires subdirectory 'cp' or 'mail' (indicated by Hendrik Visage).
+    Extend manual page.
+  scc-update:
+    More strict selinux file contexts for cgi-bin and temporary files.
+
+Changes from scc-srv 1.11.18 (2011-12-14) to 1.12.70 (2014-06-19)
+=================================================================
+  general:
+    Extend copyright to 2014.
+    Redesign of install trigger scripts. Moved removal from postremove to preremove.
+    Adopt manual pages from release 1.5.8 of scc-win.
+    Adopt manual pages from release 1.18.150 of scc.
+    Access Solaris xpg4 tools via PATH.
+    Less restrictive permissions for documentation, realm directories only accessible for user and group.
+    Use relative paths for manual pages, style and favicon in help pages.
+    Move background coloring of body of pages to stylesheet.
+  build:
+    Start new release.
+    Restrict access to transfer directory.
+    Avoid messages when no argument is supplied.
+    Add CHANGELOG to software (indicated by Eduardo Alvarenga)
+    Do not copy the development README to the data directory of the packages.
+    Use sed instead of ed to produce manual pages from the scripts.
+    Do not use single quotes in preformatted (nroff) manual pages
+    Remove pisi packaging from source package.
+    Preserve pisi package generation script.
+    Add --help option.
+  CHANGELOG:
+    Correct typos.
+  index.html:
+    New URL for SCC site at QNH.
+  pkg_files/BSDinstall:
+    No need to process the scc-help files. Changed filepaths to NetBSD practices.
+    Restrict access to transfer/cp directory to prevent inspection of transferred files.
+  pkg_files/dragonflybsd-gen-scc-srv:
+    Update packaging to version used in DragonFly 3. Use DragonFly practices for paths.
+  pkg_files/freebsd-gen-scc-srv:
+    Update packaging to version used in FreebSD 9. Use FreeBSD pratices for paths.
+  pkg_files/hpux-gen-scc-srv:
+    Add -u option to file_permissions to avoid warnings (indicated by Eduardo Alvarenga).
+  pkg_files/installp-gen-scc-srv:
+    Use correct name for preremove script (indicated by Eduardo Alvarenga).
+  pkg_files/netbsd-gen-scc-srv:
+    Upgrade package format to version used in NetBSD 6.
+    No need to process the scc-help files. Changed filepaths to NetBSD practices.
+  pkg_files/openbsd-gen-scc-srv:
+    Update packaging to version used in OpenBSD 5.
+  pkg_files/pacman-gen-scc-srv:
+    Describe correct source directory hierarchy.
+  pkg_files/pisi-gen-scc-srv:
+    Check for required program zip.
+    Preserve pisi package generation and avoid that scc-srv_gen_all generates pisi package.
+  pkg_files/pisi-scc-srv:
+    Preserve pisi package generation and avoid that scc-srv_gen_all generates pisi package.
+  pkg_files/postin:
+    Do not display README file in data directory.
+    Compacted code.
+    Set selinux context of directories.
+    Handle selinux policies for scc-srv to survive a file system relabel (suggested by Jouk Hettema).
+    Remove conversion of files from old releases.
+    Suggest scc-setup to correct the initial configuration after the install.
+    Handle selinux context correctly when semanage is not installed.
+    Support semanage syntax on CentOS 5.
+    Add user and role to chcon.
+    Supplu correct context to chcon.
+    Removed, code moved to --postinstall option of scc-update.
+  pkg_files/postrem:
+    Handle selinux policies for scc-srv to survive a file system relabel (suggested by Jouk Hettema).
+    Compacted code.
+    Remove unused file.
+  pkg_files/postremove:
+    Removed.
+  pkg_files/preremove:
+    Correct header.
+  pkg_files/README:
+    Indicate scc-setup to activate scc-srv after installation.
+  pkg_files/relocate:
+    Check and report values for options that will not work correctly.
+    Correct usage of environment variables and support options.
+    Skip generate scripts that are calling relocate. No special treatment of openbsd gen file required.
+  pkg_files/rpm-gen-scc-srv:
+    Remove READ in data directory.
+    Ignore output from rpmbuild.
+    Restrict access to transfer directory.
+  pkg_files/scc-srv-install:
+  pkg_files/slackware-gen-scc-srv:
+    Describe correct source directory hierarchy.
+  pkg_files/sunos-gen-scc-srv:
+    Use /bin/sh to avoid messages when run on a system without korn-shell.
+  pkg_files/ttylinux-gen-scc-srv:
+    Check for presence of bzip2.
+    Use correct directory for postinstall script.
+    Describe correct source directory hierarchy.
+  scc-baseline:
+    Limit data for compare to fixed data.
+  scc.cgi:
+    Display general system data for systems without a match.
+    Changed execution of gnuplot to avoid interference from selinux.
+    Corrected some error messages.
+    Add page with statistics for all runs of the systems.
+    Add header to statistics page and indicate how to change its appearance.
+    Do not plot data when there are too few runs of a system.
+    Describe several functions and use more functions for HTML.
+    Correct typo and avoid message about uninitialized variable.
+    Use function to report messages when comparing systems.
+    Correct html when searching does not find a match.
+  scc-pull:
+    Minor textual correction on manual page.
+    Add the -o no_hosts option to avoid strict hosts checking for ssh/scp.
+    Corrected option handling.
+    Add -f (fqdn) option for clients (contributed by Harry van Wiggen).
+  scc-realm:
+    Updated manual page for -A and -w options.
+    Populate new realm when no systems have been added. Use sed instead of ed when removing a realm.
+    Support long option names.
+    Support alternate access method indicator for directory permissions.
+    Do not use -i option of sed as it might be absent.
+    Correct option checking.
+    Avoid endless loop when wrong syntax is used.
+  scc-realm.conf:
+    Add page with statistics for all runs of the systems.
+  scc-realm-index.html:
+    Rearrange text concerning realms.
+  scc-rules:
+    Produce complete html page for single system (-h option).
+    Support alternate access method indicator for directory permissions.
+    Support long option names.
+    Add copyright and time of generation to generated html files.
+  scc-setup:
+    Support BSD PATH and Apache 2.4 configuration.
+    Do not check whether WWW_RESTART is a file to enable use of: WWW_RESTART='service apache2'.
+    Correct typo in manual page
+    Add long option names.
+    Indicate that the selinux context is set during the post-install.
+    Do not show errors during restart of web server.
+    Support default web server user for Debian.
+    Issue warnings when webserver is not running and for not updating firewall rules.
+    Support determination of running apache process on BSD.
+    Fixed typo.
+  scc-smt:
+    Add copyright and time of generation to generated html files.
+    Handle packages for Slackware, Puppy, Slitaz and ttylinux.
+    Correctly handle and report the absence of tooling for for a host.
+    Correct main smt page when no tools are present on any of the systems.
+    Correct termination of table with tools. Add indication of production of the pages.
+    Restyle header of page to resemble statistics pages.
+    Support alternate access method indicator for directory permissions.
+    Support long option names.
+    Correct smt product tables.
+    Indicate that specific config file is older and differs from the generic configuration file.
+  scc-smt-index.html:
+    Indicate that specific config file is older and differs from the generic configuration file.
+  scc-smt-select:
+    Select scc and scc-smt from their default installed rpm group.
+    Indicate that specific config file is older and differs from the generic configuration file.
+    Handle packages for Slackware, Puppy, Slitaz and ttylinux.
+  scc-srv.5:
+    Do not use single quotes in preformatted (nroff) manual pages
+    Minor textual correction.
+  scc-summary:
+    Support alternate access method indicator for directory permissions.
+    Support long option names.
+    Provide runtime (statistics) links with specific title to silence TotalValidator.
+    Correct display of radio buttons for type of data box in IE.
+    Improved determination of Linux OS release.
+    Add copyright and time of generation to generated html files.
+    Improve determination of Linux release.
+    Handle broken symlinks for removed systems correctly.
+    Ignore statistical data in the snapshot when determining the classes to compare hosts.
+    Ignore line in /etc/os-release for ANSI_COLOR to avoid wrong release version.
+    Add runtime to summary tables.
+    Add size column to summary.
+    Add units to runtime heading.
+    Add page with statistics for all runs of the systems.
+    Correctly display sort order for columns run and runtime. Reported by Leif Sjolund.
+    Do not remove csv statistics file to avoid missing page when scc-summary runs while a statistics page is displayed.
+    Produce correct html when a realm does not contain any systems.
+  scc-summary-index.html:
+    Add page with statistics for all runs of the systems.
+  scc-syscmp:
+    Support long option names.
+    Correct error in option handling.
+    Avoid messages when no argument is supplied.
+  scc-transfer:
+    Avoid message for first time of compare on server.
+    Supply correct context to chcon.
+    Provide snapshot and logbook with favicon.ico.
+    No longer call scc-snap2html as this was only required for old versions of the scc client.
+    Support alternate access method indicator for directory permissions.
+    Support long option names.
+    Support base64 encoded email transfers (requested by Leif Sjolund).
+    Correct syntax error (reported by Leif Sjolund).
+    Assign correct selinux context to transferred files.
+    Handle selinux context correctly when semanage is not installed.
+    Add user and role to chcon.
+  scc-update:
+    Add --postinstall and --preremove options to (de)configure the website.
+    Make sure to call scc-summary before scc-rules and scc-smt to remove broken symlinks in the realm.
+    Preserve top directory during preremove.
+    Add --activate option to post-install message.
+    Use sed instead of ed when updating the document root in the file scc.conf.
+    Support long option names.
+    Correct message in manual page.
+    Do not use -i option of sed as it might be absent.
+    Take files in sub directories into account when determining whether a realm should be updated.
+    data/www directory is also owned by www-user.
+    Correct processing of temporary file for auto-realms.
+  scc-wrapper.cgi:
+    Removed unused code
+
+Changes from scc-srv 1.10.3 (2011-04-03) to 1.11.18 (2011-12-14)
+================================================================
+  general:
+    FSF address corrected
+    Changed contact information to sourceforge support page of SCC.
+    pkg_files: all URL's of the packages refer to the main project page at sourceforge.
+    scc-help/scc: adopt manual pages from release 1.17.23 of scc.
+    scc-help/scc-win: adopt manual pages from release 1.4.9 of scc-win.
+    Move all formatting from generated HTML to style.css. Several corrections to silence Total Validator.
+  build:
+    Build now supports the --version option.
+    Replace Ctrl-M character with octal escape sequence.
+    Move all formatting from generated HTML to style.css. Several corrections to silence Total Validator.
+    Avoid unknown macro in manual pages.
+  index.html:
+    The SCC page at QNH has been corrected.
+  pkg_files/debian-gen-scc-srv:
+    Version schema for deb and rpm has been changed and the spec-file has been altered to satisfy rpmlint.
+  pkg_files/pisi-gen-scc-srv:
+    Corrected the name of the package in the xml-file.
+  pkg_files/README:
+    The differences between the SVN and the source tarball have been indicated.
+  pkg_files/relocate:
+    Extended comments for relocation directories.
+  pkg_files/rpm-gen-scc-srv:
+    Streamlined the rpm build process.
+    Version schema for deb and rpm has been changed and the spec-file has been altered to satisfy rpmlint.
+  pkg_files/scc-srv_gen_all:
+    Check whether root activates the program in the proper directory hierarchy.
+  README:
+    Description of the development environment has been added.
+  scc-transfer:
+    Check the layout versions in the snapshots to detect a restart for clients without diff.
+    Indicate the external influence of context diff for scc client for all hosts without local diff.
+
+Changes from scc-srv 1.9.10 (2010-11-26) to 1.10.2 (2011-04-03)
+===============================================================
+  general:
+    Extend copyright to 2011.
+    Adopt manual pages from release 1.15.13 of scc.
+    Adopt manual pages from release 1.3.2 of scc-win.
+  build:
+    Start new release.
+  pkg_files/pisi-gen-scc-srv:
+    Corrected paths to accommodate relocate script.
+  pkg_files/relocate:
+    Remove empty top directories after relocation to avoid errors with rpmbuild.
+    Correct relocate to avoid wrong file permissions on Linux Console.
+  scc-pull:
+    Handling of the -k option has been corrected (reported by Vincent Laanen).
+  scc-rules:
+    Ignore case for sorting hosts in scc-rules.
+  style.css:
+    Provided URL and Id keywords.
+
+Changes from scc-srv 1.8.31 (2010-10-30) to 1.9.10 (2010-11-26)
+===============================================================
+  scc-rules:
+    The production of the html-code has been changed to avoid errors when the first check (CheckSnapAge) does not indicate errors (reported by Hendrik Visage).
+  scc-setup:
+    Config and binary directories for apache 2.2 on open solaris have been added.
+    Default user for apache2.2 on open solaris has been added.
+  scc-summary:
+    Support ascending and descending sorts for all summary pages.
+  pkg_files/ttylinux-gen-scc-srv:
+    A default architecture has been added to the name of the package-file.
+
+Changes from scc-srv 1.7.47 (2010-06-04) to 1.8.31 (2010-10-30)
+===============================================================
+  scc-baseline:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+  scc.cgi:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+  scc-debug:
+    Collection of logging data has been added.
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+    The configuration file for scc-setup has been added.
+  scc-pack:
+    Pack scc-data for handling by scc-transfer.
+    Added scc-setup to SEE ALSO section of the manual page.
+  scc-pull:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+    The -k option has been added to preserve transferred files on the clients (requested by Hendrik Visage).
+  scc-realm:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+    Archiving of (systems in) a realm is implemented (requested by Hendrik Visage).
+    The options for selecting systems to be added/deleted from a realm have made more versatile.
+    Support relative archive directories.
+    Prevent archiving in sub directory of SCC_WWW top directory.
+    List the systems of the realm when archiving the entire realm.
+  scc-receive-mail:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+  scc-rules:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+  scc-setup:
+    Activate the webinterface of scc-srv (suggested by Paul te Vaanholt).
+    Added scc-setup to SEE ALSO section of the manual page.
+    Correction for Apache configuration file.
+    Use the proper path for the cgi-script.
+    Migration is covered in the manual page.
+  scc-smt:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+    Refer to the proper client module.
+  scc-srv.5:
+    Textual clarifications.
+    Program scc-debug has been added to the troubleshooting section.
+    Added scc-setup to SEE ALSO section of the manual page.
+    Archiving of realms has been described and the syntax of scc-realm has been adjusted.
+    Configuring the new web setup of scc-srv has been described.
+    Refer to the README in the source package for instructions to produce the code.
+  scc-summary:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+    Ignore files in subdirectories when determining whether class summary should be generated.
+    The description in the manual page has been corrected.
+    Add XPG4 directory to PATH instead of using aliases.
+    Support separate directory with relative paths to html-files (used when archiving realms).
+    Supply summary for changes on a day also with a favicon.ico/
+    Add html code from custom directory to index.html of a realm (suggested by Leif Sjolund).
+  scc-syscmp:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+  scc-transfer:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+  scc-update:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+    Corrected calling scc-realm according to its new syntax.
+  scc-wrapper.cgi:
+    Add scc-pack to SEE ALSO section of the manual page.
+    Added scc-setup to SEE ALSO section of the manual page.
+  pkg_files/debian-gen-scc-srv:
+    Support an alternative version by via an argument.
+  pkg_files/dragonflybsd-gen-scc-srv:
+    Use non-empty defaults when producing the software on other platforms than DragonFlyBSD.
+    Support an alternative version by via an argument.
+    Remove old debug file.
+  pkg_files/freebsd-gen-scc-srv:
+    Support an alternative version by via an argument.
+    Remove old debug file.
+  pkg_files/hpux-gen-scc-srv:
+    The Product Specification File has been incorporated in the generate script.
+    Support an alternative version by via an argument.
+  pkg_files/installp-gen-scc-srv:
+    Support an alternative version by via an argument.
+    Recursive chown and removal of files/directories has been simplified.
+  pkg_files/netbsd-gen-scc-srv:
+    Support an alternative version by via an argument.
+    Remove old debug file.
+  pkg_files/openbsd-gen-scc-srv:
+    The check for support of format ustar of gnu has been changed.
+    Support an alternative version by via an argument.
+  pkg_files/pacman-gen-scc-srv:
+    Support an alternative version by via an argument.
+  pkg_files/pisi-gen-scc-srv:
+    Support an alternative version by via an argument.
+  pkg_files/postin:
+    The commandline of scc-realm has been adjusted.
+  pkg_files/postrem:
+    Simplified testing whether to remove additional directories or not.
+  pkg_files/puppy-gen-scc-srv:
+    Support an alternative version by via an argument.
+    Use -R option of chgrp.
+    Removal of files has been simplified.
+  pkg_files/rpm-gen-scc-srv:
+    The spec file has been incorporated in the script.
+    Support an alternative version by via an argument.
+  pkg_files/slackware-gen-scc-srv:
+    No need to split the version.
+    Support an alternative version by via an argument.
+    Use chown -r instead of find, xargs and chown.
+    The production of the package has been changed to avoid incompatibility message during installation.
+  pkg_files/slitaz-gen-scc-srv:
+    Support an alternative version by via an argument.
+    Remove remaining temporary file.
+  pkg_files/sunos-gen-scc-srv:
+    Support an alternative version by via an argument.
+  pkg_files/ttylinux-gen-scc-srv:
+    Corrected the install format according to ttylinux 11.1.
+    Support an alternative version by via an argument.
+
+Changes from scc-srv 1.7.12 (2009-09-01) to 1.7.47 (2010-06-04)
+===============================================================
+  index.html:
+    Added reference to favicon.ico.
+  scc-baseline:
+    Extended copyright to 2010.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+  scc.cgi:
+    Extended copyright to 2010.
+    Favicon.ico has been added.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+  scc-compare-index.html:
+    Added reference to favicon.ico.
+  scc-debug:
+    Collect data for analysis of configuration problems.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+  scc-log-index.html:
+    Added reference to favicon.ico.
+  scc-pull:
+    Extended copyright to 2010.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+    Corrected the arguments of the -p option in the manual page.
+    The -P option has been added to specify an alternate port for ssh and scp.
+    Manual pages has been clarified.
+    The -U option has been added to indicate that the retrieved data should not be processed by scc-update, but left for an upstream scc-srv.
+  scc-realm:
+    Extended copyright to 2010.
+    Favicon.ico has been added.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+    Textual correction in manual page.
+  scc-realm-index.html:
+    Added reference to favicon.ico.
+  scc-receive-mail:
+    Extended copyright to 2010.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+    Textual correction in manual page.
+  scc-rules:
+    Extended copyright to 2010.
+    Favicon.ico has been added.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+  scc-rules-index.html:
+    Added reference to favicon.ico.
+  scc-search-index.html:
+    Added reference to favicon.ico.
+  scc-smt:
+    Extended copyright to 2010.
+    Favicon.ico has been added.
+    Convert scc and scc-srv versions for RPM and installp on AIX to indicate identical versions with other package management software.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+  scc-smt-index.html:
+    Added reference to favicon.ico.
+  scc-smt-select:
+    Scc and scc-srv have been added to default System Management Tools for AIX.
+  scc-srv.5:
+    Extended copyright to 2010.
+    Specifics added for SuSe.
+    Textual correction in manual page.
+  scc-summary:
+    Extended copyright to 2010.
+    Favicon.ico has been added.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+    Determine the version of a Linux distro from the details file (Eduardo Alvarenga) instead of using the kernel version.
+  scc-summary-index.html:
+    Added reference to favicon.ico.
+  scc-syscmp:
+    Extended copyright to 2010.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+  scc-transfer:
+    Changed the name of the variable with the name of the passphrase file.
+    Extended copyright to 2010.
+    Extended the manual page.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+    The detection when to compare snapshots on the server has been corrected.
+  scc-update:
+    Extended copyright to 2010.
+    Favicon.ico has been added.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+  scc-wrapper.cgi:
+    Extended copyright to 2010.
+    Added scc-debug(1) to SEE ALSO section of the manual page.
+  pkg_files/BSDinstall:
+    Extended copyright to 2010.
+  pkg_files/debian-gen-scc-srv:
+    The control file has been incorporated in this script.
+    The feedback email-address has been corrected.
+    Extended copyright to 2010.
+  pkg_files/doinst:
+    Extended copyright to 2010.
+  pkg_files/dragonflybsd-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/freebsd-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/hpux-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/installp-gen-scc-srv:
+    Produce scc-srv software in AIX installp package format.
+    No /etc/opt/scc-srv branch and put /var/opt/scc-srv in USR part of the fileset.
+  pkg_files/netbsd-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/openbsd-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/pacman-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/pacman-install:
+    Extended copyright to 2010.
+  pkg_files/pisi-gen-scc-srv:
+    The feedback email-address has been corrected.
+    Extended copyright to 2010.
+  pkg_files/postin:
+    Processing of favicon.ico has been added.
+  pkg_files/postinstall:
+    Extended copyright to 2010.
+  pkg_files/postremove:
+    Extended copyright to 2010.
+  pkg_files/puppy-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/relocate:
+    Extended copyright to 2010.
+    Do not edit favicon.ico when relocating.
+    The relocation of the binaries, documentation and manual pages has been made clearer.
+  pkg_files/rpm-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/scc-srv-install:
+    Extended copyright to 2010.
+  pkg_files/slackware-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/slitaz-gen-scc-srv:
+    Extended copyright to 2010.
+  pkg_files/sunos-gen-scc-srv:
+    The file pkginfo has been incorporated in this script.
+    Replacement of /bin/sh with /bin/ksh has been simplified.
+    Extended copyright to 2010.
+    Replacement of /bin/sh by /bin/ksh has been corrected.
+  pkg_files/ttylinux-gen-scc-srv:
+    Extended copyright to 2010.
+
+Changes from scc-srv 1.7.5 (2009-06-05) to 1.7.12 (2009-09-01)
+==============================================================
+  scc.cgi:
+    Correct the html error for empty center-tag in scc-rules output.
+    Processing of hosts without a match during searches has been corrected to show the general data of these systems.
+  scc-rules:
+    The check for changes on the last run has been corrected to ignore installs and upgrades on the last run.
+    A check for uniqueness of certain data across several or all systems has been implemented.
+    The production of the html-code has been redesigned.
+  scc-rules.conf:
+    The documentation of the Unique rule has been added.
+  scc-smt:
+    Correction for the domain that has been added to the summary file.
+    Handle slitaz packages.
+    Handle the case without detected tools correctly.
+  scc-smt-select:
+    Detect SCC on slitaz.
+  scc-srv.5:
+    Mention lighttpd config.
+  scc-summary:
+    Show general data of systems (model, os and release).
+  scc-syscmp:
+    The manual page has been corrected to indicate that first argument also can be a classification string.
+  scc-update:
+    Avoid that realm All is processed twice.
+  pkg_files/slitaz-gen-scc-srv:
+    Generate scc-srv package in slitaz format.
+    No need for the preinstall.
+    Do not pack the manual pages.
+
+Changes from scc-srv 1.6.4 (2008-04-09) to 1.7.5 (2009-06-05)
+=============================================================
+  index.html:
+    Corrected the website for SCC.
+  scc-auto-realm.conf:
+    Default configuration file for scc-auto-realm.
+    Added domain-field.
+    Added remark concerning empty fields.
+  scc-baseline:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+    Set PATH before calling any external program.
+  scc.cgi:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+    Set PATH before calling any external program.
+    Check and report whether the -w option has been used (indicated by Ben Jannedy)
+    to avoid unclear messages when using scc.cgi before configuring scc-srv.
+    Renamed function tailer to trailer.
+  scc-pull:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  scc-realm:
+    Added -q option to avoid scc-update when adding/deleting hosts.
+    Add default scc-auto-realm.conf file to new domain.
+    Corrected path of scc-auto-realm.conf
+    Added scc-auto-realm.conf.
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  scc-receive-mail:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  scc-rules:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+    Avoid messages when a logfile is empty.
+  scc-smt:
+    Added processing of CRUX software packages.
+    Added processing of name-version pairs of data (suggested by Jacco Dunweg).
+    Corrected example for pisi packages.
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  scc-smt-select:
+    Add scc and scc-srv for pisi-format on Pardus.
+  scc-srv.5:
+    Description of automatic population of realms has been added.
+    Several corrections/additions have been made.
+    Extended copyright to 2009.
+    Add apache config data in a separate file in conf.d.
+  scc-summary:
+    Added domain-data to scc-summary.data.
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  scc-syscmp:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  scc-transfer:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+    Set PATH before calling any external program.
+    Extend PATH with directory of scc-client to access scc-snap2html and scc-log2html.
+    Issue warnings when scc-snap2html and scc-log2html cannot be accessed.
+  scc-update:
+    Added scc-auto-realm to processing of realm.
+    Incorporated scc-auto-realm.sh.
+    Correction for empty fields in scc-summary.data
+    Extended manual page with scc-auto-realm.conf examples.
+    The description of scc-auto-realm.conf has been added to the manual page.
+    Extended copyright to 2009.
+    Added remark concerning empty fields.
+    Corrected the website for SCC.
+    Set PATH before calling any external program.
+  scc-wrapper.cgi:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/BSDinstall:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/debian-gen-scc-srv:
+    Check and report missing /usr/bin/ar.
+    Corrected the website for SCC.
+    Extended copyright to 2009.
+  pkg_files/doinst:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/dragonflybsd-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+    Corrected variables to support any version on any architecture.
+  pkg_files/freebsd-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/hpux-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/netbsd-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/openbsd-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+    Corrections to avoid messages of deprecated keywords.
+  pkg_files/pacman-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/pacman-install:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+    Support for new version of pacman where this file is sourced and it's functions are called.
+  pkg_files/pisi-gen-scc-srv:
+    Create the scc-srv pisi package.
+    Corrected path of install script.
+    Added scc-help files.
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/postin:
+    Added scc-auto-realm.conf
+    Create empty directories tmp and conf.
+    Moved template main index.html to newconfig directory.
+    Do not exit as the code of this file is also sourced.
+  pkg_files/postinstall:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+    Exit moved from included file to this file.
+  pkg_files/postremove:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/puppy-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/relocate:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/rpm-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/scc-srv-install:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/slackware-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/sunos-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+  pkg_files/ttylinux-gen-scc-srv:
+    Extended copyright to 2009.
+    Corrected the website for SCC.
+
+Changes from scc-srv 1.5.16 (2007-12-29) to 1.6.4 (2008-04-09)
+==============================================================
+  scc.cgi:
+    Correction for the help-page for the compare page.
+  scc-pull:
+    Corrected handling of missing signal files when the client did not run (indicated by Dirk Porezag).
+  scc-smt:
+    Correction for Windows products with empty version.
+    Corrected the data for source install of scc (contributed by Vincent Laanen).
+    Added support for pisi packages (Pardus distro).
+  scc-srv.5:
+    Documented new settings for CGI.
+  scc-summary:
+    Corrected URL's for CGI-scripts (suggested by Dirk Porezag).
+    Avoid empty classes in the compare box when classifications in the snapshot are in error.
+  scc-update:
+    Corrected option and argument handling.
+  pkg_files/BSDinstall:
+    Removed preinstall.
+  pkg_files/debian-gen-scc-srv:
+    Removed preinstall
+  pkg_files/scc-srv-install:
+    Removed the preinstall.
+  pkg_files/sunos-gen-scc-srv:
+    Removed the preinstall.
+
+Changes from scc-srv 1.5.14 (2007-06-12) to 1.5.16 (2007-12-29)
+===============================================================
+  scc-baseline:
+    Extended copyright notice to 2008.
+  scc.cgi:
+    Extended copyright notice to 2008.
+  scc-pull:
+    Added -c option.
+    Check for missing arguments of options.
+    Signal missing data from hosts.
+    Corrected checking for options with arguments.
+    Extended copyright notice to 2008.
+  scc-realm:
+    Check for missing arguments of options.
+    Corrected checking for options with arguments.
+    Extended copyright notice to 2008.
+  scc-receive-mail:
+    Extended copyright notice to 2008.
+  scc-rules:
+    Check for missing arguments of options.
+    Corrected checking for options with arguments.
+    Extended copyright notice to 2008.
+    Added performance warning.
+  scc-smt:
+    Check for missing arguments of options.
+    Support software installed on Windows systems.
+    Correction for productnames containing spaces.
+    Correction for generating the correct NAME.
+    Corrected checking for options with arguments.
+    Extended copyright notice to 2008.
+  scc-smt-select:
+    Added SCC for Windows to list of default selected software.
+  scc-srv.5:
+    Extended copyright notice to 2008.
+    Added performance considerations for scc-update.
+  scc-summary:
+    Check for missing arguments of options.
+    Corrected checking for options with arguments.
+    Extended copyright notice to 2008.
+  scc-syscmp:
+    Check for missing arguments of options.
+    Extended copyright notice to 2008.
+  scc-transfer:
+    Corrected testing for empty logfile and empty log.html
+    Check for missing arguments of options.
+    Corrected checking for options with arguments.
+    Extended copyright notice to 2008.
+  scc-update:
+    Check for missing arguments of options.
+    Corrected checking for options with arguments.
+    Extended copyright notice to 2008.
+  scc-wrapper.cgi:
+    Extended copyright notice to 2008.
+  pkg_files/BSDinstall:
+    Extended copyright notice to 2008.
+  pkg_files/debian-gen-scc-srv:
+    Extended copyright notice to 2008.
+  pkg_files/doinst:
+    Extended copyright notice to 2008.
+  pkg_files/dragonflybsd-gen-scc-srv:
+    Production of scc-srv for DragonFlyBSD.
+    Extended copyright notice to 2008.
+  pkg_files/freebsd-gen-scc-srv:
+    This file is no longer the source of netbsd-gen-scc-srv.
+    Extended copyright notice to 2008.
+  pkg_files/hpux-gen-scc-srv:
+    Extended copyright notice to 2008.
+  pkg_files/netbsd-gen-scc-srv:
+    Production script for netbsd.
+    Use actual architecture data when building on NetBSD.
+    Corrected typo in machine-arch in +BUILDINFO.
+    Extended copyright notice to 2008.
+  pkg_files/openbsd-gen-scc-srv:
+    Extended copyright notice to 2008.
+  pkg_files/pacman-gen-scc-srv:
+    Generate scc-srv for arch-linux.
+    /
+    Extended copyright notice to 2008.
+  pkg_files/pacman-install:
+    Install script for arch-linux.
+    Extended copyright notice to 2008.
+  pkg_files/postinstall:
+    Extended copyright notice to 2008.
+  pkg_files/postremove:
+    Extended copyright notice to 2008.
+  pkg_files/puppy-gen-scc-srv:
+    Extended copyright notice to 2008.
+  pkg_files/relocate:
+    Extended copyright notice to 2008.
+  pkg_files/rpm-gen-scc-srv:
+    Extended copyright notice to 2008.
+  pkg_files/scc-srv-install:
+    Extended copyright notice to 2008.
+  pkg_files/slackware-gen-scc-srv:
+    Extended copyright notice to 2008.
+  pkg_files/sunos-gen-scc-srv:
+    Extended copyright notice to 2008.
+  pkg_files/ttylinux-gen-scc-srv:
+    Generate scc-srv pacman package for ttylinux.
+
+Changes from scc-srv 1.5.11 (2007-03-27) to 1.5.14 (2007-06-12)
+===============================================================
+  scc-baseline:
+    Added set -u to check for undefined variables.
+  scc.cgi:
+    Use css directives to indicate different colors when comparing data from systems.
+    Added set -u to check for undefined variables.
+    Use xpg4 tail for Solaris.
+  scc-pull:
+    Corrections for ovdeploy (Paul te Vaanholt).
+    Removed -v option.
+    Record stdout and stderr from client runs in logfile.
+    Added set -u to check for undefined variables.
+  scc-realm:
+    Added set -u to check for undefined variables.
+  scc-receive-mail:
+    Added set -u to check for undefined variables.
+  scc-rules:
+    Added set -u to check for undefined variables.
+    Use xpg4 version of tail for SunOS.
+  scc-smt:
+    Added set -u to check for undefined variables.
+  scc-summary:
+    Added set -u to check for undefined variables.
+  scc-syscmp:
+    Added set -u to check for undefined variables.
+  scc-transfer:
+    Added set -u to check for undefined variables.
+    HTML of snapshot can be empty.
+    Handle the case of an empty log.html when sort is implemented by busybox.
+    Use xpg4 version of tail for SunOS.
+  scc-update:
+    Added set -u to check for undefined variables.
+    Initialize all variables.
+    Initialize variable.
+  scc-wrapper.cgi:
+    Added set -u to check for undefined variables.
+  style.css:
+    Added colors for variable snapshot data and for comparing systems.
+    Added comment in header.
+    Corrected coloring of span-classes.
+  pkg_files/BSDinstall:
+    Correction for the help-files and added help-files for scc-win.
+    Copy help-files for scc-win.
+    Copy general-help-files.
+  pkg_files/freebsd-gen-scc-srv:
+    Added help-pages for scc-win.
+  pkg_files/openbsd-gen-scc-srv:
+    Check for presence of gnutar before moving files.
+    Added help-pages for scc-win.
+  pkg_files/postin:
+    Extend style.css file for 1.5.11 release.
+    Adjust permissions for newly created /var/opt
+    Corrected coloring for span-classes.
+  pkg_files/sunos-gen-scc-srv:
+    Check for presence of pkgproto before packing files.
+
+Changes from scc-srv 1.5.4 (2007-02-16) to 1.5.11 (2007-03-27)
+==============================================================
+  index.html:
+    Corrected URL quoting.
+  scc.cgi:
+    Added tags to tables for use with style.css
+    Added tags to cells of systems without match.
+    Corrected some HREF and added classes to TR.
+  scc-pull:
+    Corrected selection from systems from a realm (indicated by Harry van Wiggen).
+    Filetransfer from clients can be done by non-root user.
+    Running as non-root user implies -u <user> option.
+  scc-realm:
+    Corrected syntax of HREF.
+  scc-rules:
+    Added tags to table for use with style.css
+    Removed meta tags.
+    Corrected HREF syntax.
+    Added classed to TR.
+  scc-smt:
+    Added tags to tables for use with style.css
+    Removed meta tags.
+    Corrected HREF syntax.
+    Added classes to TR.
+  scc-summary:
+    Added tags to tables for use with stylesheets.
+    Change color of heading of sort column of summary data.
+    Added class to TR for CSS.
+    Removed meta tags.
+    Corrected HREF syntax.
+    Added classes to TR.
+  scc-transfer:
+  scc-update:
+    Provide empty alias for nice for systems without nice.
+    Updated manual page.
+  style.css:
+    Stylesheet for tables with SCC.
+    Changed coloring from columns to rows.
+  pkg_files/postin:
+    Install new style.css
+  pkg_files/puppy-gen-scc-srv:
+    Generate pet for puppylinux.
+
+Changes from scc-srv 1.5.2 (2007-01-12) to 1.5.4 (2007-02-16)
+=============================================================
+  index.html:
+    Added scc-win documentation to SCC resources.
+  scc-srv.5:
+    Correction for proper formatting of html version of manual page.
+  pkg_files/postin:
+    Added Windows client to SCC resources on main index.html file
+    Added alias for awk on Solaris.
+  pkg_files/scc-srv-install:
+    Do not use posix functionality when reporting absence of posix.
+
+Changes from scc-srv 1.4.22 (2006-06-02) to 1.5.2 (2007-01-12)
+==============================================================
+  index.html:
+    Replaced OpenEyeT with QNH and reference documentation from subdirectories.
+  scc-baseline:
+    Corrected references to manual pages.
+    Removed reference to manual page of scc client program.
+    Extended copyright to 2007.
+  scc.cgi:
+    Corrected obsolete syntax for head and tail.
+    Extended copyright to 2007.
+  scc-compare-index.html:
+    Corrected path of manual pages of scc-srv in web-gui.
+  scc-log-index.html:
+    Corrected path of manual pages of scc-srv in web-gui.
+  scc-pull:
+    Correction for overpopulated pull directory from previous run.
+    Added ovdeploy as transfer program.
+    Make signal files empty before copying the scc-data.
+    Remove transferred files from client when using ovdeploy.
+    Corrected case for scp option.
+    Extended copyright to 2007.
+  scc-realm:
+    Corrected references to manual pages.
+    Extended copyright to 2007.
+  scc-realm-index.html:
+    Corrected path of manual pages of scc-srv in web-gui.
+  scc-receive-mail:
+    Extended copyright to 2007.
+  scc-rules:
+    Corrections to follow W3C.
+    Corrected obsolete syntax for head and tail.
+    Correction when no data to display for a table.
+    Extended copyright to 2007.
+  scc-rules-index.html:
+    Corrected path of manual pages of scc-srv in web-gui.
+  scc-search-index.html:
+    Corrected path of manual pages of scc-srv in web-gui.
+  scc-smt:
+    Extended copyright to 2007.
+  scc-smt-index.html:
+    Corrected path of manual pages of scc-srv in web-gui.
+  scc-srv.5:
+    Corrected an option for scc-update and removed references to manual pages of scc.
+    Extended copyright to 2007.
+  scc-summary:
+    Corrected obsolete syntax for head and tail.
+    Correction for internal URL's to follow W3C rules.
+    Extended copyright to 2007.
+  scc-summary-index.html:
+    Corrected path of manual pages of scc-srv in web-gui.
+  scc-syscmp:
+    Corrected references to manual pages.
+    Extended copyright to 2007.
+  scc-transfer:
+    Corrected obsolete syntax for head and tail.
+    Removed reference to manual page of scc client.
+    Extended copyright to 2007.
+  scc-update:
+    Record the username for the mail directory of scc-srv.
+    Correction for URL's for help-pages.
+    Added recording file for -m option to manual page.
+    Extended copyright to 2007.
+  scc-wrapper.cgi:
+    Extended copyright to 2007.
+  pkg_files/BSDinstall:
+    Changed the layout of the scc-help directory with the manual files.
+    Extended copyright to 2007.
+    General INCLUDE mechanism.
+  pkg_files/debian-gen-scc-srv:
+    Extended copyright to 2007.
+  pkg_files/doinst:
+    Postinstall for Slackware.
+    Extended copyright to 2007.
+    General INCLUDE mechanism.
+  pkg_files/freebsd-gen-scc-srv:
+    Changed the layout of directory scc-help with the manual pages.
+    Extended copyright to 2007.
+  pkg_files/hpux-gen-scc-srv:
+    Extended copyright to 2007.
+  pkg_files/openbsd-gen-scc-srv:
+    Changed the layout of the directory scc-help with the manual pages.
+    Correct permissions for generated tgz file.
+    Extended copyright to 2007.
+  pkg_files/postin:
+    Do not use posix functions!
+    Correction for the update of the scc-srv documentation path.
+    Extended copyright to 2007.
+    General INCLUDE mechanism.
+    Changed the way user and group for mail and website are preserved and maintained.
+    Correct the layout from releases up to 1.4.22
+  pkg_files/postinstall:
+    Extended copyright to 2007.
+    General INCLUDE mechanism.
+  pkg_files/postrem:
+    General INCLUDE mechanism.
+  pkg_files/postremove:
+    Extended copyright to 2007.
+    General INCLUDE mechanism.
+  pkg_files/relocate:
+    Extended copyright to 2007.
+  pkg_files/rpm-gen-scc-srv:
+    Extended copyright to 2007.
+  pkg_files/scc-srv-install:
+    Extended copyright to 2007.
+  pkg_files/slackware-gen-scc-srv:
+    Extended copyright to 2007.
+  pkg_files/sunos-gen-scc-srv:
+    Corrected obsolete syntax for head and tail.
+    Extended copyright to 2007.
+
+Changes from scc-srv 1.4.21 (2006-06-02) to 1.4.22 (2006-06-02)
+===============================================================
+
+Changes from scc-srv 1.4.17 (2006-01-17) to 1.4.21 (2006-06-02)
+===============================================================
+  pkg_files/slackware-gen-scc-srv:
+    Produce slackware package for scc-srv.
+    Removed etc directory in production.
+    Corrected layout of description file.
+    Corrected permissions of data and top directories.
+    Corrected paths of directories in tar-file.
+
+Changes from scc-srv 1.4.16 (2005-12-12) to 1.4.17 (2006-01-17)
+===============================================================
+  scc-baseline:
+    Extend copyright notice to 2006.
+  scc.cgi:
+    Extend copyright notice to 2006.
+  scc-pull:
+    Extend copyright notice to 2006.
+  scc-realm:
+    Extend copyright notice to 2006.
+  scc-receive-mail:
+    Extend copyright notice to 2006.
+  scc-rules:
+    Extend copyright notice to 2006.
+  scc-smt:
+    Extend copyright notice to 2006.
+  scc-srv.5:
+    Extend copyright notice to 2006.
+  scc-summary:
+    Extend copyright notice to 2006.
+  scc-syscmp:
+    Extend copyright notice to 2006.
+  scc-transfer:
+    Added sender to message indicating missing <transfer> in email.
+    Extend copyright notice to 2006.
+  scc-update:
+    Extend copyright notice to 2006.
+  scc-wrapper.cgi:
+    Extend copyright notice to 2006.
+  pkg_files/BSDinstall:
+    Extend copyright notice to 2006.
+  pkg_files/debian-gen-scc-srv:
+    Extend copyright notice to 2006.
+  pkg_files/freebsd-gen-scc-srv:
+    Extend copyright notice to 2006.
+  pkg_files/hpux-gen-scc-srv:
+    Extend copyright notice to 2006.
+  pkg_files/openbsd-gen-scc-srv:
+    Extend copyright notice to 2006.
+  pkg_files/postinstall:
+    Extend copyright notice to 2006.
+  pkg_files/postremove:
+    Extend copyright notice to 2006.
+  pkg_files/relocate:
+    Extend copyright notice to 2006.
+  pkg_files/rpm-gen-scc-srv:
+    Extend copyright notice to 2006.
+  pkg_files/scc-srv-install:
+    Extend copyright notice to 2006.
+  pkg_files/sunos-gen-scc-srv:
+    Extend copyright notice to 2006.
+
+Changes from scc-srv 1.4.13 (2005-07-11) to 1.4.16 (2005-12-12)
+===============================================================
+  index.html:
+    Stylesheet added.
+  scc-baseline:
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc.cgi:
+    Correction for systems without a match and without a logbook.
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-compare-index.html:
+    Stylesheet added.
+  scc-log-index.html:
+    Stylesheet added.
+  scc-pull:
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-realm:
+    Correction for stylesheet.
+    Correction for realms with spaces in the name.
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-realm-index.html:
+    Stylesheet added.
+  scc-receive-mail:
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-rules:
+    Removed calling dependency from scc-update.
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-rules-index.html:
+    Stylesheet added.
+  scc-search-index.html:
+    Stylesheet added.
+  scc-smt:
+    Removed calling dependency from scc-update.
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-smt-index.html:
+    Stylesheet added.
+  scc-srv.5:
+    Correction for scc-pull.
+    Extended Apache 2 settings.
+    Added copyright notice for QNH.
+  scc-summary:
+    Removed calling dependency from scc-update.
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-summary-index.html:
+    Stylesheet added.
+  scc-syscmp:
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-transfer:
+    Added copyright notice for QNH.
+    Use scc-cmp from client to compare snapshots.
+    Correction for scc-cmp for new system.
+    Changed contact information to QNH.
+  scc-update:
+    Correction for stylesheets.
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  scc-wrapper.cgi:
+    Added copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/BSDinstall:
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/debian-gen-scc-srv:
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/freebsd-gen-scc-srv:
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/hpux-gen-scc-srv:
+    Restrict calling of the program to root.
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/openbsd-gen-scc-srv:
+    Changed contact information to QNH.
+    Added Copyright notice for QNH.
+  pkg_files/postinstall:
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/postremove:
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/relocate:
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/rpm-gen-scc-srv:
+    Check presence of rpmbuild and use non-obvious build directory.
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/scc-srv-install:
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+  pkg_files/sunos-gen-scc-srv:
+    Added Copyright notice for QNH.
+    Changed contact information to QNH.
+
+Changes from scc-srv 1.4.11 (2005-06-15) to 1.4.13 (2005-07-11)
+===============================================================
+  scc.conf:
+    Added SCC_PATH variable.
+    Warning added for SCC_PATH.
+    Indicate location of extensions for upgrades of scc-srv.
+  scc-summary:
+    Correction when name of system starts with scc!
+  scc-transfer:
+    Extend PATH with variable in scc.conf.
+  scc-update:
+    Correction for -w option in case of symbolic link from scc-srv to doc-root.
+
+Changes from scc-srv 1.4.9 (2005-06-07) to 1.4.11 (2005-06-15)
+==============================================================
+  scc-smt:
+    Added Debian installed packages.
+  scc-smt-select:
+    Added scc and scc-srv for Debian.
+    Added warning to update scc-smt.sh
+  scc-update:
+    Defensive programming when updating scc.conf.
+  pkg_files/debian-gen-scc-srv:
+    Generate debian package of scc-srv.
+    Do not specify config-files.
+  pkg_files/freebsd-gen-scc-srv:
+    Restart with /bin/ksh to use POSIX-features.
+  pkg_files/hpux-gen-scc-srv:
+    Restart with /bin/ksh to use POSIX-features.
+  pkg_files/openbsd-gen-scc-srv:
+    Restart with /bin/ksh to use POSIX-features.
+  pkg_files/rpm-gen-scc-srv:
+    Restart with /bin/ksh to use POSIX-features.
+  pkg_files/sunos-gen-scc-srv:
+    Restart with /bin/ksh to use POSIX-features.
+
+Changes from scc-srv 1.4.7 (2005-04-13) to 1.4.9 (2005-06-07)
+=============================================================
+  scc-baseline:
+    Added scc-pull to SEE ALSO.
+  scc.cgi:
+    Added scc-pull to SEE ALSO.
+  scc-pull:
+    Pull scc-data from clients.
+    Added -I option. Corrected absence of remsh.
+    Corrected paths of directories and files.
+    Added -q option to ssh and scp.
+    Option -d 0 implies synchronous execution.
+    Added scc-pull to SEE ALSO.
+    Background processing of clients corrected.
+    Corrected realm-processing and typo for handling of signal-files.
+  scc-realm:
+    Added scc-pull to SEE ALSO.
+  scc-receive-mail:
+    Added scc-pull to SEE ALSO.
+  scc-rules:
+    Correction for counting changes in the logbook.
+    Added scc-pull to SEE ALSO.
+  scc-smt:
+    Added scc-pull to SEE ALSO.
+  scc-srv.5:
+    Added scc-pull.
+    Added settings for Apache 1.x
+  scc-summary:
+    Added scc-pull to SEE ALSO.
+  scc-syscmp:
+    Added scc-pull to SEE ALSO.
+  scc-transfer:
+    Added scc-pull to SEE ALSO.
+  scc-update:
+    Added scc-pull to SEE ALSO.
+  scc-wrapper.cgi:
+    Added scc-pull to SEE ALSO.
+
+Changes from scc-srv 1.4.6 (2005-04-06) to 1.4.7 (2005-04-13)
+=============================================================
+  index.html:
+    Added DOCTYPE tag.
+  scc-compare-index.html:
+    Added DOCTYPE tag.
+  scc-log-index.html:
+    Added DOCTYPE tag.
+  scc-realm:
+    Corrected name of style sheet.
+  scc-realm-index.html:
+    Added DOCTYPE tag.
+  scc-rules:
+    Corrected signaling.
+  scc-rules-index.html:
+    Added DOCTYPE tag.
+  scc-search-index.html:
+    Added DOCTYPE tag.
+  scc-smt-index.html:
+    Added DOCTYPE tag.
+  scc-srv.5:
+    Changed formatting to avoid errors in HTML.
+    Adjusted formatting of SEE ALSO section.
+  scc-summary-index.html:
+    Added DOCTYPE tag.
+
+Changes from scc-srv 1.3.25 (2005-01-18) to 1.4.6 (2005-04-06)
+==============================================================
+  index.html:
+    Corrected URL.
+  scc-baseline:
+    Reduced PATH for SunOS, added some aliases.
+    Adapted copyright notice.
+    Updated info URL and moved file/version ID to GPL text.
+    Updated SEE ALSO section of manual page.
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+    Copyright moved to OpenEyeT
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc.cgi:
+    Corrected html-production to avoid messages from html-tidy.
+    Added style sheet to html-output.
+    Moved stylesheet to subdirectory custom.
+    Update stylesheet in snapshot and logbook when displaying these files with CGI.
+  scc-realm:
+    Do not add realm All to main index.html.
+    Cleanup of possibly saved files when removing a system from a realm.
+    CSS added.
+  scc-rules:
+    Replaced -q option of grep by -l option.
+    Added style sheet to html-output.
+    Move style.css to custom subdirectory.
+  scc-smt:
+    Extended comments.
+    Select proper fields for AIX.
+    Added hack for source installs of scc.
+    Added determination of BSD-packages.
+    Corrected HTML production to avoid messages from html-tidy.
+    Added style sheet to html-output.
+    Moved styles.css to custom subdirectory.
+    Corrected comment.
+  scc-smt-select:
+    Extension to catch scc installed from source.
+    Added scc and scc-srv for native install on *BSD.
+  scc-summary:
+    Corrected production of html to avoid messages from html-tidy.
+    Added style sheet to html-output.
+    Moved stylesheet to custom subdirectory.
+  scc-syscmp:
+    Reduced PATH for SunOS, added some aliases.
+    Adapted copyright notice.
+    Updated info URL and moved file/version ID to GPL text.
+    Separate data from hostnames. Align data from both hosts.
+    Remove additional : between hostname and data.
+    Corrected syntax error for printf.
+    Updated SEE ALSO section of manual page.
+    Corrected spelling issues.
+    Added -l option.
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+    Copyright moved to OpenEyeT
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-transfer:
+    Implemented compare of virtual host data.
+    Corrections for compares on the server.
+    Move style.css from current directory to subdirectory custom.
+  scc-update:
+    Use a lockfile to avoid concurrent runs.
+  pkg_files/postin:
+    Create a default stylesheet when it does not exist.
+  pkg_files/scc-srv-install:
+    *** empty log message ***
+
+Changes from scc-srv 1.3.24 (2005-01-03) to 1.3.25 (2005-01-18)
+===============================================================
+  scc-transfer:
+
+Changes from scc-srv 1.3.14 (2004-05-10) to 1.3.24 (2005-01-03)
+===============================================================
+  index.html:
+    SCC Home Page.
+    Layout change.
+    Changed layout and added marker to automatically add/remove realms.
+    Open Challenge changed to OpenEyeT.
+    Moved logo-file to /custom.
+    Added URL for SCC server doc.
+    Logo points to scc-server documentation URL.
+    Corrected path for manual pages.
+    Reference to client documentation added.
+    Open Challenge added.
+  README:
+    Indicate details for configuring after installation.
+  scc.cgi:
+    Altered syntax of functions.
+    Copyright moved to OpenEyeT
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-compare-index.html:
+    Help-info for comparing snapshots.
+    The order of colors changed.
+    Mention fixed data only.
+    Moved logo-file to /custom.
+    Logo points to scc-server documentation URL.
+    Fixed URL.
+    scc-syscmp added.
+  scc.conf:
+    Main configuration-file.
+    Name of variable changed.
+    Keyword added to indicate the location of the keyfile for decryption.
+    Private key added for decryption of SCC-data sent via email.
+    Altered default path of private key file.
+  scc-log-index.html:
+    Help info for page with log-data.
+    Moved logo-file to /custom.
+    Logo points to scc-server documentation URL.
+    Fixed URL.
+  scc-realm:
+    Copyright moved to OpenEyeT
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-realm.conf:
+    Customization of html-production for a realm.
+    Added comments concerning usage.
+    Location indicated properly.
+  scc-realm-index.html:
+    Help info for a realm.
+    Corrected typo's in URL's of manual pages.
+    Fixed a typo.
+    Added some info.
+    Moved logo-file to /custom.
+    Logo points to scc-server documentation URL.
+    Fixed URL.
+    Minor changes.
+    Added comments on scc-smt and scc-rules.
+    Added URL's to programs and updates scc-rules part.
+  scc-receive-mail:
+    Copyright moved to OpenEyeT
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-rules:
+    Added -f option for non-default rule-file.
+    Corrected "octal" bug for month and day.
+    Replace meta-tag nocache by revised.
+    Copyright moved to OpenEyeT
+    Max. age indicated for browser.
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-rules.conf:
+    Sample scc-rules.conf
+    Fixed typo.
+    Notice added how to force update after updating this file.
+    Corrected spelling issues.
+    Extended copyright to 2004.
+    Changed layout of comments.
+  scc-rules-index.html:
+    Help-file for output screen of scc-rules.
+    Added URL to manual page.
+  scc-search-index.html:
+    Help-info for searching.
+    Added SMT-data and extended results section.
+    Moved logo-file to /custom.
+    Logo points to scc-server documentation URL.
+    Fixed URL.
+    Searching in SMT-data added.
+    Added scc-rules section.
+  scc-smt:
+    Change title/labels to System Tools. Replace meta-tag nocache by revised.
+    Copyright moved to OpenEyeT
+    Max. age indicated for browser cache.
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-smt-index.html:
+    Help info for smt-page.
+    Moved logo-file to /custom.
+    Logo points to scc-server documentation URL.
+    Fixed URL.
+    Use the proper mete-characters.
+    Added URL for scc-smt.
+  scc-smt-select:
+    Default selection file for System Management Tools.
+    Solstice added.
+    Corrected entry for scc on HP-UX.
+    Prefixes added to products.
+    SCC added for several environments.
+    Minor changes.
+    Comments added.
+    HP-performance software for SunOS added.
+    Added scc-srv.
+    On SunOS, scc installs under application, not System.
+    Added online JFS for HP-UX.
+  scc-srv.5:
+    Copyright moved to OpenEyeT
+    Added summary of commands to get scc-srv working.
+    scc-srv installs in default directories. Mention relocate script to customize.
+    Extended copyright to 2005.
+  scc-summary:
+    Corrected some regular expressions.
+    Print nbsp for absent OS and date of last run.
+    Message altered.
+    Replace meta-tag nocache by revised.
+    Copyright moved to OpenEyeT
+    Some additional lines from every snapshot to determine data of summary.
+    Max. age indicated for browser cache.
+    Correction for empty OS and release in logfile per day.
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-summary-index.html:
+    Help info on general summary page.
+    Moved logo-file to /custom.
+    Logo points to scc-server documentation URL.
+    Fixed URL.
+  scc-transfer:
+    Added -e option to enforce all mail-transfers are encrypted.
+    Extended checks for contents of transferred files.
+    Extended the manual page.
+    Erroneous data is preserved while processing continues.
+    Copyright moved to OpenEyeT
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-update:
+    Copyright moved to OpenEyeT
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  scc-wrapper.cgi:
+    Copyright moved to OpenEyeT
+    Extended copyright to 2005.
+    Extended copyright to 2005 in GNU prelude.
+  pkg_files/BSDinstall:
+    Install script for BSD-systems.
+    Added white space.
+    Changed Copyright to OpenEyeT
+    Remove base of scc-srv during deinstall.
+    Remove dummy files that are used to create empty directories.
+    Create empty data-directories with proper permissions.
+    Extended copyright to 2005.
+  pkg_files/freebsd-gen-scc-srv:
+    Generate scc-srv FreeBSD package.
+    Avoid changing the binary logo file,
+    Changed Copyright to OpenEyeT
+    Do not relocate the software.
+    Support md5 and md5sum.
+    Also install /var/opt/scc.
+    Do not install in /usr/pkg.
+    Empty directories are created by the install-script.
+    Put scc-help files in a separate directory to avoid changes in their md5-sums by scc-update.
+    Extended copyright to 2005.
+  pkg_files/hpux-gen-scc-srv:
+    Generate HP-UX depot with scc-srv.
+    Release ID-tag is substituted in Makefile.
+    Do not check for user root.
+    Check presence of swpackage.
+    Changed Copyright to OpenEyeT
+    Extended copyright to 2005.
+  pkg_files/openbsd-gen-scc-srv:
+    Produce OpenBSD package of scc-srv.
+    Clean all files after production.
+    Comments added for required directory structure and gnutar.
+    Changed Copyright to OpenEyeT
+    Support programs md5 and md5sum.
+    Do not install with absolute paths.
+    Also install /var/opt/scc-srv
+    Empty data-directories are created by the install-script.
+    Move scc-help files to separate directory to avoid changes of md5-sums when scc-update changes files,
+    Extended copyright to 2005.
+  pkg_files/postin:
+    Generic postinstall code.
+    Renew cgi-wrapper for all existing realms.
+    Changed Copyright to OpenEyeT
+    Removed exit 0.
+    Check for existence of config-directory.
+  pkg_files/postinstall:
+    Extended copyright to 2005.
+    Removed file-version.
+    Changed Copyright to OpenEyeT
+  pkg_files/postrem:
+    Generic postremove code.
+    Changed Copyright to OpenEyeT
+    Removed exit 0.
+  pkg_files/postremove:
+    Removed file-version.
+    Changed Copyright to OpenEyeT
+    Extended copyright to 2005.
+  pkg_files/relocate:
+    Relocate scc-srv.
+    Removed CONF and also ignore our logo-file.
+    Handle relative paths for openbsd-gen-scc-srv.
+    Keep relative paths in openbsd-gen-scc-srv relative.
+    Enable copy of readonly files
+    Extended copyright to 2005.
+  pkg_files/rpm-gen-scc-srv:
+    New production for noarch.
+    GPL added to header.
+    Added required directory structure to header.
+    Changed Copyright to OpenEyeT
+    Extended copyright to 2005.
+  pkg_files/scc-srv-install:
+    Install source version of scc-srv.
+    Extended copyright to 2005.
+    Extended copyright to 2004.
+    Corrected path from scc to scc-srv.
+    Change to ksh to use sub-shells.
+    Do not remove the software after installation.
+    Assign proper ownership to files and directories.
+    Create empty directories under /var/opt/scc-srv/data.
+    Do not change shell in logo-file.
+    Input and output directory structures added as comment.
+    Do not remove input directories.
+    Changed the required directory structure.
+    Changed Copyright to OpenEyeT
+    Use cp to install the files/directories.
+  pkg_files/sunos-gen-scc-srv:
+    Generate SunOS package for scc-srv.
+    Altered processing of pkgproto output.
+    Extended copyright to 2005.
+    Corrected some filenames.
+    Activate scc-release.
+    Changed the name of this script.
+    Use pkgproto instead of a separate pkginfo file.
+    Postremove toegevoegd.
+    Extended description of directory hierarchy.
+    Changed Copyright to OpenEyeT
+    Changed paths for pkgproto to enable relocation of software when generating the package.
+
+Changes from scc-srv 1.3.13 (2004-01-09) to 1.3.14 (2004-05-10)
+===============================================================
+  scc.cgi:
+    Corrected the addition of absolute web-path to snapshot, logbook and Home.
+    Corrected home-urls for single snapshot and logbook.
+    Replace "<" and ">" to avoid Cross Site Scripting.
+  scc-realm:
+    Update the main-index html-file when adding/removing realms.
+    Corrected automatic adding of realms to main index.html
+    Documented automatic adding of realms to main index.html
+    Corrected manual page.
+  scc-receive-mail:
+    Advise non-default mail-alias to avoid DOS-attacks.
+  scc-rules:
+    Comment lines in config file can start with space/tab before "#".
+  scc-srv.5:
+    Added RELEASE to manual page.
+    Extended transfer-mechanism with ftp.
+    Mention a non-default mail-alias to avoid DOS-attacks.
+  scc-transfer:
+    Handle the case that an email connection has been down for some time and transfers
+    arrive in the wrong order.
+    Use a non-default mail-alias to avoid DOS-attacks.
+
+Changes from scc-srv 1.3.12 (2003-12-23) to 1.3.13 (2004-01-09)
+===============================================================
+  scc.cgi:
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+  scc-realm:
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+  scc-receive-mail:
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+    Corrected several outdated parts of the manual page.
+  scc-rules:
+    Corrected grep with xargs.
+    Support spaces in text for searching.
+    Do not wrap data in table.
+    Extended copyright to 2004.
+    Avoid octal numbers when checking age of snapshots.
+    Added RELEASE to manual page.
+  scc-smt:
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+  scc-srv.5:
+    Extended copyright to 2004.
+  scc-summary:
+    Ignore case for systems with changes per date.
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+  scc-transfer:
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+  scc-update:
+    Extended copyright to 2004.
+    Corrected path to manual pages in help-html.
+    Added RELEASE to manual page.
+  scc-wrapper.cgi:
+    Extended copyright to 2004.
+    Added RELEASE to manual page.
+  pkg_files/postinstall:
+    Extended copyright to 2004.
+  pkg_files/postremove:
+    Extended copyright to 2004.
+
+Changes from scc-srv 1.3.6 (2003-11-24) to 1.3.12 (2003-12-23)
+==============================================================
+  scc-baseline:
+    Indication of used directories is changed.
+    SEE ALSO section of manual page updated.
+  scc.cgi:
+    Code layout altered.
+    Changed output after comparing systems.
+    Current directory is the realm.
+    Fixed typo.
+    For searches, show the number of hits for each system.
+    Speed-up when searching by eleminating a loop on all systems.
+    Fixed a bug in the limitation of search-data.
+    Do not wrap data after searching.
+    Corrected spelling issues.
+    List the amount of extracted class-data for each snapshot when comparing systems.
+  scc-realm:
+    Removed superfluous code.
+    Call scc-update with sub-directory, not full path.
+    Corrected spelling issues.
+  scc-receive-mail:
+    Corrected spelling issues.
+  scc-rules:
+    Corrections for -h option.
+    Code layout altered.
+    Added -d option for web-path.
+    Realm argument is relative path.
+    Do not show Config-URL when formatting data for single system.
+    Corrected spelling issues.
+    No date arithmetic for max-snap-age.
+    Removed bug and improved performance when searchin in snapshots.
+  scc-smt:
+    Ignore case when sorting.
+    Code layout altered.
+    Argument is relative path of realm.
+    Corrected spelling issues.
+  scc-srv.5:
+    scc-rules and class-file added.
+    Corrected spelling issues.
+  scc-summary:
+    Limited the <HR> in the middle of the index.html
+    Extended header of summary.
+    Remove user-module delimiters from list of top-level classifications.
+    Updated info URL and moved file/version ID to GPL text.
+    Home-URL added on summary-pages.
+    Set background color properly from config file.
+    Corrected bug when deleting broken symbolic links.
+    SMT are optional in the main index.html.
+    scc-rules added.
+    Do not call scc-rules. This is done in scc-update.
+    Updated SEE ALSO section of manual page.
+    Check of age of snapshots is moved to scc-rules.
+    Warning added concerning scc-update.
+    Immediate update added to manual page.
+    Minor code cleanup.
+    Ignore case when sorting systems in scc-summary.data
+    Ignore case of system-name for generated pages.
+    Code layout altered.
+    Changed position of system selection boxes for compare.
+    Corrected spelling issues.
+    Changed header of column for changes per date.
+  scc-transfer:
+    Also remove binary zeroes from Windows files.
+    Corrected spelling issues.
+    Replaced binary characters for translation of windows snapshots.
+  scc-update:
+    Syntax change for scc-rules.
+    Rules, summary and smt use relative path of realm.
+    Corrected spelling issues.
+    Ignore a realm when it is a symbolic link.
+    Handle single realm correctly.
+  scc-wrapper.cgi:
+    Start the CGI in the realm-directory.
+    Corrected spelling issues.
+
+Changes from scc-srv 1.2.8 (2003-10-28) to 1.3.6 (2003-11-24)
+=============================================================
+  scc-baseline:
+    Match classifications from toplevel only.
+    Copyright notice updated for 2002.
+    PATHs adjusted.
+  scc.cgi:
+    Access to scc-rules data implemented.
+    Updated SEE ALSO section of manual page.
+    Use -h option of scc-rules to format rules-data for single system.
+  scc-realm:
+    Updated SEE ALSO section of manual page.
+  scc-receive-mail:
+    Updated SEE ALSO section of manual page.
+  scc-rules:
+    Check rules for a realm.
+    Operate on one realm instead of all.
+    Added -h option to format html for rules-data of one system
+    Ignore comments and blank lines in config files
+    Ignore output by keyword null.
+    Output direction via cat.
+    Updated SEE ALSO section of manual page.
+    Ignore blank-lines in scc-rules.conf
+    SIGNAL_DEST for file is limited by basename.
+    Ignore comments in config files.
+    Warning about ignoring programs of scc-update added.
+    Immediate update added to manual page.
+  scc-smt:
+    Remove smt-files when scc-smt-select is absent.
+    Show the configuration at the bottom of the scc-smt-index.html
+    Updated SEE ALSO section of manual page.
+    Ignore comments in config file.
+    Warning added concerning scc-update.
+    Immediate update added to manual page.
+  scc-srv.5:
+    Updated SEE ALSO section of manual page.
+  scc-summary:
+    Show empty entries in table as non-breaking space.
+    Avoid messages with rm in transfer-directory.
+    Body-tag and doc-root can be customized.
+    Generated tables are centered.
+    Copyright notice updated for 2002.
+    Use identical table-tag for all tables.
+    Filename-format added for transfer-files.
+    Summary option added to table tag.
+    Color for identification changed.
+    Superfluous variable removed.
+    Generated html changed due to HTML-tidy.
+    Code-layout changed for awk-script.
+    Added -o option for the ownership of generated files.
+    Changed -b option to -l option.
+    PATH's and manual page adapated to server package.
+    scc-receive added to manual page.
+    Indication of used directories is changed.
+    Count of systems added to leading text.
+    Possible concurrency problems with scc-receive evaded.
+    Sort adjusted.
+    Last URL for scc-log-index.html corrected.
+  scc-syscmp:
+    Copyright notice updated for 2002.
+    Indication of used directories is changed.
+    SEE ALSO section of manual page updated.
+    PATHs adjusted.
+    Use the filenames to determine the hostnames.
+  scc-transfer:
+    gunzip can also uncompress files.
+    The order of the scc-data in the tar-ball does not matter anymore.
+    Updated SEE ALSO section of manual page.
+  scc-update:
+    Indicate that argument is a sub-directory.
+    Call of scc-rules added.
+    Updated SEE ALSO section of manual page.
+  scc-wrapper.cgi:
+    Updated SEE ALSO section of manual page.
+
+Changes from scc-srv 1.2.1 (2003-07-14) to 1.2.8 (2003-10-28)
+=============================================================
+  scc.cgi:
+    Substitute special html-characters in output of scc-syscmp.
+    Updated info URL and moved file/version ID to GPL text.
+    Correction for alignment of hostnames.
+    Use PRE instead of TT to avoid formatting of output of scc-syscmp.
+  scc-realm:
+    Extended manual page with renaming of a realm.
+    Updated info URL and moved file/version ID to GPL text.
+    Corrected permissions in example in manual page.
+  scc-receive-mail:
+    Updated info URL and moved file/version ID to GPL text.
+  scc-smt:
+    Removed -type f from all finds to avoid problems with symlinks.
+    Ignore detailed version info on Solaris.
+    Updated info URL and moved file/version ID to GPL text.
+    Home-URL added on summary.
+    Changed layout for generated smt-files.
+    Ignore the contents of smt-select file from the snapshot of the SCC-server.
+  scc-srv.5:
+    Encryption feature added to security section.
+  scc-summary:
+    Check for wrong options.
+    Files can be moved from a transfer-directory to the summary-directory.
+  scc-transfer:
+    Corrected a typo.
+    Updated info URL and moved file/version ID to GPL text.
+    Some messages changed to warnings to resume operation.
+    Optional decryption of SCC-data via email added.
+    Check for FQDN in the filenames of the transferred files.
+    Ignore tar messages.
+    Fixed a typo.
+  scc-update:
+    Updated info URL and moved file/version ID to GPL text.
+    Do not create summaries when no new snapshots have arrived for a realm.
+    Check whether scc-summary-data exists before searching for newer files.
+    Correction for symbolic links from scc-srv to website.
+  scc-wrapper.cgi:
+    Updated info URL and moved file/version ID to GPL text.
+  pkg_files/postinstall:
+    Updated info URL and moved file/version ID to GPL text.
+    Main-code is retrieved from RPM-specfile.
+  pkg_files/postremove:
+    Updated info URL and moved file/version ID to GPL text.
+  pkg_files/rpm-gen-scc-srv:
+    Release ID-tag is substituted in Makefile.
+
+Changes for scc-srv 1.2.1 (2003-07-14)
+======================================
+  scc-baseline:
+    Extract een deel van een snapshot.
+    Namen van programma's aangepast.
+    Improvement in trap-handling and handling filenames with spaces.
+    Set LANG explicitly to avoid messages.
+    Contact info updated.
+    Manual page extended.
+    Do not cd to SCC_TMP.
+    Allow part of classification to be specified.
+    Generate awk-script correctly.
+    Comment is allowed in class-files.
+    Escape the meta-characters for extended regular expressions in the
+    generated awk-script.
+    scc-summary added to manual page.
+    Diverse rubrieken in manual page uniform gemaakt.
+    Contact info toegevoegd aan GNU-header.
+    Start-environment nauwkeuriger bepaald.
+    SccPlugin opgenomen in SEE ALSO.
+    Comments added.
+    Set environment variable TMP to $SCC_TMP.
+    Release and file version added.
+  scc.cgi:
+    scc-srv web-server cgi-handling.
+    Extended trap-statement.
+    Added help-info for searching and comparing.
+    Extended logging for searching.
+    Removed -l option for tail.
+    Implemented DocumentRoot properly.
+    Fixed stdin interference for searching.
+    ALT-attribute of logo indicated HelpInfo.
+    Adapted PATH for SunOS, specified aliases for what, awk and grep.
+    Added scc-realm to SEE ALSO section of manual page.
+    When all_systems are in fact 1 system, the limit for searching is 1000 lines.
+    Changed year in copyright notice.
+    Location of scc.conf changed.
+    scc-recive added to SEE ALSO.
+    Replace special "html" characters by their encoding.
+    For searching, display all lines of data for each system in one cell of the table.
+    Use relative paths for the html-pages.
+    Improved readability of HTML.
+    Use absolute paths for the web-pages.
+    Removed scc-srv(4) from SEE ALSO section of manual page.
+    Changed doc_root_dir to scc_web_path.
+    Searching in SMT-data implemented properly.
+    Added some characters to URL-decoding.
+    Extend the relative paths of the URL's that are shown when displaying a single snapshot/log/smt-file.
+    Ignore sub-directories when searching for files.
+    Indication of used directories is changed.
+    Added quotes to the search-string.
+    Correct the paths to the URLs in the snapshot, logfile and smt-file.
+    Logging added.
+    Show summary-data for systems without a match (when searching).
+    Use TT in stead of PRE for long text in tables.
+    Logo and background color added through files in images sub-directory in realm.
+    Updated SEE ALSO section of manual page.
+    Avoid the requirement of an image-alias per realm.
+    Creation of index.html moved to scc-realm.
+    Name of realm can now contain spaces.
+    Production of html changed.
+  scc-realm:
+    Maintenance of realms.
+    Sipport removal of realms.
+    Use permissions of target realm when adding systems to a realm.
+    Extended manual page with setup of realms.
+    Removed scc-srv(4) from SEE ALSO section of manual page.
+    Call scc-update for single realm instead of scc-summary and scc-smt.
+    Added smt.html for adding/removing systems from a realm.
+    Changed the sub-directories of a realm.
+    Added scc-realm.conf.
+    Updated manual page.
+    Adapted PATH for SunOS, specified aliases for what, awk and grep.
+    Use default files from /custom instead of /All.
+    Added scc-realm to SEE ALSO section of manual page.
+    Use custom as default directory, not All.
+    Syntax checking improved.
+    Changed year in copyright notice.
+  scc-receive-mail:
+    Receive files sent to the scc-srv via email.
+    Name of the program has changed.
+    Default directory has changed.
+    Updated SEE ALSO section of manual page.
+    Adapted PATH for SunOS, specified aliases for what, awk and grep.
+    Added scc-realm to SEE ALSO section of manual page.
+    Changed year in copyright notice.
+    Removed scc-srv(4) from SEE ALSO section of manual page.
+    Changed typo in interpreter.
+  scc-smt:
+    Summary of System Management Tools in snapshots.
+    Alternate document-root for smt-html-files provided.
+    Production of HTML changed due to HTML-tidy.
+    Support added for alternate document-roots and body-tags.
+    Code-layout changed for awk-script.
+    Added -o option for the owner of generated files.
+    Changed -b option to -l option.
+    Added -s option to specify selection file.
+    PATH en manual page adapted to server-package.
+    scc-receive added to SEE ALSO.
+    Support comment-lines in specification file for SMT.
+    Indication of used directories is changed.
+    Count of systems added to leading text.
+    Added option to specify background color.
+    Removed several options.
+    Mode is fixed for all new files. Ownership of target-directory is used.
+    Logo and background color specified through files in images-subdirectory of realm.
+    Option- and command-handling changed,
+    Fixed interpreter.
+    Use the read-attributes of the destination-directory for the generated files.
+    Updated SEE ALSO section of manual page.
+    Avoid the requirement of an image alias per realm.
+    Location of smt-select changed. Removed -s option.
+    Removed -q option.
+    Moved logo to custom directory.
+    Background color determined by scc-realm.conf.
+    Production of several html-files changed.
+    Added help-info for smt-system specific page.
+    Fixed typo.
+    Implemented DocumentRoot properly.
+    Additional software added to selection from snapshots.
+    The ALT-attribute of the logo indicates HelpInfo.
+    Adapted PATH for SunOS, specified aliases for what, awk and grep.
+    Added scc-realm to SEE ALSO section of manual page.
+    Handle absence of systems in a realm better.
+    Additional correction for absence of systems in realm.
+    Changed year in copyright notice.
+    Separated -k options and their arguments.
+    The SMT-data is no longer temporary.
+    Removed scc-srv(4) from SEE ALSO section of manual page.
+    Changed doc_root_dir in scc_web_path.
+    Check for wrong options.
+    Corrected location of custom smt-select in manual page.
+    Matching of installed software more precise.
+    Show empty cell when model is empty.
+    Ignore sub-directories when searching for files.
+    Redesigned code for generating smt.html
+    Changed layout of top of smt.html files.
+    Format documented for data-files in awk.
+    Version of SCC determined from snapshots.
+    Copyright notice updated for 2002.
+    Redesign of selection of smt-data.
+    Name changed for software selection file.
+    Use identical table-tab for all tables.
+    HTML adapted due to HTML-tidy.
+    Broken awk-code fixed and comments added.
+  scc-srv.5:
+    Intro to scc-srv.
+    Several additions.
+    Many textual changes.
+    Reference to scc(5) added.
+    Minor changes.
+    Minor corrections.
+    Added security section.
+    Updated release ID in install commands.
+    Added cp as transfer-program.
+    Added INTRODUCTION with installation and initial configuration.
+    Configurations of web-server added.
+    Removed the options that specified the umask used for new files.
+    Several updates.
+    Changed year in copyright notice.
+    Added the options of scc-update.
+    Extensive additions for the configuration phase after installing.
+    Minor adjustments.
+  scc-summary:
+    Produce html-summaries of snapshots and logbooks.
+    Names of generated files are changed.
+    Added option for background color.
+    Added check for broken symbolic links.
+    Removed functionality to transfer files to target-directory. This is
+    done by scc-transfer
+    Removed several options.
+    Mode is fixed for all new files. Ownership of target-directory is used.
+    Logo and background color specified through files in images-subdirectory of realm.
+    Interpreter changed.
+    Use the read-attributes of the destination directory for any generated file.
+    Base-directory and umask specfied via command-line.
+    Give the log.html files per system their proper owner sooner.
+    Updated SEE ALSO section of manual page.
+    Avoid the requirement of an image alias per realm.
+    Create the index.html for a realm.
+    Fixed some typos.
+    Removed -q option.
+    Production of html changed.
+    Always recreate index.html.
+    Help-info for scc-realm renamed to avoid clash with scc-realm.sh
+    Implemented DocumentRoot properly.
+    Additional sorting for summaries of model and OS.
+    ALT-attribute of the logo indicates HelpInfo.
+    Adapted PATH for SunOS, specified aliases for what, awk and grep.
+    Added scc-realm to SEE ALSO section of manual page.
+    Option- and argument-handling changed.
+    Handle absence of systems in realm better.
+    Fixed a typo.
+    Changed year in copyright notice.
+    Separated -k options of sort from their arguments.
+    Sort the log-files per day on system-name instead of on time.
+    Changed doc_root to scc_web_path.
+    Changed /realm-bin/ to /realm/cgi-bin/
+    Removed scc-srv(4) from SEE ALSO section of manual page.
+    Ignore sub-directories when searching for files.
+    Comment.
+    Fold case during sort of list of classes.
+    Use the filename of a snapshot to determine hostname.
+    Mention the generation date and time in scc-summary-X.html
+    Determination of hostname from filename improved.
+    Speed-up of generation of top-level classes for list in index.html.
+    Check added for max. age of snapshots.
+  scc-syscmp:
+    Vergelijk een deel van twee snapshots.
+    Namen van programma's aangepast.
+    Improvement in trap-handling and handling filenames with spaces.
+    Set LANG explicitly to avoid messages.
+    Corrected paths for programs and snapshots.
+    Contact info updated.
+    Manual page revised.
+    Check for snapshots added.
+    Example in manual page extended.
+    Doc. change.
+    scc-summary added to manual page.
+    Diverse rubrieken in manual page uniform gemaakt.
+    Contact info toegevoegd aan GNU-header.
+    Start-environment nauwkeuriger bepaald.
+    SccPlugin opgenomen in SEE ALSO.
+    Geef de systemen juist weer bij de verschillen.
+    Set environment variable TMP to $SCC_TMP.
+    Release and file version added.
+  scc-transfer:
+    Receive snapshots and logfiles through email.
+    Updated SEE ALSO section of manual page.
+    Removed -q option.
+    Adapted PATH for SunOS, specified aliases for what, awk and grep.
+    Detect absence of run of current snapshot in new logfile.
+    Added scc-realm to SEE ALSO section of manual page.
+    Issue warning when receiving empty snapshot/logfile.
+    Changed year in copyright notice.
+    Exit status indicates transfer of files.
+    Use permissions of existing snapshot when transferring data.
+    Translate CR/LF for files from Windows systems.
+    Corrected some typo's.
+    Path's changed.
+    Removed scc-srv(4) from SEE ALSO section of manual page.
+    Corrected name of logifle in manual page.
+    Report the missing of uudecode.
+    Superfluous mkdir removed from code.
+    Check for the existence of gunzip and uncompress.
+    Check on signal-file corrected.
+    Pass exit-status from inner loop by means of a status-file.
+    Changed typo in interpreter.
+    Do not overwrite an existing snapshot when empty files are sent during testing.
+    Use the first 10 lines to check for the timestamp of an snapshot.
+    Do not check for old snapshot with empty test-files.
+    Indication of used directories is changed.
+    New label for start-time in snapshot incorporated.
+    Comment added.
+    Accept gzip, compress and plan mail-files.
+    Code re-layout.
+    Alternative source directory is possible.
+    Manual page extended.
+    Gunzip and plain-file added for scp/rcp.
+    Removed several options.
+    A fixed mode is used for all new files. The owner of the destination-directory is also used.
+    Added -q option to avoid certain messages.
+    Added compatibility with scc-transfer -s of release 1.2.10
+    Changed some names of variables.
+    Derive the permissions of the new files from dest. directory.
+  scc-update:
+    Update of SCC-data in the website.
+    Also update HREF for help-files.
+    Fixed URL for scc-srv documentation.
+    Update the document-root in the help-html-files when it has been changed in the config-file.
+    Options added to set properties in the data-directories.
+    Changed year in copyright notice.
+    Usage and location of scc.conf changed.
+    Use nice to reduce the system workload.
+    Do not call scc-summary and scc-smt when no files are transferred.
+    Corrected some typo's.
+    Added -f option. Renamed some variables.
+    Realm All does not need be processed first.
+    Create sub-directories and .htaccess for new realms.
+    Removed scc-srv(4) from SEE ALSO section of manual page.
+    Changed doc_root_dir to scc_web_path.
+    Support update of summaries for a single realm.
+    Set proper ownership/permissions for html-files updated with a new scc_web_path.
+    Fixed a typo.
+    Change the ownership of the logfiles too.
+    Updated manual page.
+    Syntax check corrected.
+    Added message when single realm is not a directory.
+    Do not chown the logfile of scc-transfer.
+    Change owner/group of log-directory/log-files.
+    -f option is also passed on to scc-summary.
+    Updated SEE ALSO section of manual page.
+    Maintenance of realm is moved to scc-realm.
+    Additional checks added for realm.
+    Determine document-root via configuration file.
+    Adapted PATH for SunOS, specified aliases for what, awk and grep.
+    Update the path for the logo-file in the html helpinfo files.
+    Added scc-realm to SEE ALSO section of manual page.
+  scc-wrapper.cgi:
+    Wrapper for scc.cgi.
+    Updated SEE ALSO section of manual page.
+    scc.cgi moved to $SCC_BIN.
+    The name of a realm can contain spaces.
+    Adapted PATH for SunOS, specified aliases for what, awk and grep.
+    Added scc-realm to SEE ALSO section of manual page.
+    Changed year in copyright notice.
+    Removed scc-srv(4) from SEE ALSO section of manual page.
+  pkg_files/postinstall:
+    Postinstall for scc-srv.
+    Superfluous code removed.
+    Changed sub-shell to back-tic.
+  pkg_files/postremove:
+    Cleanup after remove.
+  pkg_files/rpm-gen-scc-srv:
+    Generate scc-srv RPM.
+    Reduced the production of bin-files.
+    Changed images to custom.
+    Added scc-realm.conf.
+    HTML-pages with help-info added.
+    Additional help-info added.
+    Combined both help-info pages for searching.
+    Rearranged some files.
+    Put the html-files also under /opt/scc-srv/doc
+    README added.
+    The directory-tree with the source files reflects the structure
+    of the spec-file.
+    Directories changed for scc-srv.
+    Production of directory-specification changed.
+    Default directories added for default realm.
+    Removed man4.
+    Move logo to proper place,
+    Location of newconfig changed.
+    Location of newconfig corrected.
+    Added conf directory.
+

@@ -1,0 +1,232 @@
+<!DOCTYPE HTML>
+<HTML lang="en">
+	<HEAD>
+		<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+		<META NAME="description"	CONTENT="Frequently asked questions concerning System Configuration Collector.">
+		<META NAME="keywords"		CONTENT="SCC, System Configuration Collector, system configuration, configuration, configuration collector, logbook, FAQ">
+
+		<STYLE TYPE="text/css">
+.filename	{
+	font-style: italic;
+}
+
+.emphasis	{
+	font-weight: bold;
+}
+
+.question	{
+	font-style: italic;
+	font-weight: bold;
+}
+
+P.header	{
+	font-weight: bold;
+	font-size: 110%;
+}
+		</STYLE>
+		<LINK HREF="favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+		<TITLE>scc-srv FAQ</TITLE>
+	</HEAD>
+	<BODY>
+<TABLE style="margin: 0px auto; width:80%;">
+<TR><TD style="text-align:left;">
+		<H1>System Configuration Collector Server FAQ</H1>
+<P>
+<SPAN class="question">For which version of scc-srv is this FAQ?</SPAN>
+<BR>
+Release: 1.19.44
+<BR>
+Copyright (C) 2014-2018 QNH.
+Copyright (C) 2019 Siem Korteweg.
+<BR>
+<BR>
+
+<SPAN class="question">What to do when I find a bug?</SPAN>
+<BR>
+Check the SVN repository at <A HREF="https://sourceforge.net/p/sysconfcollect/code/HEAD/tree/scc-srv/trunk/">sourceforge</A>
+to find out whether the bug already has been fixed in the latest code.
+When that is not the case, please refer to the <A HREF="http://sysconfcollect.sourceforge.net/support.html">support</A> page of the website.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the rpm install fail with message: rpm is for a different operating system?</SPAN>
+<BR>
+The rpm is produced on a Linux system and therefore rpm 'complains' on systems with other operating systems.
+Use the --ignoreos option to install the rpm on a system with a different OS.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the rpm install fail with message: missing dependency /bin/sh?</SPAN>
+<BR>
+The install scripts of the rpms require /bin/sh and on systems where this in a symbolic link created in the postinstall of an rpm,
+it is not <SPAN class="emphasis">provided</SPAN> and the install fails.
+Use the --nodeps option to install the rpm in this case.
+Please use the --requires option to verify the requirements of the scc rpms.
+<BR>
+<BR>
+
+<SPAN class="question">How are snapshots compared?</SPAN>
+<BR>
+Parts of the snapshots of two different systems are compared to find the differences between these systems.
+All data whose classification start with 'fix' is extracted from the two snapshots into two temporary files.
+These two files are compared by means of diff and the output is processed to indicate to which snapshot/system each reported difference belongs.
+<BR>
+<BR>
+
+<SPAN class="question">Why is the picture of the logo missing on the main page?</SPAN>
+<BR>
+Run scc-update with the -d option to indicate the path of the logo under the document root.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the web interface not work?</SPAN>
+<BR>
+When you read the documentation in scc-srv(5) and still cannot find the cause, use scc-debug(1) to collect 
+specific configuration data of the server.
+Examine this data to find the cause of the problem.
+When you are unable to solve the problem and ask for assistance, please send this data along with the request.
+<BR>
+<BR>
+
+<SPAN class="question">Why does scc-realm --delete not delete a system?</SPAN>
+<BR>
+Make sure you correctly specified the name.
+The program will not report absent files for hosts whose names are misspelled.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the mailed SCC-data not arrive at the server?</SPAN>
+<BR>
+First, run scc-update with the -m option to indicate the ownership of the destination directory of the email.
+When this does not correct the problem, look into the mail log to find other problem area's.
+<BR>
+<BR>
+
+<SPAN class="question">Why does a new top-level class not appear in the list for comparing?</SPAN>
+<BR>
+To make scc-update faster, this list is not updated on every run of scc-update.
+Use the -f option to force scc-update to generate the lists based upon all systems in the realm.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the -f option of scc-summary not update the summary files?</SPAN>
+<BR>
+Make sure that the cache of your browser is not interfering.
+<BR>
+<BR>
+
+<SPAN class="question">Why is the style-sheet not working for the tables in the snapshot and logbook?</SPAN>
+<BR>
+Most likely the scc-data has not been added via scc-transfer(1).
+Use the -u option of scc-transfer(1) to import the data and then use scc-update(1) to process the html-files properly.
+<BR>
+<BR>
+
+<SPAN class="question">How can I import scc-data into the website?</SPAN>
+<BR>
+Usually scc-data is either pushed by clients or pulled by scc-pull(1). 
+Another (server) method is the -u option of scc-transfer(1) that requires the snapshot, logbook and their html-files to pack them for processing by scc-update(1).
+These files should reside on the scc-srv system and are packed and copied to the transfer directory of scc-srv, where
+a subsequent scc-update will add the files to the website.
+<BR>
+<BR>
+
+<SPAN class="question">How do I get data from systems with identical hostnames?</SPAN>
+<BR>
+SCC client uses hostname to name the files and this is also the system name in scc-srv.
+When 2 systems use the same hostname, the files of the last system overwrite in scc-srv the files of the first system.
+To avoid this, you should set the SCC_HOST_ALIAS variable in scc-localize of scc on one of these systems.
+Refer to scc(5) for details of this file.
+<BR>
+<BR>
+
+<SPAN class="question">How do I "randomize" running scc on many clients?</SPAN>
+<BR>
+When the -d or --delay option with scc or scc-pull is used, the software waits for a random number of seconds before collecting configuration data.
+The argument of this option specifies the maximum number of seconds to wait.
+<BR>
+<BR>
+
+<SPAN class="question">Why am I unable to find data for "foo*matic"?</SPAN>
+<BR>
+The input field for the search is handed over to grep, so you have to use regular expression syntax.
+So, use "foo.*matic" to search for a wild-card.
+<BR>
+<BR>
+
+<SPAN class="question">Why is the searched data by default limited to 10 lines?</SPAN>
+<BR>
+Searching for non-specific data in a large list of systems, will flood your browser.
+To avoid this, the number of lines is limited to 10 when multiple systems are searched and 1000 when a single system is searched.
+Uncheck the 'Limit search results per hosts' checkbox to remove this limit.
+<BR>
+<BR>
+
+<SPAN class="question">When do you plan to move to a mysql backend to store the data?</SPAN>
+<BR>
+There is little use for a database backend as all data is already classified by the client parts of SCC.
+As grep and diff are sufficiently optimized, little performance boost is to be expected from a database backend.
+<BR>
+<BR>
+
+<SPAN class="question">How can I handle a huge list of systems?</SPAN>
+<BR>
+You can use realms to group systems.
+Access to data and several configuration items can be altered per realm.
+Use scc-realm to create and maintain realms.
+It is also possible to assign the SCC-data from new systems automatically to certain realms by means of the scc-auto-realm.conf configuration file.
+Refer to the manual pages for more information.
+<BR>
+<BR>
+
+<SPAN class="question">Why does scc-transfer report about a saved snapshot and log file for a host?</SPAN>
+<BR>
+The new log file must contain the date and time of the current snapshot on the server.
+When this is not the case, the new log file may be the result of a run on a system with a restore of an old backup
+or the scc data arrives in the wrong order (when the mail connection was down for some time).
+To avoid loss of data, the snapshot and logbook on the server are renamed before the newly arrived data is put in place.
+Inspection of the renamed and newly arrived data cannot be done via the web-interface, it has to be done via the command-line.
+<BR>
+<BR>
+
+<SPAN class="question">At what frequency should I run scc-update?</SPAN>
+<BR>
+The frequency and time of running scc-update should match the frequency and time of running SCC on the clients.
+When the clients send their data during the entire day, you can run scc-update on an hourly base.
+<BR>
+<BR>
+
+<SPAN class="question">How can I transfer SCC data from clients to server?</SPAN>
+<BR>
+Basically there are three setups: push, pull and two-step.
+Refer to manual page scc-srv(5) for more details.
+<BR>
+<BR>
+
+<SPAN class="question">Why does scc-pull with -u option fail after upgrading the scc client?</SPAN>
+<BR>
+This happens when the client is installed via RPM and the client did not yet run with the -u option.
+In that case the permissions of the transfer directory on the client are reset and have insufficient permissions to grant a non-root user acces from scc-srv.
+Run the client with the -u option before running scc-pull with the -u option to correct this.
+<BR>
+<BR>
+
+<SPAN class="question">Is it possible to preserve scc-data from obsolete systems?</SPAN>
+<BR>
+Use the -A option from scc-realm(1) to archive systems from a realm that are no longer in use.
+You can combine this with the -d option to remove these systems to avoid them clobbering the web-interface.
+<BR>
+<BR>
+
+<SPAN class="question">How do I remove scc-srv from a system?</SPAN>
+<BR>
+Start by removing the integration with Apache by means of "/opt/scc-srv/bin/scc-setup -r".
+Then remove the scc-srv software and configuration via the delete/remove option from the package manager or (in case of source install) issue command "rm -rf /opt/scc-srv /etc/opt/scc-srv".
+Finally remove the scc-srv data by means of "rm -rf /var/opt/scc-srv".
+Do not forget to reconfigure scc clients sending their data to scc-srv.
+</P>
+
+</TD></TR>
+</TABLE>
+</BODY>
+</HTML>

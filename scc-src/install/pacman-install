@@ -1,0 +1,67 @@
+#!/bin/sh
+
+# Shell script to handle installs on archlinux with pacman.
+# Copyright (C) 2007-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: pacman-install 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This script is either sourced or called directly. We have to support both ways.
+
+# The available functions after soucring this file:
+pre_install() {
+	[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --preinstall
+	return
+}
+
+pre_upgrade() {
+	pre_install
+	return
+}
+
+post_install() {
+	[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --postinstall
+	return
+}
+
+post_upgrade() {
+	post_install
+	return
+}
+
+# The supported values for the first argument:
+case "${1}" in
+pre_install)	# check for previous version of software
+	pre_install
+	;;
+
+pre_upgrade)	# check for previous version of software
+	pre_install
+	;;
+
+post_install)	# run the new version of the software
+	post_install
+	;;
+
+post_upgrade)	# run the new version of the software
+	post_install
+	;;
+esac

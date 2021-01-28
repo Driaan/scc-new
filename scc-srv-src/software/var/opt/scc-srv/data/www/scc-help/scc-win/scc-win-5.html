@@ -1,0 +1,262 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc-win 5 "SCC-WIN" </TITLE>
+</HEAD><BODY>
+<H1>scc-win(5)</H1>
+<PRE>
+
+
+
+1mNAME0m
+       scc-win - introduction SCC
+
+
+1mRELEASE0m
+       scc-win	 1.10.38
+
+
+1mDESCRIPTION0m
+       System  Configuration Collector for Windows is a clone of SCC for Unix.
+       It uses WMI to access system to collect their configuration data.   The
+       file  formats  are  identical  to SCC for Unix.	Each line of collected
+       data is extended with a hierarchical classification of  the  nature  of
+       the  data  and  with  an	 indicator whether that data is supposed to be
+       static or dynamic.  For example: the size of a file  system  is	static
+       data  and the current usage is dynamic data. Consecutive collections of
+       configuration data (snapshots) are  compared  and  differences  in  the
+       static  data  are added to a logbook. Filling a file system will not be
+       reported in the logbook, but the extension of a file  system  will  be.
+       Additional software converts the snapshot and logbook to html-format.
+
+       The  classification  of the data is a hierarchy with the following top-
+       level items (among others):
+
+       - general
+       - boot
+       - hardware
+       - kernel
+       - network
+       - software
+       - system
+       - users
+
+       Development of SCC started for Unix and later Windows was added.
+
+
+1mINSTALLATION0m
+       From release 1.7 onwards, SCC for Windows is available as a 32-bit  MSI
+       generated  by  means of Wix (http://wixtoolset.org/).  As this MSI does
+       not recognize installs of versions 1.6 and earlier, you	will  have  to
+       explicitly  uninstall the previous version (after running it to collect
+       any changes up to the upgrade).	The new version uses the same  folders
+       and  scripts  as the 1.6 release and thus the scheduling of SCC runs is
+       identical.  From release 1.7 onwards, SCC is not run from the  install‐
+       er.  Use your own scheduling before and after the install.
+
+       SCC  uses  WMI  to  access  other  systems than it is installed on.  It
+       requires perl on the system it is installed on.	 The  executable  perl
+       should  be  in  the PATH when SCC is run.  The current release has been
+       tested with the perl distribution from Active State:
+       http://aspn.activestate.com/ASPN/Downloads/ActivePerl/
+       The software installs by default in "c:\program	files  (x86)\scc\bin".
+       SCC-data is located in the data folder.	Temporary files are located in
+       tmp and documentation in the doc folder.	 The shortcuts in the  program
+       group point to the proper files.
+
+       Before  installing  an  upgrade of SCC, run SCC for all systems you are
+       collecting data from.  Otherwise all changes between the last  run  and
+       the  upgrade are lost.  The new version of SCC will detect the old lay‐
+       out of the present snapshots and ignore all changes.  This is  done  to
+       avoid  numerous changes in the logbook when the layout of the snapshots
+       has changed.  Therefore you should not wait too long before running SCC
+       after  upgrading	 to  avoid missing changes between the upgrade and the
+       next (scheduled) run of SCC.
+
+       When SCC is uninstalled, the directories 4mbin24m and 4mdoc24m are removed.   The
+       4mdata24m  and 4mtmp24m directories remain intact to support upgrades.  They have
+       to be removed manually when you no longer want to use SCC.
+
+
+1mDEPENDENCIES0m
+       The software uses several other open source programs.
+
+       http://gnuwin32.sourceforge.net/packages/bsdtar.htm
+       From bsdtar for Windows the following files are included	 from  version
+       2.4.12:
+       - bsdtar.exe
+       - libarchive2.dll
+       - bzip2.dll (version 1.0.5)
+       - zlib1.dll (version 1.2.3)
+
+       http://gnuwin32.sourceforge.net/packages/coreutils.htm
+       From coreutils the following file is included from version 5.3.0:
+       - sort.exe
+
+       http://gnuwin32.sourceforge.net/packages/diffutils.htm
+       From  DiffUtils for Windows the following file is included from version
+       2.8.7:
+       - diff.exe
+
+       The two above programs require the  following  libraries	 that  can  be
+       downloaded from either of the two above pages:
+       - libiconv2.dll
+       - libintl3.dll
+
+       http://gnuwin32.sourceforge.net/packages/openssl.htm
+       From OpenSSL the following files are included from version 0.9.8h:
+       - openssl.ex
+       - libssl32.ddl
+
+       http://www.blat.net
+       To  send	 email	from  the command-line, the following file is included
+       from version 3.2.3:
+       - blat.exe
+
+       http://www.chiark.greenend.org.uk/~sgtatham/putty/download.html
+       To transfer files by means of scp, the following file is included  from
+       version 0.71:
+       - pscp.exe
+
+
+
+1mCOMMUNICATION0m
+       The  data  that	is  collected  can  be sent to the server part of SCC.
+       Assume  that  the  data	should	be  sent  to  directory	 /var/opt/scc-
+       srv/data/transfer/cp/,	  owned	   by	 user	 root,	  on	system
+       scc_srv.domain.com.
+
+       The first step is to get the host-key  of  scc_srv.domain.com  in  your
+       local  cache.  To achive this, we start a dummy copy operation in a cmd
+       box:
+
+
+       The servers host key is not cached in the registry. You
+       have no guarantee that the server is the computer you think it is.
+       The servers dss key fingerprint is:
+       ssh-dss 1024 a1:4e:1b:6a:18:1a:7f:34:fa:25:32:5a:5f:64:ea:d5
+       If you trust this host, enter "y" to add the key to
+       PuTTYs cache and carry on connecting.
+       If you want to carry on connecting just once, without
+       adding the key to the cache, enter "n".
+       If you do not trust this host, press Return to abandon the
+       connection.
+       Store key in cache? (y/n) y Enter
+       root@scc_srv.domain.coms password:
+
+       Enter a bogus password to abort the transfer, as we do not really  want
+       to copy scc.pl to the server.
+
+       Now generate a local rsa-key using WinSCP.
+
+       - locate and start PUTTYGEN.exe
+       - click Generate
+       - move the mouse around as instructed to create entropy
+       - in the box labelled "Key comment", type in a short string to identify
+       yourself e.g. scc_from_your_client.domain.com (no spaces!)
+       - do not select a passphrase
+       - click both  the  Save	buttons	 and  name  your  keys,	 traditionally
+       id_rsa.pub  for public key and id_rsa for private key (it will be named
+       id_rsa.PPK) in the scc\bin folder.
+       - select the contents of the box at top of the PuTTYgen (labelled "Pub‐
+       lic key for pasting into OpenSSH authorized_keys file").
+       -   paste   the	 key  into  the	 file:	~root/.ssh/authorized_keys  on
+       scc_srv.domain.com (make sure to have mode 700 for .ssh/	 and  600  for
+       authorized_keys)
+
+       Now issue the command:
+
+	  perl scc.pl --prog scp --pki id_rsa.ppk \
+		      --dest root@scc_srv.domain.com:/var/opt/scc-srv/data/transfer/cp
+
+       All  scc-data  from the Windows system(s) is transferred to scc-srv and
+       will be shown after the next run of scc-update.	Note that you have  to
+       use  the	 -f option for scc-update to add the name of the new client to
+       the lists of the index.html file of the realms on the server.
+
+       To enhance security, the transfer can be done via a separate,  non-root
+       account	scc. Create a subdirectory scc in /var/opt/scc-srv/data/trans‐
+       fer/cp, chown this directory to user scc and add the  public  key  from
+       puttygen to the file ~scc/.ssh/authorized_keys.
+
+
+1mPROGRAMS0m
+       The programs of SCC have the following relationship:
+
+       scc: main program
+       this program calls scc-log and sends data to the SCC-server.
+       scc-log: this program calls:
+       - scc-collect: collect all data by calling modules in scc_modules
+       - compare new and old snapshots, add differences to logbook
+       - scc-snap2html: convert snapshot to HTML
+       - scc-log2html: convert logbook to HTML
+
+
+1mUSING SCC0m
+       After  the  installation, the data is available in directory 4mdata.24m	The
+       file 4mscc.&lt;hostname&gt;.log24m contains the logbook and  the  file	 4mscc.&lt;host‐0m
+       4mname&gt;.cur24m contains the current snapshot.
+
+       To  run SCC again, just start 4mscc.24m	To keep an accurate logbook of your
+       system, you can schedule it daily.  Just make sure you "run as"	admin‐
+       istrator.   Being a member of the local admin group is insufficient for
+       collecting some of the data.
+
+       To run SCC on several systems, use the --file option to indicate a file
+       containing  the	names  of the systems you want SCC to run on.  You can
+       also use the --list option to specify the systems in a  comma-separated
+       list.   Finally you can use the --netview option to run SCC on all sys‐
+       tems reported by command "net view".  In	 any  case,  you  need	domain
+       admin priviliges to collect data remotely via WMI from other systems.
+
+       Use  your favorite scheduler (scheduled actions) to schedule scc-win to
+       run on a regular basis.
+
+
+1mCUSTOMIZING/EXTENDING SCC0m
+       1mscc-collect(1) 22mcollects OS and OS-related configuration data.  It  does
+       not  collect  data  of  the  applications you developed.	 To extend the
+       snapshots, refer to the manual page  of	1mscc-plugin(1).   22mIt  offers  a
+       starting point to collect other configuration data.
+
+
+1mPERFORMANCE0m
+       Usually scc completes its runs within several seconds.  When you notice
+       that runs of scc on a system take very long to complete,	 you  can  use
+       the  profiling data to determine the cause.  Profiling data is added to
+       the snapshot and can be found in the html-file  under  the  classifica‐
+       tion:  "profiling".   Each  line	 of the profiling data consists of the
+       following fields:
+       - timestamp
+       - seconds since previous stamp
+       - seconds since start of run
+       - comment
+       Look for large values in the second column to locate the	 code  of  scc
+       that is causing this performance problem.  You can also use the --trace
+       option to actually see the progress of the collection of the data.
+
+
+1mLIMITATIONS0m
+       The system module of SCC is partially skipped when it is installed on a
+       win2k  system as the schtasks.exe program is not present on the system.
+       Install SCC on a more recent version of Windows and  collect  the  data
+       remotely.  This has been reported by Markdmcbride.
+
+
+1mCOPYRIGHT0m
+       SCC is free software under the terms of the GNU General Public License.
+       Copyright (C) 2006-2018 QNH, 2019 Siem Korteweg.
+
+
+1mSEE ALSO0m
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-win-4.html">scc-win(4)</A>, <A HREF="scc-win-5.html">scc-win(5)</A>
+
+
+1mVERSION0m
+       $Revision: 6241 $
+
+
+
+</PRE>
+</BODY></HTML>

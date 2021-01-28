@@ -1,0 +1,108 @@
+#!/bin/sh
+
+# Shell script for plugins for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc-plugin 6297 2019-12-20 20:31:48Z siemkorteweg $
+
+
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+ProgName=${0##*/};			export ProgName
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+# NOTICE
+# When you use this program to create a new module, copy it to the
+# directory /opt/scc/bin/scc_modules using the naming format for the
+# user modules: scc_9999_u_NAME scc_9999_s_NAME. Where 9999 is a 
+# four-digit number used to order the execution of the modules 
+# and NAME is the readable name. The _u_ and _s_ indicate an
+# user and system module. Use the system module for data required
+# on each run of scc (including pre- and post-install).
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# Start the code for the plugin.
+
+# Notice:
+# - all output lines should start with "fix:", "var:" or "hlp:".
+# - refer to scc_utils for the functions that are provided.
+
+# When called by scc-collect, the following file(names) are available:
+#	${PROC_FILE}		all processes at the moment scc-collect started
+#	${TMP1_FILE}		empty, temporary file
+#	${TMP2_FILE}		empty, temporary file
+#	${TMP3_FILE}		empty, temporary file
+#	${SCC_KEEP_CONFIG}	file with data from previous run
+#	${SCC_KEEP_NEW}		file with data to keep for next run
+#	${SYSCTL_DATA}		file containing all sysctl data
+#	Some scc-data is determined by means of path-names of running
+#	processes. To avoid changes in the logbook when the these processes
+#	are inactive, we store this process data in the keep-file. When the
+#	processes are inactive, we use the data from the keep-file. After using
+#	it, we have to add this data to ${SCC_KEEP_NEW} for the next run of scc.
+
+# When called by scc-collect, the following environment variables are available:
+#	SCC_MODULE		name of the current module
+#	OS_NAME			name of the OS: HP-UX SunOS, Linux, AIX
+#	HOSTNAME		hostname (without domain)
+#	IS_NIS_MASTER		0/1 indicator for a NIS master-server
+#	NIS_DATA_DIR		source directory for NIS-maps
+#	HPUX_KERNEL		path of the HP-UX kernel
+#	MAX_SYS_ACCOUNT_ID	max uid for system-users
+#	SCC_RELEASE		release identification
+#	SCC_INSTALL_PHASE	"empty", "preinstall", "postinstall" or "preremove"
+#	SCC_INSTALL_METHOD	"source" or empty
+#	SCC_PROFILING		non-empty indicates recording of profiling data in snapshot
+#	SCC_LINUX_DISTRO	name of Linux distro, or empty
+#	crypt_key		key string for generating checksums
+
+# To collect extra files from home directories, use a number larger than 1000 for a new
+# module to run after the default user module and get the preserved local home directory 
+# paths via the following command:
+#
+#       grep :user:local_home_directory::user: ${SCC_KEEP_NEW}
+#
+# The resulting data has the following format:
+#
+#       <prefix>:user:local_home_directory::user:<user_name>:dir:<directory>
+#
+# Where <prefix> is "var" or "fix" for (non)privileged users
+
+# Refer to https://github.com/BillDietrich/SCC-Additions-for-Desktop-Linux
+# for examples of user modules.
+
+exit 0

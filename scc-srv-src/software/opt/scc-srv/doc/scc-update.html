@@ -1,0 +1,186 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-update</TITLE></HEAD><BODY>
+<H1>scc-update(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-update - update SCC-data in website
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-srv	1.19.44
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-update [ -d|--directory &lt;scc_web_path&gt; ] [ -f|--force ] [ -m|--mail &lt;mail_ug&gt; ]
+	        [ -o|--option notransfer ] [ --postinstall ] [ --preremove ]
+	        [ -w|--web &lt;web_usr&gt; ] [ &lt;dir&gt; ]
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program transfers SCC-data from the transfer-area to the website
+	and generates summaries. It uses the programs: scc-transfer, 
+	scc-summary and scc-select. Refer to the respective manual pages for
+	more details.
+
+	The population of realm can be controlled by means of <A HREF="scc-realm.html">scc-realm(1)</A>
+	or by the file custom/scc-auto-realm.conf in a realm. This file contains
+	several criteria (hostname, OS, domain) to select or deselect a system
+	for a realm. Refer to the EXAMPLES section for more details.
+
+	By using the options, the proper ownership is set for the delivery of
+	snapshots via email and for the ownership of the files for the web server.
+	This needs to be done only once after installing the software.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	-d|--directory &lt;scc_web_path&gt;   Path under DocumentRoot, default is: "/"
+	                                Note: this is the full path from the document-root to the
+	                                SCC-data. It only needs to be specified once, as it is
+	                                recorded in the file /var/opt/scc-srv/conf/scc.conf
+	-f|--force                      Force summaries. By default no summaries are generated
+	                                when scc-transfer did not transfer any data.
+	-m|--mail &lt;mail_ug&gt;             Set the user:group for the directories for the delivery 
+	                                of snapshots via email. Required only once after first
+	                                install.
+	-o|--option notransfer          No transfer of SCC data before updating the summaries.
+	--postinstall                   Postinstall configuration of website.
+	--preremove                     Remove all data prior to removing softdware.
+	-w|--web &lt;web_usr&gt;              Set the user for the directories of the web server. Required
+	                                only once after first install.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;dir&gt;           Optional sub-directory of /var/opt/scc-srv/data/www
+	                to update summaries. By default all sub-directories
+	                are processed.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-update [ -d|--directory &lt;scc_web_path&gt; ] [ -f|--force ]
+	        [ -m|--mail &lt;mail_ug&gt; ] [ -o|--option notransfer ] [--postinstall] [--preremove]
+	        [ -w|--web &lt;web_usr&gt; ] [ &lt;dir&gt; ]
+	A syntax error has been detected.
+
+	scc-update: Syntax error, missing argument for option: &lt;option&gt;
+	The argument for &lt;option&gt; is missing.
+
+	scc-update: unknown argument for -o option: &lt;arg&gt;
+	Check the manual page for the supported arguments of the -o option.
+
+	scc-update: realm &#39;&lt;dir&gt;&#39; not found
+	The specified directory is not found.
+
+	scc-update: another instance is active, check process ID in &lt;lock&gt;
+	Another instance of scc-update is active. Remove the lock file only when 
+	you are certain that scc-update is not running.
+
+	scc-update: insufficient permissons to generate summaries
+	Run the program as a different user (root).
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	/var/opt/scc-srv/data/www - base-directory for separate realms
+	When this directory does not exist, the program terminates. Refer
+	to <A HREF="scc-realm.html">scc-realm(1)</A> for the notion of realms, their setup and
+	maintenance.
+	In each realm the file custom/scc-auto-realm.conf is used to automate populating
+	the realm.
+	/var/opt/scc-srv/conf/scc.conf - configuration file, records
+	        the settings of the -d option
+	/var/opt/scc-srv/data/log - directory for log files
+	        scc-update.log - global logfile, without file no logging
+		scc-autorealm.log - autorealm actions, without file no logging
+	/var/opt/scc-srv/data/www/lock - global lockfile
+	/var/opt/scc-srv/data/transfer/mail_user_group - record -m option for upgrade of
+	        scc-srv
+
+</PRE>
+<H2> EXAMPLES</H2>
+<PRE>
+
+	To set the owners of the directories:
+
+	   RedHat workstation: scc-update -m mail:mail -w apache
+	   SuSE workstation:   scc-update -m daemon:daemon -w wwwuser
+
+	The contents of a scc-auto-realm.conf file are:
+
+		&lt;action&gt;:&lt;hostname&gt;:&lt;domain&gt;:&lt;OS&gt;:&lt;OS-release&gt;
+
+	Where &lt;action&gt; is either "add" or "skip". The other fields are regular expressions. 
+	Check the file scc-summary.data for the current values in the All realm.
+	Empty lines and lines starting with "#" are ignored.
+
+	To add all HP-UX hosts to a realm specific for the OS, use the following config:
+
+		add:.*:.*:HP-UX:.*
+
+	To add all hosts except those in development domains, use:
+
+		skip:.*:.*development.*:.*:.*
+		add:.*:.*:.*:.*
+
+	Processing of a host stops when a match is found in the config file.
+
+	To add all hosts where the domain cannot be determined (or is absent), use:
+
+		add:.*::.*:.*
+
+	All empty entries represent absent data.
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-update is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+	<A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+	<A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+	<A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6217 $
+
+</PRE>
+</BODY></HTML>

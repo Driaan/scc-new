@@ -1,0 +1,751 @@
+#!/bin/sh
+
+# Shell script to summarize System Tools from snapshots for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-smt 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_NEWCONF=/var/opt/scc-srv/newconfig
+export SCC_TMP=/tmp
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+export LANG=C
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};		export PATH
+
+if [ -d /usr/xpg4/bin ]
+then
+	PATH=/usr/xpg4/bin:${PATH}
+fi
+
+SYNTAX="Syntax error, use: ${ProgName} [ -d|--directory <scc_web_path> ] <realm>"
+
+scc_web_path_dir=""
+while [ $# -gt 2 ]
+do
+	case "${1}" in
+	-d|--directory)	if [ "${2}" != "/" ]
+			then
+				scc_web_path_dir="$2"
+			fi
+			shift 2;;
+
+	*)		echo "${SYNTAX}" >&2
+			exit 1;;
+	esac
+done
+
+if [ $# -ne 1 ]
+then
+	echo "${SYNTAX}" >&2
+	exit 1
+fi
+
+realm="${1}"
+if [ ! -d "${SCC_WWW}/${realm}" ]
+then
+	echo "${ProgName}: directory ${SCC_WWW}/${realm} does not exist" >&2
+	exit 1
+fi
+cd "${SCC_WWW}/${realm}"
+
+if [ -z "${scc_web_path_dir}" ]
+then
+	scc_web_path_dir="$(sed -n 's/^SCC_WEB_PATH=//p' ${SCC_CONF}/scc.conf 2>/dev/null)"
+fi
+
+web_realm_dir="${scc_web_path_dir}/${realm}"
+HOME_URL="<A HREF=\"${web_realm_dir}/index.html\">Home</A>&nbsp;&nbsp;&nbsp;&nbsp;"
+
+# Use the owner/group/permissions of the destination directory for the files we put there.
+# We are only interested in the read-permissions of the directory.
+set dummy $(ls -ld .)
+case "${2}" in
+?r??r??r??*)	new_mode=0444; umask 333;;
+?r??r??-??*)	new_mode=0440; umask 337;;
+?r??-??-??*)	new_mode=0400; umask 377;;
+?r??-??r??*)	new_mode=0404; umask 373;;
+*)		new_mode=0400; umask 077;;
+esac
+new_owner_group="${4}:${5}"
+
+smt_file=""
+if [ -f "custom/scc-smt-select" -o -h "custom/scc-smt-select" ]
+then
+	smt_file="$(pwd)/custom/scc-smt-select"
+else
+	# No SMT selection file present.
+	> scc-smt-index.html			# No remove to preserve owner and seleinux context
+	> scc-smt-config.html			# No remove to preserve owner and seleinux context
+	rm -f scc-smt.data 
+	find . -type f -name "scc.*.smt.html" 2>/dev/null	|
+	xargs rm -f
+
+	exit 0
+fi
+
+logo_tag="<IMG SRC=\"${web_realm_dir}/custom/scc-logo.png\" ALT=HelpInfo>"
+
+if [ ! -f scc-summary.data ]
+then
+	echo "${ProgName}: file scc-summary.data does not exist" >&2
+	exit 1
+fi
+
+TMP_FILE=${SCC_TMP}/smt_$$
+SMT_VERSIONS=scc-smt.data
+
+trap 'rm -f ${TMP_FILE}' 0
+trap "exit 2" 1 2 3 15
+
+if [ ! -f ${smt_file} ]
+then
+	echo "${ProgName}: file ${smt_file} does not exist" >&2
+	exit 1
+fi
+
+# Ignore comments and blank lines in the selection-file.
+sed -e '/^#/d' -e '/^[ 	]*$/d' ${smt_file} >${TMP_FILE}
+
+# Use scc-summary.data to determine all system file names, format is:
+# "general_data":<host>:<model>:<os>:<release>:<last_day>:<last_time>:<domain>:<runtime>:<size>:<virtualization>
+awk -F: '{ print "scc." $2 ".cur" }' scc-summary.data 2>/dev/null	|
+xargs fgrep -f ${TMP_FILE} /dev/null					|
+awk -F: '/'"$(basename ${smt_file})"'/	{
+			# The client collects the contents of the specification file of this program.
+			# The contents match the patterns of the next line.
+			# Ignore the contents of this file to avoid bogus data in the report.
+			next
+		}
+	/\.cur:fix:software:installed-filesets::/	{
+			# Format of input is:
+			# scc.host.cur:fix:software:installed-filesets::# SCC   1.2.10   System Configuration Collector
+			sub( "^[# ]*", "", $6 );		# remove leading chars
+			sub( "[ 	][ 	]*", ":", $6 );	# join name and version
+			sub( "[ 	].*", "", $6 );		# erase description
+			printf( "%s:%s\n", $1, $6 );		# Name and version are joined in $6
+			next
+		}
+	/\.cur:fix:software:installed-packages:/	{
+			# Format of input is:
+			# scc.host.cur:fix:software:installed-packages:<cat>::<name>:<desc>:<version>:<pstamp>
+			if ( $7 == "OPC" && $8 == "HP" )
+			{
+				# OPC-agent on Sun is indicated by OPC and HP. 
+				# Map this to the same name as on HP-UX.
+				# "system::OPC:HP:A.6.11
+				printf( "%s:%s:%s\n", $1, "OVOPC-AGT", $9 )
+			}
+			else
+			{
+				# We do not need the detailed (date) version
+				sub( ",REV=.*", "", $9 )
+				printf( "%s:%s:%s\n", $1, $7, $9 )
+			}
+			next
+		}
+	/\.cur:fix:software:installed-aix-filesets::/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:installed-aix-filesets::/usr/lib/objrepos:IMNSearch.rte.httpdlite:2.0.0.1::COMMITTED:I:NetQuestion Web Server
+			if ( $7 == "scc.rte" || $7 == "scc-srv.rte" )
+			{
+				# For installp ".rte" is added to indicate the fileset in the package.
+				# As installp requires four elements in the version, our packaging scripts add a ".1".
+				# Convert the version of scc and scc-srv for scc-smt only to indicate that the version
+				# is identical with other formats.
+				sub( "[.]rte", "", $7 )
+				sub( "[.]1$", "", $8 )
+			}
+			printf( "%s:%s:%s\n", $1, $7, $8 )
+			next
+		}
+	/\.cur:fix:software:installed BSD packages::/	{
+			# Format of the input is (from pkg query):
+			# name:version:offset(group):architecture:repo:comment
+			printf( "%s:%s:%s\n", $1, $6, $7 )
+			next
+		}
+	/\.cur:fix:software:installed-BSD-packages::/	{
+			# Format of the input is (from pkg_info):
+			# scc.host.cur:fix:software:installed-BSD-packages::scc-1.6.3	System Conf...
+			# scc.host.cur:fix:software:installed-BSD-packages::scc-srv-1.3.25-OpenBSD  ....
+			sub( "[ 	].*", "", $6 );		# erase description
+			sub( "-OpenBSD$", "", $6 );		# erase OS
+			cnt = split( $6, parts, "-" )
+			version = parts[ cnt ]
+			name = parts[ 1 ]
+			for ( i = 2; i < cnt; i++ )
+			{
+				name = sprintf( "%s-%s", name, parts[ i ] )
+			}
+			printf( "%s:%s:%s\n", $1, name, version )
+			next
+		}
+	/\.cur:fix:software:installed Debian packages::/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:installed Debian packages::ii  scc   1.6.3                System Conf...
+			# Name and Version can contain arch and "epoch" separated with ":"
+			sys = $1
+			sub( ".*packages::....", "", $0 )
+			name = $0
+			sub( " .*", "", name )
+			sub( ":.*", "", name );				# Erase architecture
+			version = $0
+			sub( "^[^ ][^ ]* *", "", version );		# Erase Name field
+			sub( " .*", "", version )
+			sub( "^[0-9]*:", "", version );			# Erase "epoch"
+			printf( "%s:%s:%s\n", sys, name, version )
+			next
+		}
+	/\.cur:fix:software:installed pisi packages::/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:installed pisi packages::scc:1.8.9:System Configuration Collector
+			printf( "%s:%s:%s\n", $1, $6, $7 )
+			next
+		}
+	/\.cur:fix:software:installed CRUX packages::/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:installed CRUX packages::autoconf:2.61-1
+			printf( "%s:%s:%s\n", $1, $6, $7 )
+			next
+		}
+	/\.cur:fix:software:pacman packages:/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:pacman packages::acl 2.2.52-1
+			# scc.host.cur:fix:software:pacman packages::util-linux-2.23
+			cnt = split( $6, parts, " " )
+			if ( cnt == 1 )
+			{
+				name = $6
+				sub( "-[0-9].*", "", name )
+				version = $6
+				sub( "[a-zA-Z-]*", "", version )
+			}
+			else
+			{
+				name = parts[ 1 ]
+				version = parts[ 2 ]
+			}
+			printf( "%s:%s:%s\n", $1, name, version )
+			next
+		}
+	/\.cur:fix:software:installed Puppy:/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:installed Puppy:user-installed-packages::scc-1.18.89|scc|1.18.89|||||scc-1.18.89.pet|
+			cnt = split( $7, parts, "|" )
+			printf( "%s:%s:%s\n", $1, parts[ 2 ], parts[ 3 ] )
+			next
+		}
+	/\.cur:fix:software:installed vsphere vib:/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:installed vsphere vib::scc,1.24.220,QNH,CommunitySupported,
+			cnt = split( $7, parts, "," )
+			printf( "%s:%s:%s\n", $1, parts[ 1 ], parts[ 2 ] )
+			next
+		}
+	/\.cur:fix:software:slitaz packages:/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:slitaz packages:<group>::autoconf:2.61-1
+			printf( "%s:%s:%s\n", $1, $7, $8 )
+			next
+		}
+	/\.cur:fix:software:installed Slackware packages:/	{
+			# Format of the input is:
+			# scc.host.cur:fix:software:installed Slackware packages::scc-1.18.85-noarch-1:
+			name = $6
+			sub( "-[0-9].*", "", name )
+			version = $6
+			sub( "[a-zA-Z-]*", "", version )
+			printf( "%s:%s:%s\n", $1, name, version )
+			next
+		}
+	/\.cur:fix:software:installed software::/	{
+			# Suggested by Jacco Dunweg:
+			# This classification is not produced by scc_0630_s_pkgmngt,
+			# but added to provide a mechanism for software that is not installed
+			# by one of the supported package management software in the client.
+			# To add other software to the summaries of scc-smt, add data to
+			# the snapshot with classification: fix:software:installed software::<name>:<version>
+
+			# Format of the input is:
+			# scc.host.cur:fix:software:installed software::autoconf:2.61-1
+			printf( "%s:%s:%s\n", $1, $6, $7 )
+			next
+		}
+	/\.cur:fix:software:installed-source:/		{
+			# This is a specific hack in the client to registrate the
+			# version of scc installed from source.
+			# Format of input is:
+			# "scc.host.cur:fix:software:installed-source::scc:1.6.3
+			printf( "%s:%s:%s\n", $1, $6, $7 )
+			next
+		}
+	/\.cur:fix:software:product:.*::Version[ 	]/	{
+			# This is for Windows hosts, format of the input is:
+			# scc.host.cur:fix:software:product:QuickTime::Version                  : 7.1
+			# For some products, the version is absent. 
+			# We need a value to display the systems per version.
+			if ( $8 ~ "^[ 	]*$" )
+			{
+				$8 = "-"
+			}
+			printf( "%s:%s:%s\n", $1, $5, $8 )
+			next
+		}
+	/\.cur:fix:software:installed-rpms:/		{
+			# Format of input is:
+			# scc.host.cur:fix:software:installed-rpms:%{GROUP}::%{NAME}:%{VERSION}-%{RELEASE}
+			if ( $7 == "scc" || $7 == "scc-srv" )
+			{
+				# RPM uses a dash to separate the least significant part of the version.
+				# Other package management software only use dots to separate elements of the version.
+				# Convert the version of scc and scc-srv for scc-smt only to indicate that the version
+				# is identical with other formats.
+				sub( "[-]", ".", $8 )
+			}
+			printf( "%s:%s:%s\n", $1, $7, $8 )
+			next
+		}'					|
+sed	-e 's@^scc\.@smt-data:@'	\
+	-e 's/\.cur//'					|
+sort -f -u >${SMT_VERSIONS}
+
+(
+	echo "Product;Version;Host"
+	sort -t: -f -k 3 -k 4 -k 2 ${SMT_VERSIONS}		|
+	awk -F: '{ printf( "%s;%s;%s\n", $3, $4, $2 ); }'
+) >scc.smt.csv
+
+chown "${new_owner_group}" ${SMT_VERSIONS} scc.smt.csv
+
+now=$(date '+%Y-%m-%d %H:%M')
+
+copy_right="<P>Generated by SCC-SRV version 1.19.44 (&copy; Siem Korteweg) on ${now}</P>"
+
+# Build all the scc.<sys>.smt.html files
+awk -F: 'BEGIN	{
+			c[ 0 ] = "Even"
+			c[ 1 ] = "Odd"
+		}
+	/^general_data:/	{
+		# Format of the input is: "general_data":<host>:<model>:<os>:<release>:<last_day>:<last_time>:<domain>:<runtime>:<size>:<virtualization>
+
+		curr_smt = sprintf( "./scc.%s.smt.html", $2 )
+		visited[ $2 ] = 1
+
+		print "<!DOCTYPE HTML>"							>curr_smt
+		print "<HTML lang=\"en\">"						>>curr_smt
+		print "<HEAD>"								>>curr_smt
+		printf( "<LINK HREF=\"%s/%s/custom/style.css\" REL=\"stylesheet\" TYPE=\"text/css\">\n",
+			d, r )								>>curr_smt
+		printf( "<LINK HREF=\"%s/%s/custom/favicon.ico\" REL=\"shortcut icon\" TYPE=\"image/x-icon\">\n",
+			d, r )								>>curr_smt
+		printf( "<TITLE>System Tools: %s</TITLE>\n", $2 )			>>curr_smt
+		print "</HEAD>"								>>curr_smt
+		printf( "<BODY>\n" )							>>curr_smt
+		printf( "<H1>System Tools: %s</H1>\n", $2 )				>>curr_smt
+		printf( "<P class=header>%s\n", h )					>>curr_smt
+		snapshot = sprintf( "scc.%s.html", $2 )
+		printf( "<A HREF=\"%s/%s/%s\">Configuration</A>&nbsp;&nbsp;&nbsp;&nbsp;",
+			d, r, snapshot )						>>curr_smt
+		logbook = sprintf( "scc.%s.log.html", $2 )
+		printf( "<A HREF=\"%s/%s/%s\">Logbook</A></P>\n", d, r, logbook )	>>curr_smt
+
+		print "<PRE>"								>>curr_smt
+		print "Model   : " $3							>>curr_smt
+		print "OS      : " $4							>>curr_smt
+		print "Release : " $5							>>curr_smt
+		print "</PRE>"								>>curr_smt
+		close( curr_smt )
+
+		table_head_required[ $2 ] = 1
+
+		tr_c = 2
+
+		next
+	}
+	/^smt-data:/	{
+		# Format of SMT_VERSIONS is:
+		#smt-data:<host>:<software>:<version>
+		if ( ! visited[ $2 ] )
+		{
+			next;			# Ignore when absent in scc-summary.data
+		}
+
+		curr_smt = sprintf( "./scc.%s.smt.html", $2 )
+		smt_done[ $2 ] = 1
+		if ( length( prev ) && ( curr_smt != prev ) )
+		{
+			if ( table_head_done[ prev ] > 0 )
+			{
+				print "</TBODY>"						>>prev
+				print "</TABLE>"						>>prev
+			}
+			else
+			{
+				print "<P>No system management tools installed.</P>"		>>prev
+			}
+			print "<HR>"								>>prev
+			print "<P>"								>>prev
+			print "The specification of the system management tools can be "	>>prev
+			print "changed in file _realm_/custom/scc-smt.conf."			>>prev
+			print "</P>"								>>prev
+			print cr								>>prev
+			print "</BODY>"								>>prev
+			print "</HTML>"								>>prev
+			close( prev )
+
+			tr_c = 1
+		}
+		prev = curr_smt
+
+		if ( table_head_required[ $2 ] > 0 )
+		{
+			print "<TABLE CLASS=SCC>"						>>curr_smt
+
+			print "<THEAD>"								>>curr_smt
+			print "	<TR class=Odd style=\"text-align:left\">"			>>curr_smt
+			printf( "		<TH>%s</TH>\n", "Product" )			>>curr_smt
+			printf( "		<TH>%s</TH>\n", "Version" )			>>curr_smt
+			print "	</TR>"								>>curr_smt
+			print "</THEAD>"							>>curr_smt
+
+			print "<TBODY>"								>>curr_smt
+
+			table_head_required[ $2 ] = 0
+			table_head_done[ curr_smt ] = 1
+		}
+
+		printf( "<TR class=%s style=\"text-align:left\">\n", c[ tr_c++ % 2 ] )		>>curr_smt
+		printf( "	<TD class=Even>%s</TD>\n", $3 )					>>curr_smt
+		printf( "	<TD class=Odd>%s</TD>\n", $4 )					>>curr_smt
+		print "</TR>"									>>curr_smt
+	}
+END	{
+		if ( length( curr_smt ) )
+		{
+			if ( table_head_done[ curr_smt ] > 0 )
+			{
+				print "</TBODY>"						>>curr_smt
+				print "</TABLE>"						>>curr_smt
+			}
+			else
+			{
+				print "<P>No system management tools installed.</P>"		>>curr_smt
+			}
+			print "<HR>"								>>curr_smt
+			print "<P>"								>>curr_smt
+			print "The specification of the system management tools can be "	>>curr_smt
+			print "changed in file _realm_/custom/scc-smt.conf."			>>curr_smt
+			print "</P>"								>>curr_smt
+			print cr								>>curr_smt
+			print "</BODY>"								>>curr_smt
+			print "</HTML>"								>>curr_smt
+			close( curr_smt )
+		}
+		for ( s in visited )
+		{
+			if ( ! smt_done[ s ] )
+			{
+				curr_smt = sprintf( "./scc.%s.smt.html", s )
+				print "<P>No system management tools installed.</P>"		>>curr_smt
+				print cr							>>curr_smt
+				print "</BODY>"							>>curr_smt
+				print "</HTML>"							>>curr_smt
+				close( curr_smt )
+			}
+		}
+	}'	cr="${copy_right}"			\
+		d="${scc_web_path_dir}"			\
+		h="${HOME_URL}"				\
+		n="$(date '+%Y-%m-%d %H:%M:%S')"	\
+		r="${realm}"				\
+			scc-summary.data ${SMT_VERSIONS}
+
+# From now on, these files are accessible again by the web server.
+# Ignore files in sub-directories (with more than one '/' in the name).
+find . -name "scc.*.smt.html"		|
+sed -e '/\/.*\//d'			|
+xargs chown "${new_owner_group}" 2>/dev/null
+
+find . -name "scc.*.smt.html"		|
+sed -e '/\/.*\//d'			|
+xargs chmod "${new_mode}" 2>/dev/null
+
+# Build the start-table of scc-smt-index.html, containing a
+# summary of all the System Tools and their versions.
+rm -f scc-smt-index.html
+cat >scc-smt-index.html <<-EndOfTxt
+	<!DOCTYPE HTML>
+	<HTML lang="en">
+	<HEAD>
+		<LINK HREF="${web_realm_dir}/custom/style.css" REL="stylesheet" TYPE="text/css">
+		<LINK HREF="${web_realm_dir}/custom/favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+		<TITLE>System Tools for ${realm}</TITLE>
+	</HEAD>
+	<BODY>
+	<A id ="smt_top" style="text-align:center" HREF="${scc_web_path_dir}/scc-help/scc-smt-index.html">${logo_tag}</A>
+	<P class="header">
+		${HOME_URL}
+		<A HREF="${web_realm_dir}/scc-smt-config.html">Configuration</A>&nbsp;&nbsp;&nbsp;&nbsp;
+		System Tools for realm ${realm}&nbsp;&nbsp;&nbsp;&nbsp;
+		<A TITLE="Summary of System Tools for ${realm} in CSV format" HREF="${web_realm_dir}/scc.smt.csv">CSV</A>
+	</P>
+EndOfTxt
+
+if [ -s ${SMT_VERSIONS} ]
+then
+	cat <<-EndOfTxt
+		<TABLE CLASS=SCC>
+			<THEAD>
+			<TR class=Odd style="text-align:left">
+				<TH>Product</TH>
+				<TH>Version</TH>
+				<TH style="text-align:right">Count</TH>
+			</TR>
+		</THEAD>
+
+		<TBODY>
+EndOfTxt
+
+	sort -t: -f -k 3 -k 4 -k 2 ${SMT_VERSIONS}			|
+	awk -F: '{
+		# Format of SMT_VERSIONS is:
+		#smt-data:<host>:<software>:<version>
+
+		# This script counts all the systems for each version of each tool.
+		id = sprintf( "%s:%s", $3, $4 )
+		count[ id ] += 1
+		prev=id
+	}
+	END	{
+		for ( s in count )
+		{
+			# Format of the output is: <name>:<version>:<count>
+			printf( "%s:%d\n", s, count[ s ] )
+		}
+	}'							|
+	sort -t: -f -k 1 -k 2 -k 3n					|
+	awk -F":" 'BEGIN	{
+				c[ 0 ] = "Even"
+				c[ 1 ] = "Odd"
+				tr_c = 2;		# TR class; TR from THEAD already done
+			}
+		{
+		printf( "<TR class=%s style=\"text-align:left\">\n", c[ tr_c++ % 2 ] )
+		if ( $1 != prev )
+		{
+			if ( total > 0 )
+			{
+
+				print "	<TD class=Even style=\"text-align:right\">&nbsp;</TD>"
+				print "	<TD class=Odd>total</TD>"
+				print "	<TD class=Even style=\"text-align:right\">" total "</TD>"
+
+				print "</TR>"
+
+				total = 0
+
+				printf( "<TR class=%s style=\"text-align:left\">\n", c[ tr_c++ % 2 ] )
+			}
+			print "	<TD class=Even>" $1 "</TD>"
+			prev=$1
+		}
+		else
+		{
+			print "	<TD class=Even style=\"text-align:right\">" "&nbsp;" "</TD>"
+		}
+		# Format of the input is: <name>:<version>:<count>
+		url = sprintf( "%s_%s", $1, $2 )
+		gsub( /[^A-Za-z0-9_.-]/, "_", url );		# W3C restrictions and no ":".
+		printf( "	<TD class=Odd><A HREF=\"#%s\">%s</A></TD>\n", url, $2 )
+		print "	<TD class=Even style=\"text-align:right\">" $3 "</TD>"
+		total += $3
+		print "</TR>"
+	}
+	END	{
+		if ( total > 0 )
+		{
+			printf( "<TR class=%s style=\"text-align:left\">\n", c[ tr_c++ % 2 ] )
+			print "	<TD class=Even style=\"text-align:right\">&nbsp;</TD>"
+			print "	<TD class=Odd>total</TD>"
+			print "	<TD class=Even style=\"text-align:right\">" total "</TD>"
+			print "</TR>"
+		}
+
+		print "</TBODY>"
+		print "</TABLE>"
+	}'
+else
+	echo "<P class=\"header\">No tools detected</P>"
+fi >>scc-smt-index.html
+chown "${new_owner_group}" scc-smt-index.html
+
+if [ -s ${SMT_VERSIONS} ]
+then
+	# Build the additional tables for each version of each tool.
+	sort -f -t: -k 3 -k 4 -k 1 ${SMT_VERSIONS}		|
+	awk -F: 'BEGIN	{
+				c[ 0 ] = "Even"
+				c[ 1 ] = "Odd"
+				tr_c = 1;		# TR class 
+			}
+		/^general_data/	{
+			# Format of the input is: "general_data":<host>:<model>:<os>:<release>:<last_day>:<last_time>:<domain>:<runtime>:<size>:<virtualization>
+			if ( length( $3 ) )
+			{
+				model[ $2 ] = $3
+			}
+			else
+			{
+				model[ $2 ] = "&nbsp;"
+			}
+			os[ $2 ] = $4
+			release[ $2 ] = $5
+			last_run_date[ $2 ] = $6
+			last_run_time[ $2 ] = $7
+			virt[ $2 ] = $11
+			next
+		}
+		{
+		# Format of SMT_VERSIONS is:
+		#smt-data:<host>:<software>:<version>
+
+		data_shown=1
+		id = sprintf( "%s_%s", $3, $4 )
+		if ( id != prev )
+		{
+			if ( length( prev ) )
+			{
+				print "</TBODY>"
+				print "</TABLE>"
+			}
+			url = sprintf( "%s_%s", $3, $4 )
+			gsub( /[^A-Za-z0-9_.-]/, "_", url );		# W3C restrictions and no ":".
+			printf( "<P class=\"header\" id=\"%s\"><A HREF=\"#smt_top\">Top</A>&nbsp;&nbsp;&nbsp;&nbsp;Product: %s, version: %s</P>\n", url, $3, $4 )
+			prev = id
+
+			print "<TABLE CLASS=SCC>"
+
+			print "<THEAD>"
+			printf( "<TR class=%s style=\"text-align:left\">\n", c[ tr_c++ % 2 ] )
+			printf( "		<TH>%s</TH>\n", "System" )
+			printf( "		<TH>%s</TH>\n", "Virtualization" )
+			printf( "		<TH>%s</TH>\n", "Model" )
+			printf( "		<TH>%s</TH>\n", "OS" )
+			printf( "		<TH>%s</TH>\n", "Release" )
+			printf( "		<TH>%s</TH>\n", "Last run" )
+			print "	</TR>"
+			print "</THEAD>"
+
+			print "<TBODY>"
+		}
+		printf( "<TR class=%s style=\"text-align:left\">\n", c[ tr_c++ % 2 ] )
+		# to open this in a new window, add the attribute: TARGET="_blank"
+		printf( "	<TD class=Even><A HREF=\"%s/%s/scc.%s.smt.html\"><SPAN CLASS=\"mono\">%s</SPAN></A></TD>\n", d, r, $2, $2 )
+		printf( "	<TD class=Odd>%s</TD>\n", virt[ $2 ] )
+		printf( "	<TD class=Even>%s</TD>\n", model[ $2 ] )
+		printf( "	<TD class=Odd>%s</TD>\n", os[ $2 ] )
+		printf( "	<TD class=Even>%s</TD>\n", release[ $2 ] )
+		printf( "	<TD class=Odd>%s %s</TD>\n", last_run_date[ $2 ], last_run_time[ $2 ] )
+		print "</TR>"
+	}
+	END	{
+		if ( data_shown )
+		{
+			print "</TBODY>"
+			print "</TABLE>"
+		}
+	}' d="${scc_web_path_dir}" r="${realm}" scc-summary.data - >>scc-smt-index.html
+fi
+
+{
+	echo "	<BR><HR>"
+	echo "	${copy_right}"
+	echo "	</BODY>"
+	echo "</HTML>"
+} >>scc-smt-index.html
+
+if [ -s ${SMT_VERSIONS} ]
+then
+	cat <<-EndOfTxt
+		<!DOCTYPE HTML>
+		<HTML lang="en">
+			<HEAD>
+				<LINK HREF="${web_realm_dir}/custom/style.css" REL="stylesheet" TYPE="text/css">
+				<LINK HREF="${web_realm_dir}/custom/favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+				<TITLE>SMT configuration</TITLE>
+			</HEAD>
+			<BODY>
+			<A HREF="${scc_web_path_dir}/scc-help/scc-srv/scc-srv-5.html">${logo_tag}</A>
+	EndOfTxt
+
+	echo "<P class=\"header\">Configuration file</P>"
+
+	diff custom/scc-smt-select ${SCC_NEWCONF}/scc-smt-select >/dev/null 2>/dev/null
+	if [ $? -eq 1 ]
+	then
+		# Only report when the custom file is older than the newconfig file.
+		newer="$(find custom -name scc-smt-select -newer ${SCC_NEWCONF}/scc-smt-select 2>/dev/null)"
+		if [ -z "${newer}" ]
+		then
+			echo "	<P>Note that the active configuration file differs from the file installed by scc-srv.</P>"
+		fi
+	fi
+
+	echo "<P>The program scc-smt uses the following configuration file for this realm:</P>"
+
+	echo "	<P class=\"header\">scc-smt-select</P>"
+	echo "	<PRE>"
+	sed	-e '/^#/d'		\
+		-e '/^[ 	]*$/d'	\
+		-e 's/&/\&amp;/g'	\
+		-e 's/</\&lt;/g'	\
+		-e 's/>/\&gt;/g'	\
+		-e "s/'/\&#39;/g"	\
+			-e 's/"/\&quot;/g' custom/scc-smt-select
+		echo "	</PRE>"
+
+		echo "	<BR><HR>"
+		echo "	</BODY>"
+		echo "</HTML>"
+	else
+		cat <<-EndOfTxt
+			<!DOCTYPE HTML>
+			<html> <head> <title>empty</title> </head> <body> </body> </html>
+		EndOfTxt
+	fi >scc-smt-config.html		# no remove to preserve selinux context
+
+exit 0

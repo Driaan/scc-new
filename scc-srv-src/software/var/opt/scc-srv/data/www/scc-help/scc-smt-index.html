@@ -1,0 +1,27 @@
+<!DOCTYPE HTML>
+<HTML lang="en">
+	<HEAD>
+		<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+		<LINK HREF="../custom/style.css" REL="stylesheet" TYPE="text/css">
+		<LINK HREF="../custom/favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+		<TITLE>Info on System Management Tools</TITLE>
+	</HEAD>
+	<BODY>
+		<P style="text-align:center"><A HREF="scc-srv/scc-srv-5.html"><IMG SRC="../custom/scc-logo.png" ALT=scc-logo></A></P>
+		<P class="header">System Management Tools</P>
+		<P>
+System management tools are determined by <A HREF="scc-srv/scc-smt.html">scc-smt</A>
+by means of the contents of the selection file <SPAN CLASS="filename">custom/scc-smt-select</SPAN>.
+All snapshots in a realm are searched for installed software (filesets, depots and packages) that are mentioned in the selection-file.
+When the configuration file does not exist, no SMT-data is selected and the home page of the realm will not show an SMT-entry.
+		</P>
+		<P>
+When you edit the custom configuration file and you install a new version
+of scc-srv, scc-smt notifies on the generated page that the default 
+configuration file is different and more recent then the specific 
+configuration file in custom. In that case, check the default 
+file for additions/changes from the new scc-srv version or touch
+the specific file in custom to avoid this message.
+		</P>
+	</BODY>
+</HTML>

@@ -1,0 +1,64 @@
+#!/bin/sh
+
+# Shell script to handle installs on BSD-systems.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: BSDinstall 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+case "${2}" in
+DEINSTALL)	# Upgrades of packages are performed by removing the existing installation followed
+		# by the install of the new version.
+		# This part of the code runs when an existing package is removed. It is the first
+		# code that runs during the upgrade.
+		# We use this to record some settings to be used after the install of the new version.
+		[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --preinstall
+		;;
+
+POST-DEINSTALL)	rmdir /opt/scc 2>/dev/null
+		;;
+
+PRE-INSTALL)	export SCC_BIN=/opt/scc/bin
+		SCC_DATA=/var/opt/scc/data
+		SCC_TMP=/tmp
+		SCC_CONF=/etc/opt/scc/conf
+		export SCC_DATA SCC_TMP SCC_CONF
+
+		if [ ! -x ${SCC_BIN}/scc ]
+		then
+			# Fresh install. No version of scc yet present.
+			# Avoid complaints of the post-install.
+			umask 066
+			[ ! -d ${SCC_TMP} ] && mkdir -p ${SCC_TMP} 2>/dev/null
+			umask 077
+			> ${SCC_TMP}/scc.lock
+			[ ! -d ${SCC_CONF} ] && mkdir -p ${SCC_CONF} 2>/dev/null
+		fi
+		;;
+
+POST-INSTALL)	# The new release has been installed. Collect the new scc-data.
+		[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --postinstall
+		;;
+esac
+
+exit 0

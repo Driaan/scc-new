@@ -1,0 +1,53 @@
+# NOTE: update scc-smt when you add a new package/installation-tool.
+# NOTE: check whether installed file in newconfig contains new/changed product specifications.
+
+# HP-UX specific products.
+fix:software:installed-filesets::# AdvJournalFS
+fix:software:installed-filesets::# EMS-
+fix:software:installed-filesets::# Ignite-UX
+fix:software:installed-filesets::# OMNIBACK-II
+fix:software:installed-filesets::# OVNNMgr	
+fix:software:installed-filesets::# OVOPC	
+fix:software:installed-filesets::# OVOPC-AGT
+fix:software:installed-filesets::# PerfView
+fix:software:installed-filesets::# Predictive
+fix:software:installed-filesets::# ServiceGuard
+fix:software:installed-filesets::# Sup-Tool-Mgr
+
+# HP performance-software (client)
+fix:software:installed-filesets::# Glance
+fix:software:installed-filesets::# MeasureWare
+fix:software:installed-packages:application,rpm::HPglance:HP:
+fix:software:installed-packages:application,rpm::HPmwa:HP:
+
+# OPC-agent on SunOS
+fix:software:installed-packages:system::OPC:HP:
+
+# Veritas on HP-UX and SunOS
+fix:software:installed-filesets::# VRTSvmsa
+fix:software:installed-filesets::# VRTSvxvm
+fix:software:installed-packages:system::VRTSvmsa:
+fix:software:installed-packages:system::VRTSvxvm:
+
+# Solstice on SunOS
+fix:software:installed-packages:system::SUNWsadmi:
+
+# SCC on HP-UX, SunOS, AIX, RPM, BSD, Debian, source install and Windows
+fix:software:installed-filesets::# scc	
+fix:software:installed-filesets::# scc-srv
+fix:software:installed-packages:application::scc:
+fix:software:installed-packages:application::scc-srv:
+fix:software:installed-aix-filesets::scc-srv:scc-srv.rte:
+fix:software:installed-aix-filesets::scc:scc.rte:
+fix:software:installed-rpms:Applications/System::scc:
+fix:software:installed-rpms:Applications/System::scc-srv:
+fix:software:slitaz packages:utilities::scc
+fix:software:pacman packages::scc
+fix:software:installed-BSD-packages::scc-
+fix:software:installed Debian packages::ii  scc
+fix:software:installed pisi packages::scc
+fix:software:installed Slackware packages::scc
+fix:software:installed-source::scc:
+fix:software:product:SCC for Windows
+fix:software:installed Puppy:user-installed-packages::scc
+fix:software:installed vsphere vib::scc,

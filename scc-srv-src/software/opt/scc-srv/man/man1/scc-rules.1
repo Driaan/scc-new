@@ -1,0 +1,178 @@
+.TH scc-rules 1 "SCC-SRV" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-rules - check rules for snapshots and log files
+
+.SH  RELEASE
+.nf
+
+	scc-srv	1.19.44
+
+.SH  SYNOPSIS
+.nf
+
+	scc-rules [ -d|--directory <scc_web_path> ] [ -f|--file <rule> ] [ -h|--host <host> ] <realm>
+
+.SH  DESCRIPTION
+.nf
+
+	This program reads file custom/scc-rules.conf or <rule> for 
+	realm <realm> and performs all the checks in this file.
+
+	Possible checks are:
+	- check for saved snapshots and log files
+	- check max. age of snapshots
+	- signal changes in log files
+	- check systems for identical parts of the snapshots
+	- check snapshots for certain patterns
+	- check snapshots for unique text
+	Refer to the EXAMPLES for a full list of the keywords.
+
+	All output of the checks is stored in the files scc-rules.data.
+	The format of this file is: <keyword> <system> <message>. 
+	Lines starting with "#" contain the original lines of the rules.conf.
+	The data can have an additional destination, which can be altered by 
+	editing the scc-rules.conf. Uncomment and change the value of the 
+	keywords: SIGNAL_PROG and SIGNAL_DEST.
+
+	When you change the configuration file, it will be used after new
+	scc-data has arrived for the realm. When a realm does not receive new
+	scc-data, scc-update does not run any command for the realm.
+	Force immediate update by using: scc-update -f
+
+	Note that a new config file is not used to avoid loosing your changes.
+	You have to add new features by hand to an existing rules config file.
+
+	Note that this program can take quite some time. It can take up to
+	40% of the time scc-update. When you are not interested in the data,
+	you better remove the configuration file. 
+
+.SH  OPTIONS
+.nf
+
+	-d|--directory <scc_web_path>   Path for SCC-data under DocumentRoot,
+	                                Default is: "", meaning SCC-data resides
+	                                in the document-root of the web server.
+	-f|--file <conf>                Use non-default rule file.
+	-h|--host <host>                Format html, stdin contains rules.data 
+	                                for system <host>
+
+.SH  ARGUMENTS
+.nf
+
+	<realm>   The sub-directory with collected snapshots, where the
+	          summaries are produced.
+
+.SH  DIAGNOSTICS
+.nf
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-rules [ -d|--directory <scc_web_path> ] [ -f|--file <rule>]
+		[ -h|--host <host> ] <realm>
+	A syntax error has been detected.
+
+	scc-rules: Syntax error, missing argument for option: <option>
+	The argument for <option> is missing.
+
+	scc-rules: unknown check: <check>
+	An unknown check was used in the scc-rules.conf.
+
+	scc-rules: reducing limit for max age of snapshots from <max_age> to 28
+	The limit for the max age of a snapshot for the rules.conf is 28 days.
+
+.SH  EXTERNAL INFLUENCES
+.nf
+
+	This program should be called after scc-transfer has put new scc-data
+	in a realm and before scc-summary.
+
+.SH  EXAMPLES
+.nf
+
+	Use the following contents for the scc-rules.conf:
+
+	- CheckSavedFiles:all_systems
+	check for saved snapshots and log files, these files are generated
+	when the new log file of a system does not contain the run date of
+	the snapshot. This could indicate that the snapshot is from a restored
+	backup or that transferred scc data is lost. Compare the current and
+	saved snapshot of the system and optionally take corrective actions.
+
+	- CheckSnapAge:all_systems:14
+	check all systems and report snapshots older than 14 days
+	- CheckSnapAge:c01,c02:7
+	check systems c01 and c02 and report snapshots older than 7 days
+
+	- CheckLogEntries:all_systems:
+	check all systems and report systems with changes in last run
+	- CheckLogEntries:c01,c02:
+	check systems c01 and c02 to report systems with changes in last run
+	- CheckLogEntries:all_systems:fix:kernel:
+	check all systems and report changes of last run in kernel config
+	- CheckLogEntries:all_systems:kernel.cfg
+	check all systems and report changes of last run matching expressions
+	in file <realm>/custom/kernel.cfg
+
+	- CheckSnapData:all_systems:fix:messages::
+	check snapshots of all systems for messages
+	- CheckSnapData:c01,c02:fix:messages::
+	check snapshots of systems c01 and c02 for messages
+
+	- CompareSnapData:c01,c02,c03:<class_file>
+	extract data according to <class_file> for systems c01, c02 and c03
+	and compare resulting data from c02 and c03 with resulting data from 
+	c01. For a single classification, replace <class_file> with the literal
+	text of the classification
+	- CompareSnapData:c03:<class_file>
+	extract data according to <class_file> for all systems in a realm
+	and compare resulting data with data resulting from c03
+	- CompareSnapData:all_systems:<class_file>
+	extract data according to <class_file> for all systems in a realm
+	and compare resulting data with data resulting from first, alphabetical
+	system
+	Note: use this option with care as it might take quite some time.
+
+	- Unique:c01,c02,c03:<text>
+	search snapshots of c01, c02 and c03 for <text> and report when this text appears in more than one snapshot
+	- Unique:all_systems:<text>
+	search all snapshots of <text> and report when this text appears in more than one snapshot
+	To check for the requirement that all mail-servers serve a different domain:
+	Unique:all_systems:fix:software:sendmail:options::  (canonical domain name)
+
+.SH  COPYRIGHT
+.nf
+
+	scc-rules is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+.SH  FILES
+.nf
+
+	/var/opt/scc-srv/tmp - directory for temporary files
+	<realm> - directory for snapshots and log files
+		scc.<hostname>.cur - snapshots
+		scc.<hostname>.log - logbooks
+		scc-rules.data - output from scc-rules
+		scc-rules-index.html - HTML version of scc-rules.data
+		scc-rules-config.html - HTML version of scc-rules.conf
+	<realm>/custom/scc-rules.conf - default rules for realm <realm>
+
+.SH  SEE ALSO
+.nf
+
+	scc-baseline(1), scc-changes(1), scc-debug(1), scc-pull(1), scc-realm(1),
+	scc-receive-mail(1), scc-rules(1), scc-setup(1), scc-smt(1), scc-summary(1),
+	scc-syscmp(1), scc-transfer(1), scc-update(1), scc-wrapper.cgi(1), scc.cgi(1),
+	scc-srv(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6217 $
+

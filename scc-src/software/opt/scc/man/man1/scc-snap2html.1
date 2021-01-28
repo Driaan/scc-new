@@ -1,0 +1,103 @@
+.TH scc-snap2html 1 "SCC" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-snap2html - converts a SCC-snapshot to HTML-format
+
+.SH  RELEASE
+.nf
+
+	scc	1.26.73
+
+.SH  SYNOPSIS
+.nf
+
+	scc-snap2html [ -h|--help ] [ -s|--standalone ] <hostname>
+
+.SH  DESCRIPTION
+.nf
+
+	This program reads a SCC-snapshot from stdin and converts it to 
+	HTML-format on stdout. The hierarchical classification in the snapshot
+	is converted to a hierarchical menu to the corresponding data. Refer to
+	scc(4) for a detailed description of a SCC-snapshot.
+
+	The resulting html-code only contains text and can be viewed with a 
+	browser like lynx.
+
+	The snapshot contains DIV-tags with the following nested classes:
+	    - SCC_SNAP
+	        - SCC_SNAP_NAV
+	        - SCC_SNAP_MENU
+	        - SCC_SNAP_ENTRY
+	        - SCC_SNAP_STATS
+	        - SCC_SNAP_HELP
+	The sylesheet style.css in /var/opt/scc/data controls the markup.
+
+.SH  OPTIONS
+.nf
+
+	-h|--help       Display the syntax and exit.
+	-s|--standalone Embed the stylesheet in the html-data and do not
+	                show "external" links to logbook and index.html.
+	                Use this option before transferring the html
+	                version of the snapshot to a user.
+
+.SH  ARGUMENTS
+.nf
+
+	<name>          name of the host to convert the SCC-snapshot for
+
+.SH  DIAGNOSTICS
+.nf
+
+	This program writes the following message to stderr:
+
+	Syntax error, use: scc-snap2html [ -h|--help ] [ -s|--standalone ] <name>
+	A syntax error was detected and reported.
+
+	scc-snap2html: insufficient permissions to write in data directory: <data_dir>
+	To run this program, log in as the owner of the directory.
+
+.SH  RETURN VALUE
+.nf
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+.SH  EXTERNAL INFLUENCES
+.nf
+
+	Use environment variable SCC_DATA to specify an alternative directory
+	for the SCC data files. Should be an absolute path.
+
+.SH  COPYRIGHT
+.nf
+
+	scc-snap2html is free software under the terms of the GNU General Public
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH,
+	2019 Siem Korteweg.
+
+.SH  FILES
+.nf
+
+	/var/opt/scc/data/style.css - stylesheet for snapshot (and logbook)
+
+.SH  SEE ALSO
+.nf
+
+	scc(1), scc-cmp(1), scc-collect(1), scc-log(1), scc-log2html(1),
+	scc-plugin(1), scc-snap2html(1), scc(4), scc(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6216 $
+

@@ -1,0 +1,225 @@
+#!/bin/sh
+
+# Generate PISI package to install scc-srv by means of pisi.
+# Copyright (C) 2008-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: pisi-scc-srv 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install				pre/post install scripts
+#	software/opt/scc-srv		bin, doc and man
+#	software/var/opt/scc-srv	conf, data and newconfig
+#
+# After using this program, the directory contains one file:
+#
+#	scc-srv-<release>.pisi
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+for program in lzma zip
+do
+	exe="$(which ${program} 2>/dev/null)"
+	if [ ! -x "${exe}" ]
+	then
+		echo "${ProgName}: cannot find ${program}" >&2
+		exit 2
+	fi
+done
+
+# Calling by non-root users results in wrong permissions of the installed files.
+uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+if [ "${uid}" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+VERSION=${1:-1.19.44}
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+rm -f install.tar
+rm -f install.tar.lzma
+
+version=${VERSION%.*}		# Ignore the patch-level
+major=${version%.*}
+minor=${version#*.}
+patch=${VERSION##*.}
+
+# Create the files.xml and the tar-file:
+(
+	mv install/postinstall software/opt/scc-srv/bin/postinstall
+
+	cd software
+
+	echo "<Files>"
+
+	while read type dir
+	do
+		for file in ${dir}/*
+		do
+			if [ -f "${file}" ]
+			then
+				size=$(ls -l ${file} | awk '{ print $5 }')
+				echo "    <File>"
+				echo "        <Path>${file#.}</Path>"
+				echo "        <Type>${type}</Type>"
+				echo "        <Size>${size}</Size>"
+				echo "        <Hash>$(sha1sum ${file} | awk '{ print $1 }')</Hash>"
+				echo "    </File>"
+
+				if [ ! -f ../install.tar ]
+				then
+					tar -c -f ../install.tar ${file}
+				else
+					tar -r -f ../install.tar ${file}
+				fi
+			fi
+		done
+	done	<<-_X_
+		executable	./opt/scc-srv/bin
+	        man		./opt/scc-srv/doc
+		man		./opt/scc-srv/man/man1
+		man		./opt/scc-srv/man/man4
+		man		./opt/scc-srv/man/man5
+		man		./var/opt/scc-srv/data
+		man		./var/opt/scc-srv/data/www/scc-help
+		man		./var/opt/scc-srv/data/www/scc-help/scc
+		man		./var/opt/scc-srv/data/www/scc-help/scc-srv
+		man		./var/opt/scc-srv/data/www/scc-help/scc-win
+		config		./var/opt/scc-srv/newconfig
+		config		./var/opt/scc-srv/data/www/custom
+	_X_
+
+	echo "</Files>"
+) >files.xml
+
+# We encountered two variants of lzma, one requires the 'e' command, the other the --compress option.
+cp install.tar install.tar.org
+lzma e install.tar install.tar.lzma 2>/dev/null
+if [ $? -ne 0 ]
+then
+    rm -f install.tar.lzma
+    mv install.tar.org install.tar
+    lzma --compress install.tar
+else
+    rm -f install.tar.org
+fi
+
+# Now create the metadata.xml
+total_size=$(sed -n -e 's@</Size>@@' -e 's/^[ 	]*<Size>//p' files.xml | awk '{ t+=$1 } END { print t }')
+
+cat >metadata.xml <<_X_
+<PISI>
+    <Source>
+        <Name>scc-srv</Name>
+	<Homepage>https://sourceforge.net/projects/sysconfcollect</Homepage>
+        <Packager>
+            <Name>Siem Korteweg</Name>
+            <Email>siemkorteweg@users.sourceforge.net</Email>
+        </Packager>
+    </Source>
+    <Package>
+        <Name>scc-srv</Name>
+        <Summary xml:lang="en">System Configuration Collector Server</Summary>
+        <Description xml:lang="en">An application to display collected SCC data.</Description>
+        <IsA>app:console</IsA>
+        <License>GPL-2</License>
+        <Files>
+            <Path fileType="executable">/opt/scc-srv/bin</Path>
+            <Path fileType="man">/opt/scc-srv/doc</Path>
+            <Path fileType="man">/opt/scc-srv/man</Path>
+            <Path fileType="man">/opt/scc-srv/man/man1</Path>
+            <Path fileType="man">/opt/scc-srv/man/man4</Path>
+            <Path fileType="man">/opt/scc-srv/man/man5</Path>
+            <Path fileType="data">/var/opt/scc-srv/data</Path>
+            <Path fileType="config">/var/opt/scc-srv/newconfig</Path>
+            <Path fileType="config">/var/opt/scc-srv/conf</Path>
+        </Files>
+        <Provides>
+            <COMAR script="scc-srv.py">System.Package</COMAR>
+        </Provides>
+        <History>
+            <Update release="${minor}">
+                <Date>$(date '+%Y-%m-%d')</Date>
+                <Version>${major}</Version>
+                <Name>Siem Korteweg</Name>
+                <Email>siemkorteweg@users.sourceforge.net</Email>
+                <Comment>Refer to website.</Comment>
+            </Update>
+        </History>
+        <Build>${patch}</Build>
+        <Distribution>Pardus</Distribution>
+        <DistributionRelease>Any</DistributionRelease>
+        <Architecture>Any</Architecture>
+        <InstalledSize>${total_size}</InstalledSize>
+        <Source>
+            <Name>scc-srv</Name>
+	    <Homepage>https://sourceforge.net/projects/sysconfcollect</Homepage>
+            <Packager>
+                <Name>Siem Korteweg</Name>
+                <Email>siemkorteweg@users.sourceforge.net</Email>
+            </Packager>
+        </Source>
+    </Package>
+</PISI>
+_X_
+
+mkdir -p comar
+cat >comar/scc-srv.py <<_X_
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import os
+
+def postInstall(fromVersion, fromRelease, toVersion, toRelease):
+    os.system( '/opt/scc-srv/bin/postinstall' )
+    return True
+_X_
+
+# Now we have the files.xml, metadata.xml and install.tar.lzma
+zip -q -X scc-srv-${major}.${minor}-${patch}.pisi comar/scc-srv.py metadata.xml files.xml install.tar.lzma
+
+rm -f $(cat file_list)
+rm -rf software install metadata.xml files.xml comar install.tar install.tar.lzma
+
+exit 0

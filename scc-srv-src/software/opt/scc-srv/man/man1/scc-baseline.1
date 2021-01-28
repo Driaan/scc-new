@@ -1,0 +1,95 @@
+.TH scc-baseline 1 "SCC-SRV" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-baseline - extract baseline of SCC snapshot
+
+.SH  RELEASE
+.nf
+
+	scc-srv	1.19.44
+
+.SH  SYNOPSIS
+.nf
+
+	scc-baseline <class>
+
+.SH  DESCRIPTION
+.nf
+
+	This program reads a snapshot from stdin, extracts data with certain 
+	classifications and writes the extracted data to stdout. The output
+	is limited to "fixed" data from the snapshot. The file class contains
+	lines specifying the classifications to be extracted.
+
+	Comparison of the specified classes starts with the top-level of all
+	the classifications. Extracting class ":general:" does not retrieve
+	class ":LVM:general:".
+
+	A snapshot is a file containing configuration data collected by scc-log
+	of the scc client. Each line of configuration-data is prefixed with
+	a classification. Refer to the manual page, section 4, of scc for
+	a description of the format of the contents of a snapshot and the 
+	classfile.
+
+.SH  ARGUMENTS
+.nf
+
+	<class>         file with classifications to be extracted; one per line
+
+.SH  DIAGNOSTICS
+.nf
+
+	This program writes the following message to stderr:
+
+	Syntax error, use: scc-baseline <class>
+	A syntax error has been detected and reported.
+
+	scc-baseline: file <class> not found
+	The class-file is not found.
+
+.SH  EXAMPLES
+.nf
+
+	To extract all kernel configuration data from a snapshot (named
+	snap_file), create a file (named class_kernel) with the following 
+	contents:
+
+		:kernel:
+
+	Use the following command to extract the kernel data from the snapshot:
+
+		scc-baseline class_kernel <snapshot
+
+.SH  RETURN VALUE
+.nf
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+.SH  COPYRIGHT
+.nf
+
+	scc-baseline is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+.SH  SEE ALSO
+.nf
+
+	scc-baseline(1), scc-changes(1), scc-debug(1), scc-pull(1), scc-realm(1),
+	scc-receive-mail(1), scc-rules(1), scc-setup(1), scc-smt(1), scc-summary(1),
+	scc-syscmp(1), scc-transfer(1), scc-update(1), scc-wrapper.cgi(1), scc.cgi(1),
+	scc-srv(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6217 $
+

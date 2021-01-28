@@ -1,0 +1,219 @@
+#!/bin/sh
+
+# Generate RPM-file to install scc-srv by means of rpm.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: rpm-gen-scc-srv 6244 2019-06-12 17:38:24Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install				pre/post install scripts
+#	software/opt/scc-srv		bin, doc and man
+#	software/var/opt/scc-srv	conf, data and newconfig
+#
+# After using this program, the directory contains one file:
+#
+#	scc-srv-<release>.noarch.rpm
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+exe="$(which rpmbuild 2>/dev/null)"
+if [ ! -x "${exe}" ]
+then
+	echo "${ProgName}: cannot find rpmbuild" >&2
+	exit 2
+fi
+
+VERSION=${1:-1.19.44}
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+rpm_version=${VERSION}
+rpm_patch="1"
+
+umask 077
+
+# Usually a spec file contains entries %prep, %build and %install.
+# As the build system of SCC already provides a final file and directory hierarchy,
+# these steps are omitted from the spec file.
+# We will clean all files except the generated rpm, avoiding the use of the clean script in the spec file.
+
+cat << "_X_" >scc-srv.spec
+# Specification File to generate scc-srv-rpm.
+
+%define _topdir		%(pwd)
+%define _builddir	%(pwd)/software
+%define	_packager	siemkorteweg (at) users.sourceforge.net
+
+Summary: System Configuration Collector Server
+# The Summary: line should be expanded to about here -----^
+Name: scc-srv
+Version: 1.19.44
+Release: 1
+Group: Applications/System
+License: GPLv2+
+URL: https://sourceforge.net/projects/sysconfcollect
+Source: https://sourceforge.net/projects/sysconfcollect/files/scc-srv/scc-srv_1.19.44/scc-srv-1.19.44.src.tar.gz
+BuildArchitectures: noarch
+Vendor: Siem Korteweg
+
+%description
+System Configuration Collector Server provides a web interface for searching
+and summaries of data from SCC clients.
+
+%post
+/opt/scc-srv/bin/scc-update --postinstall
+
+exit 0
+
+%preun
+# Ignore calls triggered by an upgrade.
+[ $1 -eq  0 ] && /opt/scc-srv/bin/scc-update --preremove
+
+exit 0
+
+%files
+%defattr(711,root,root)
+%dir /opt/scc-srv/
+%dir /opt/scc-srv/bin/
+%defattr(555,root,root)
+/opt/scc-srv/bin/*
+%defattr(755,root,root)
+%dir /opt/scc-srv/doc/
+%defattr(444,root,root)
+/opt/scc-srv/doc/*
+%defattr(755,root,root)
+%dir /opt/scc-srv/man/
+%dir /opt/scc-srv/man/man1/
+%defattr(444,root,root)
+%doc /opt/scc-srv/man/man1/*
+%defattr(755,root,root)
+%dir /opt/scc-srv/man/man5/
+%defattr(444,root,root)
+%doc /opt/scc-srv/man/man5/*
+%defattr(755,root,root)
+%dir /var/opt/scc-srv
+%dir /var/opt/scc-srv/data
+%verify(not user) /var/opt/scc-srv/data
+%dir /var/opt/scc-srv/data/log
+%verify(not user group) /var/opt/scc-srv/data/log
+%defattr(771,root,root)
+%dir /var/opt/scc-srv/data/transfer
+%dir /var/opt/scc-srv/data/transfer/cp
+%defattr(770,root,root)
+%dir /var/opt/scc-srv/data/transfer/mail
+%verify(not user group) /var/opt/scc-srv/data/transfer/mail
+%dir /var/opt/scc-srv/data/www
+%dir /var/opt/scc-srv/data/www/custom
+%defattr(440,root,root)
+/var/opt/scc-srv/data/www/index.html
+%verify(not user size mtime md5) /var/opt/scc-srv/data/www/index.html
+/var/opt/scc-srv/data/www/custom/favicon.ico
+/var/opt/scc-srv/data/www/custom/scc-logo.png
+/var/opt/scc-srv/data/www/custom/scc-realm.conf
+%defattr(770,root,root)
+%dir /var/opt/scc-srv/data/www/scc-help
+%defattr(440,root,root)
+%doc /var/opt/scc-srv/data/www/scc-help/*html
+%defattr(770,root,root)
+%dir /var/opt/scc-srv/data/www/scc-help/scc
+%defattr(440,root,root)
+%doc /var/opt/scc-srv/data/www/scc-help/scc/*
+%defattr(770,root,root)
+%dir /var/opt/scc-srv/data/www/scc-help/scc-srv
+%defattr(440,root,root)
+%doc /var/opt/scc-srv/data/www/scc-help/scc-srv/*
+%defattr(770,root,root)
+%dir /var/opt/scc-srv/data/www/scc-help/scc-win
+%defattr(440,root,root)
+%doc /var/opt/scc-srv/data/www/scc-help/scc-win/*
+%defattr(770,root,root)
+%dir /var/opt/scc-srv/conf
+%verify(not user) /var/opt/scc-srv/conf
+%dir /var/opt/scc-srv/newconfig
+%defattr(440,root,root)
+%config /var/opt/scc-srv/newconfig/scc-auto-realm.conf
+%config /var/opt/scc-srv/newconfig/scc-smt-select
+%config /var/opt/scc-srv/newconfig/scc-rules.conf
+%config /var/opt/scc-srv/newconfig/scc.conf
+%config /var/opt/scc-srv/newconfig/style.css
+
+%changelog
+* Wed Jun 12 2019 - siemkorteweg (at) users.sourceforge.net - 1.19.44-1
+- Add bats tests
+- Change copyright and support email address
+- Busybox diff is now supported
+* Sun Jun 25 2017 - siemkorteweg (at) users.sourceforge.net - 1.16.106-1
+- Navigation of the search results has been enhanced.
+- New SMT and log CSV files are available in the web-interface.
+- Summaries have been extended with virtualization column.
+* Tue Dec 1 2015 - siemkorteweg (at) users.sourceforge.net - 1.14.68-1
+- The summary pages contain references to all summary data in CSV format.
+- Option handling has been simplified and made consisten for all scripts.
+* Mon Jun 22 2015 - siemkorteweg (at) users.sourceforge.net - 1.13.35-1
+- Selinux contexts are now more strict, reducing the configuration effort to run scc-srv.
+- The webpage with the search results of all systems now supports detailed searching for all individual systems.
+- The first run date of each client is added to the summary tables.
+- A new program (scc-changes) selects changes for further processing and a FAQ has been added.
+_X_
+
+for man_page in software/opt/scc-srv/man/man?/*
+do
+	gzip ${man_page}
+done
+
+# Keep using md5: http://madhuscribblings.blogspot.nl/2013/03/rpm-error-failed-dependencies.html
+mkdir -p RPMS/noarch
+rpmbuild	--buildroot $(pwd)/software			\
+		-bb						\
+		--define _binary_filedigest_algorithm=md5	\
+		--define _binary_payload=1			\
+		scc-srv.spec >/dev/null 2>/dev/null
+
+mv RPMS/noarch/scc-srv-${rpm_version}-${rpm_patch}.noarch.rpm .
+chmod 444 ./scc-srv-${rpm_version}-${rpm_patch}.noarch.rpm
+
+rm -rf software RPMS scc-srv.spec
+rm -rf install $(cat file_list)
+
+exit 0

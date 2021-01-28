@@ -1,0 +1,292 @@
+#!/bin/sh
+
+# Shell script to compare configuration data for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc-cmp 6259 2019-10-13 19:56:45Z siemkorteweg $
+
+
+set -u
+
+ProgName=${0##*/};			export ProgName
+
+export SCC_BIN=/opt/scc/bin
+export SCC_DATA=${SCC_DATA:-/var/opt/scc/data}
+export SCC_TMP=/tmp
+export SCC_CONF=/etc/opt/scc/conf
+
+case "${SCC_DATA}" in
+/*)	;;
+*)	echo "${ProgName}: alternative SCC_DATA (${SCC_DATA}) should be an absolute path" >&2
+	exit 2;;
+esac
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+
+[ -r ${SCC_CONF}/scc-localize ] && . ${SCC_CONF}/scc-localize
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+umask 077
+
+if [ $# -ne 4 ]
+then
+	echo "Syntax error, use: ${ProgName} <prev> <new> <remark> <ignore>" >&2
+	exit 1
+fi
+
+random="$(get_RANDOM)"
+export TMP1_FILE=${SCC_TMP}/scc_cmp1_$$_${random}
+export TMP2_FILE=${SCC_TMP}/scc_cmp2_$$_${random}
+export TMP3_FILE=${SCC_TMP}/scc_cmp3_$$_${random}
+trap 'rm -f ${TMP1_FILE} ${TMP2_FILE} ${TMP3_FILE} 2>/dev/null' 0
+trap "exit 2" 1 2 3 15
+
+# Split a snapshot into files per classification, containing the "fix" data.
+# Required for context diff.
+snap_split()
+{
+        my_dir="${1}"
+        my_snap="${2}"
+        rm -rf "${my_dir}"
+        mkdir -p "${my_dir}"
+
+        awk '/^fix:/    {
+                                file_name = $0
+                                gsub( "::.*", "", file_name )
+                                gsub( "/", "_", file_name );		# filename cannot contain "/"
+                                file_name = sprintf( "%s/%s", d, file_name )
+                                print >>file_name
+                        }' d="${my_dir}" <"${my_snap}"
+}
+
+prev_snapshot="${1}"
+new_snapshot="${2}"
+remark="${3}"
+ignore="${4}"
+if [ -z "${ignore}" ]
+then
+	ignore="/dev/null"
+fi
+
+if [ ! -f "${new_snapshot}" ]
+then
+	echo "${ProgName}: cannot access file ${new_snapshot}" >&2
+	exit 2
+fi
+
+timestamp="$(head "${new_snapshot}"	|
+		awk -F:	'/date/		{ d=$NF; next }
+			/:start time:/	{ print d ":" $NF }' )"
+if [ -z "${timestamp}" ]
+then
+	timestamp="$(date '+%Y-%m-%d:%H.%M.%S')"
+fi
+
+runtime="$(head "${new_snapshot}" | sed -n -e "s/^var:general::runtime://p")"
+
+if [ -f "${prev_snapshot}" ]
+then
+	>${TMP1_FILE}
+
+	# The software system module of scc records the checksums of all modules.
+	# scc-collect "surrounds" the data of a user-module with the following tags:
+	#
+	#	var:MoDuLe:start::<module>:<checksum>
+	#	...
+	#	var:MoDuLe:end::<module>:
+	#
+	# These tags are used to ignore changes when a user-modules has been changed.
+
+	# Suppose you run scc daily and the user modules weekly (on sunday).
+	# When you change a user-module on wednesday, the change of the checksum
+	# recorded by the software system module will be reported on the next run of scc.
+	# On the first run of the changed user-module, the changed checksum in the plugin-data
+	# causes that all changes of that user-module are ignored.
+	#
+	# The "proper" procedure to change a user-module is:
+	#	- run all system modules and the user-module: scc -e "<user-module>"
+	#	- change the user-module
+	#	- test the user-module: scc-collect -i -e "<user-module>"
+	#	- rerun the system modules and the user-module: scc -e "<user-module>"
+	# The last run will signal the change in the checksum of the user-module,
+	# but ignores all changes in the output of the user-module. On the next,
+	# weekly activation of the user-module, all (regular) changes will be
+	# reported.
+	grep "^var:MoDuLe:start::scc_[0-9][0-9][0-9][0-9]_u_" ${prev_snapshot} >${TMP2_FILE}
+	grep "^var:MoDuLe:start::scc_[0-9][0-9][0-9][0-9]_u_" ${new_snapshot} >${TMP3_FILE}
+	diff ${TMP2_FILE} ${TMP3_FILE}			|
+	sed -n -e 's/.*var:MoDuLe:start:://p'		|
+	sed -e 's/:.*//'				|
+	sort -u						|
+	while read module remainder
+	do
+		# This module is reported (maybe run for the first time),
+		# erase all the data of this module.
+		echo "/^var:MoDuLe:start::${module}:/,/^var:MoDuLe:end::${module}:/d" >>${TMP1_FILE}
+	done
+
+	# Sometimes "fixed" lines between "variable" lines are also reported.
+	# Avoid this by limiting the comparison to "fixed" lines.
+	if [ -s ${TMP1_FILE} ]
+	then
+		sed -f ${TMP1_FILE} ${prev_snapshot}		|
+		grep "^fix:" >${TMP2_FILE}
+
+		sed -f ${TMP1_FILE} ${new_snapshot}		|
+		grep "^fix:" >${TMP3_FILE}
+
+		if [ -z "${remark}" ]		# Do not change remark supplied with -c option.
+		then
+			remark="first run or changed user module $(awk -F: '{ printf( "%s ", $(NF - 1) ) }' ${TMP1_FILE}), differences ignored"
+		fi
+		>${TMP1_FILE}
+	else
+		grep "^fix:" ${prev_snapshot} >${TMP2_FILE}
+		grep "^fix:" ${new_snapshot} >${TMP3_FILE}
+	fi
+
+	diff -u /dev/null /dev/null >/dev/null 2>/dev/null		# Check for support of context diff?
+	if [ $? -eq 0 -a "${SCC_CONTEXT_DIFF:-}" = "yes" ]
+	then
+		# Context diff: contributed by Erik-Jan Taal:
+		snap_split ${SCC_DATA}/new ${TMP3_FILE}
+		snap_split ${SCC_DATA}/old ${TMP2_FILE}
+
+		diff -u -NP ${SCC_DATA}/old ${SCC_DATA}/new	|
+		sed	-n			\
+			-e 's/^+fix:/new::/p'	\
+			-e 's/^-fix:/old::/p'	\
+			-e 's/^ fix:/ctx::/p'			|
+		sed -f ${ignore} >${TMP1_FILE}
+
+		dif_cnt=$(grep -c "^[no][el][wd]:" ${TMP1_FILE})	# Count the "new" and "old" lines.
+
+		rm -rf ${SCC_DATA}/new ${SCC_DATA}/old
+	else
+		busybox_check diff
+		if [ $? -ne 0 ]
+		then
+			# -U 0 to eliminate the context from the unified diff from busybox
+			# 	  old          new
+			diff -U 0 ${TMP2_FILE} ${TMP3_FILE}	|
+			sed	-n			\
+				-e "s/-fix:/old::/p"	\
+				-e "s/+fix:/new::/p"		|
+			sed -f ${ignore} >${TMP1_FILE}
+		else
+			#    old          new
+			diff ${TMP2_FILE} ${TMP3_FILE}		|
+			sed	-n			\
+				-e "s/^< fix:/old::/p"	\
+				-e "s/^> fix:/new::/p"		|
+			sed -f ${ignore} >${TMP1_FILE}
+		fi
+
+		dif_cnt="$(wc -l <${TMP1_FILE} | sed -e 's/^ *//')"
+	fi
+
+	if [ -s ${TMP1_FILE} ]
+	then
+		old_cnt="$(wc -l <${TMP2_FILE})"
+		new_cnt="$(wc -l <${TMP3_FILE})"
+		# Require a minimal size of the snapshots.
+		if [ "${old_cnt}" -gt 1000 -o "${new_cnt}" -gt 1000 ]
+		then
+			# Do not signal all changes when new and previous are less
+			# than 20% of each other or when the number of differences execeeds 20.000
+			if [	${new_cnt} -lt $(( old_cnt / 5 ))	-o	\
+				${old_cnt} -lt $(( new_cnt / 5 ))	-o	\
+				${dif_cnt} -gt 20000					]
+			then
+				# Old and new differ too much or there are too many changes.
+				# Reduce the differences to the count of all classes of the differences.
+				# Ignore the context files with context diff.
+				remark="Too many changes; reduced to # of lines per classification"
+
+				awk	'/^old::/	{
+								sub( "^old::", "" )
+								sub( "::.*", "" )
+								old[ $0 ] += 1
+							}
+					/^new::/	{
+								sub( "^new::", "" )
+								sub( "::.*", "" )
+								new[ $0 ] += 1
+							}
+							{
+								if ( ! id[ $0 ] )
+								{
+									id[ $0 ] = NR
+								}
+							}
+					END	{
+							for ( o in old )
+							{
+								printf( "%d %d old::%s::%d\n",
+									old[ o ] + new[ o ], id[ o ],
+									o, old[ o ] )
+							}
+							for ( n in new )
+							{
+								printf( "%d %d new::%s::%d\n",
+									new[ n ] + old[ n ], id[ n ],
+									n, new[ n ] )
+							}
+						}' ${TMP1_FILE}		|
+				sort -k 1nr -k 2n -k 3			|
+				sed -e 's/^[0-9 ]*//' >${TMP2_FILE}
+				mv ${TMP2_FILE} ${TMP1_FILE}
+			fi	# Too many differences.
+		fi	# if [ "${old_cnt}" -gt 1000 -o "${new_cnt}" -gt 1000 ]
+
+		# Get the date and time of the old (current) snapshot.
+		d_o=$(head ${prev_snapshot} | sed -n -e "s/.*::date://p")
+		t_o=$(head ${prev_snapshot} | sed -n -e "s/.*::start time://p" | sed -e 's/:/./g')
+
+		echo "${timestamp}:result::different"
+		echo "${timestamp}:remark::${remark}"
+		echo "${timestamp}:runtime::${runtime}"
+		echo "${timestamp}:count::${dif_cnt}"
+		echo "${timestamp}:previous date::${d_o}"
+		echo "${timestamp}:previous time::${t_o}"
+
+		sed -e "s/^/${timestamp}:data::/" ${TMP1_FILE}
+	else
+		# File with differences is empty. No differences.
+		echo "${timestamp}:result::identical"
+		echo "${timestamp}:remark::${remark}"
+		echo "${timestamp}:runtime::${runtime}"
+	fi	# if [ -s ${TMP1_FILE} ]
+else	# if [ -f "${prev_snapshot}" ]
+	# No previous snapshot. This means that scc has been (re)started.
+	echo "${timestamp}:result::(re)start"
+	echo "${timestamp}:remark::${remark}"
+	echo "${timestamp}:runtime::${runtime}"
+fi	
+
+exit 0

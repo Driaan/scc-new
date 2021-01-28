@@ -1,0 +1,119 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc-snap2html.pl 1 "SCC-WIN" </TITLE>
+</HEAD><BODY>
+<H1>scc-snap2html.pl(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-snap2html - converts a SCC-snapshot to HTML-format
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-win	1.10.38
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-snap2html [ --standalone ] &lt;name&gt;
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program reads a SCC-snapshot from stdin and converts it to 
+	HTML-format on stdout. The hierarchical classification in the snapshot
+	is converted to a hierarchical menu to the corresponding data. Refer
+	to <A HREF="scc-win-4.html">scc-win(4)</A> for a detailed description of a SCC-snapshot.
+
+	The resulting html-code only contains text and can be viewed with a 
+	browser like lynx.
+
+	Variable data is shown with a different color. The default color 
+	for variable data is "purple".
+
+	The snapshot contains DIV-tags with the following nested classes:
+	    - SCC_SNAP
+	        - SCC_SNAP_NAV
+	        - SCC_SNAP_MENU
+	        - SCC_SNAP_ENTRY
+	        - SCC_SNAP_STATS
+	        - SCC_SNAP_HELP
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	--standalone   	embed the stylesheet in the html-data and do not
+	                show "externel" links to logbook and index.html.
+	                Use this option before transferring the html
+	                version of the snapshot to a user.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;name&gt;		name of the host to convert the SCC-snapshot for
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following message to stderr:
+
+	Syntax error, use: scc-snap2html [ --standalone ] &lt;name&gt;
+	A syntax error was detected and reported.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 syntax error
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	When the --standalone option is used, this program assumes it is called 
+	from the bin directory of the SCC software.
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-snap2html is free software under the terms of the GNU General Public
+	License. Copyright (C) 2006-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	tmp - directory for temporary files
+	data/style.css - stylesheet for snapshot (and logbook)
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-win-4.html">scc-win(4)</A>, <A HREF="scc-win-5.html">scc-win(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6241 $
+
+</PRE>
+</BODY></HTML>

@@ -1,0 +1,241 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-pull</TITLE></HEAD><BODY>
+<H1>scc-pull(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-pull - pull scc-data from clients
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-srv	1.19.44
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-pull [ -B &lt;bin&gt; ] [ -D &lt;data&gt; ] [ -d &lt;delay&gt; ] [ -I &lt;ident&gt; ] [ -P &lt;port&gt; ]
+		[ -c &lt;remark&gt; ] [ -n ] [ -N ] [ -p &lt;prog&gt; ] [ -s &lt;dest&gt; ] [ -k ] [ -U ]
+		[ -f ] [ -e &lt;module&gt; ] [ -m &lt;max&gt; ] [ -u &lt;user&gt; ]
+		[ -R &lt;realm&gt; | -F &lt;file&gt; | -L &lt;list&gt; ]+
+		[ -o &lt;option&gt; ]
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program pulls scc-data from clients using ssh/rsh. This is done
+	by (optional) executing scc on clients and pulling the files to the server. 
+	Finally scc-update is called to update the realms with the new files.
+	By default, scc is started in the background on the clients. The
+	program waits some specified time and then pulls the files from the
+	clients.
+
+	To reduce the number of firewall rules, systems in a remote network 
+	can use a separate scc-srv to act as a proxy. Use the -U option for this
+	program to avoid that scc-update is called. The retrieved data can be 
+	pushed (with scc client) to or pulled (with scc-srv) from an upstream
+	scc-srv site.
+
+	In case of errors when running scc on the clients, the stdout and stderr
+	is recorded on the clients in the file /var/opt/scc/data/transfer/scc-pull.log
+	When the -D option is used, the path changed accordingly.
+
+	Doug Probst provided the initial version of this program.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	The following options control the execution/retrieval:
+	-B &lt;bin&gt;        Use &lt;bin&gt; to start scc on the clients. By default the
+	                path is based on /opt/scc-srv/bin, where scc-srv is
+	                replaced by scc.
+	-c &lt;remark&gt;     Add a remark to the logbook(s), indicating a "specific" 
+	                reason to run scc.
+	-D &lt;data&gt;       Use &lt;data&gt; to retrieve the data from the clients. By
+	                default this is based on /var/opt/scc-srv/data/transfer,
+	                where scc-srv is replaced by scc.
+	-d &lt;delay&gt;      After starting scc on the clients in the background,
+	                wait &lt;delay&gt; seconds before retrieving the files. 
+	                Thus, the delay should be long enough for all clients
+	                to finish their run of scc. Half of this delay is used
+	                with the -d option of the client to avoid that all clients
+	                start at the same time.
+	                Default delay is 600 seconds. When you specify delay 0,
+	                scc is not started in the background on the clients.
+	                and scc is run sequential on all hosts.
+	-f              Apply -f (fqdn) option when running scc on clients.
+	-I &lt;ident&gt;      Full path of identity file for scp; implies "-p ssh".
+	-k              Keep/preserve the client data after transfer to the server.
+	                Use this option when several servers use the data.
+	-n              Do not start scc on the clients, retrieve the scc-files
+	                immediately. To be used when the clients use specific
+	                scheduling.
+	-N              Notify client of pull via transfer/pull_srv (excluding -p ovdeploy).
+	-o no_hosts     No strict host checking for ssh and scp.
+	                Dropbear ignores the ssh/scp options used for this.
+	-o hostname     Restrict pull to host data and ignore data resulting from
+	                a scc-split.conf file on the client.
+	-o ssh_opt &lt;f&gt;  Use file &lt;f&gt; for additional ssh and scp options (-F &lt;f&gt;).
+	                Default ssh config file via config file scc.conf.
+	-p &lt;prog&gt;       Use &lt;prog&gt; to communicate with the client. Supported
+	                values are: ssh, rsh and ovdeploy. By default ssh is used
+	                with a 30 second connection timeout. Without tty,
+	                batchmode is used.
+	                Test "-p ssh" option in an interactive ssh session to 
+	                capture messages and to check for required passwords.
+	-P &lt;port&gt;       Port to use for ssh and scp. Default value is 22.
+	-s &lt;dest&gt;       Full path of local destination directory for the copied
+	                files, by default /var/opt/scc-srv/data/transfer/cp.
+	-u &lt;user&gt;       Files are retrieved by &lt;user&gt;, not by root. Remote start
+	                of scc is done by root, but the -u option is handed to
+	                scc client to give the files that have to be transferred
+	                the proper ownership. File retrieval from the clients is
+	                done by user &lt;user&gt; when this option is used. When the 
+	                program is not run by root, the option -u &lt;user&gt; are 
+	                implied. This option is also passed to the client.
+	-U              Do not call scc-update to transfer the retrieved data 
+	                to a realm. Leave the data for an upstream scc-srv.
+
+	The -f and -u options and the following options are passed to the clients
+	when running scc, note that the values are not checked by scc-pull:
+	-e &lt;mod&gt;        Specifies which modules to execute on the client. 
+	                By default only system modules are executed.
+	-m &lt;max&gt;        Entries in the log-file, that are older than &lt;max&gt; 
+	                months are deleted.
+
+	The following options control from which clients to pull the files and can be 
+	used and combined more than once:
+	-F &lt;file&gt;       File &lt;file&gt; contains a list of systems. Empty and 
+	                comment lines (starting with "#") are ignored.
+	                Requires full path of file or - for stdin.
+	                You could use parts of the scc-summary.data from realm(s)
+	                to generate your specific &lt;file&gt; before calling scc-pull.
+	-R &lt;realm&gt;      Use all cur-files in realm &lt;realm&gt; to determine the
+	                clients. By default realm All is used.
+	-L &lt;list&gt;       Comma separated list of clients.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	None.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-pull &lt;options&gt;
+	A syntax error has been detected and reported.
+
+	scc-pull: non-numeric delay: &lt;delay&gt;
+	Use a numeric value for delay.
+
+	scc-pull: Syntax error, missing argument for option: &lt;option&gt;
+	The argument for &lt;option&gt; is missing.
+
+	scc-pull: cannot find realm &lt;realm&gt;
+	The directory indicated with the -B option cannot be found in
+	/var/opt/scc-srv/data/www.
+
+	scc-pull: cannot find directory &lt;dir&gt;
+	The directory indicated with the -s option cannot be found.
+
+	scc-pull: cannot find file &lt;file&gt;
+	The file indicated with the -F/-I/ssh_opt options cannot be found.
+
+	scc-pull: cannot find ovdeploy
+	The indicated transfer program (Open View Operations 8) cannot be found.
+
+	scc-pull: no systems specified via -R, -L and -S options
+	No hosts have been specified.
+
+	scc-pull: unsupported method: &lt;prog&gt;
+	The value provided with the -p option is not supported.
+
+	scc-pull: unable to copy files to destination &lt;dest&gt;
+	Make sure that the destination directory is writeable.
+
+	scc-pull: missing data for &lt;host&gt;
+	The host did not produce the scc-data. When the -d options has been used
+	and the client has not yet completed it&#39;s run. Without the -d option,
+	the server waits for the client to complete and missing data indicates
+	an internal error in the client.
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	This program calls scc-update to update the realms with the new files.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+	The possible exit values are:
+		0: success
+		1: syntax error
+		2: general runtime error
+		3: missing snapshot after delay
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-pull is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> EXAMPLES</H2>
+<PRE>
+
+	To pull all files for the realm All using ssh and default client and
+	server install, use:
+
+		scc-pull
+
+	When you install scc on a new system and want it to be become part of 
+	realm All, use the following command once:
+
+		scc-pull -L &lt;sys&gt;
+
+	Now scc runs on the system and the scc-files are transferred to the 
+	server where &lt;sys&gt; becomes part of realm All. From now on, using
+	scc-pull (without options) will also approach this system.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	/var/opt/scc-srv/data/log/scc-pull.log - log file; without file, no logging
+	/var/opt/scc-srv/conf/scc.conf - config file (for ssh config file)
+	On client:
+	data/transfer/pull_srv - notification (-N) file; contains hostname of pul server
+	data/transfer/scc-pull.log - log of client run (no -n option)
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+	<A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+	<A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+	<A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6217 $
+
+</PRE>
+</BODY></HTML>

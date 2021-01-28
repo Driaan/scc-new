@@ -1,0 +1,805 @@
+#!/bin/sh
+
+# Shell script to convert collected configuration data to HTML-format.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc-snap2html 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+
+set -u
+
+ProgName=${0##*/};			export ProgName
+
+export SCC_BIN=/opt/scc/bin
+export SCC_DATA=${SCC_DATA:-/var/opt/scc/data}
+export SCC_TMP=/tmp
+export SCC_CONF=/etc/opt/scc/conf
+
+case "${SCC_DATA}" in
+/*)	;;
+*)	echo "${ProgName}: alternative SCC_DATA (${SCC_DATA}) should be an absolute path" >&2
+	exit 2;;
+esac
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+
+# Perform the security settings before calling any program.
+PATH=/sbin:/usr/sbin:/usr/bin:/bin;	export PATH
+
+umask 077
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+cd ${SCC_TMP}
+
+CMD_LINE="${ProgName} [ -h|--help ] [ -s|--standalone ] <name>"
+SYNTAX_ERROR="Syntax error, use: ${CMD_LINE}"
+
+standalone=""
+while [ $# -gt 0 ]
+do
+	case "${1}" in
+	-s|--standalone)	standalone="yes"
+				shift 1;;
+	-h|--help)		echo "${CMD_LINE}"
+				exit 0;;
+	-*)			echo "${SYNTAX_ERROR}" >&2
+				exit 1;;
+	*)			break;;
+	esac
+done
+
+if [ $# -ne 1 ]
+then
+	echo "${SYNTAX_ERROR}" >&2
+	exit 1
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+[ -r ${SCC_CONF}/scc-localize ] && . ${SCC_CONF}/scc-localize
+
+random="$(get_RANDOM)"
+export TMP_FILE=${SCC_TMP}/scc_html_$$_${random}
+export TMP_STATS=${SCC_TMP}/scc_tmp_stats_$$_${random}
+export IND_FILE=${SCC_TMP}/scc_ind_$$_${random}
+export HLP_CLASSES=${SCC_TMP}/scc_help_c_$$_${random}
+export HLP_USED=${SCC_TMP}/scc_help_u_$$_${random}
+export STAT_DATA=${SCC_TMP}/scc_stats_$$_${random}
+
+trap 'rm -f ${TMP_FILE} ${TMP_STATS} ${IND_FILE} ${HLP_CLASSES} ${HLP_USED} ${STAT_DATA}' 0
+trap "exit 2" 1 2 3 15
+
+pre_process_data()
+{
+	# Replace special HTML-characters in input.
+	# Anything that does not start with fix: or var: is unexpected.
+	# Remove the special tags used by scc-collect and scc-log to
+	# detect and handle changes in user modules.
+	sed	-e '/^var:MoDuLe:start::/d'	\
+		-e '/^var:MoDuLe:end::/d'	\
+		-e 's/&/\&amp;/g'		\
+		-e 's/</\&lt;/g'		\
+		-e 's/>/\&gt;/g'		\
+		-e "s/'/\&#39;/g"		\
+		-e 's/"/\&quot;/g'			|
+	awk '/^fix:|^var:|^hlp:|^stats:/	{ print; next }
+						{ print "fix:unexpected data::" $0 }'
+}
+
+URL_SEP="&nbsp;&nbsp;&nbsp;&nbsp;"
+TOP_URL="<A HREF=\"#cfg_top\">Top</A>${URL_SEP}"
+
+# Generate the heading of the HTML file.
+gen_header()
+{
+	echo "<!DOCTYPE HTML>"
+	echo "<HTML lang=\"en\">"
+
+	echo "<HEAD>"
+	echo '	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">'
+	if [ -z "${standalone}" ]
+	then
+		# scc-transfer from scc-srv modifies the following line
+		echo '<LINK HREF="style.css" REL="stylesheet" TYPE="text/css">'
+	else
+		if [ -f "${SCC_DATA}/style.css" ]
+		then
+			echo '<style TYPE="text/css">'
+			cat "${SCC_DATA}/style.css"
+			echo "</style>"
+		fi
+	fi
+	echo "	<TITLE>Configuration: ${1}</TITLE>"
+	echo "</HEAD>"
+
+	echo "<BODY>"
+	echo "<DIV class=SCC_SNAP>"
+	echo "<H1 id=\"cfg_top\">"
+	echo "	Configuration: ${1}"
+	echo "</H1>"
+
+	echo "<DIV class=SCC_SNAP_NAV>"
+
+	# DO NOT CHANGE THE FOLLOWING HTML-CODE WITHOUT CONSULTING scc.cgi IN scc-srv
+	echo "<H2>"
+	if [ -z "${standalone}" ]
+	then
+		echo "	<A HREF=\"index.html\">Home</A>${URL_SEP}"
+		echo "	<A HREF=\"scc.${1}.log.html\">Logbook</A>${URL_SEP}"
+	fi
+	if [ -s ${STAT_DATA} ]
+	then
+		echo "	<A HREF=\"#statistics\">Statistics</A>${URL_SEP}"
+	fi
+	echo "	<A HREF=\"#legend\">Legend</A>"
+	echo "</H2>"
+	echo "</DIV><!-- class=SCC_SNAP_NAV -->"
+}
+
+prepare_help()
+{
+	# Get all the help classifications from the snap-shot.
+	sed	-n		\
+		-e 's/::.*//'	\
+		-e 's/\\/_/g'	\
+		-e '/^hlp:/p' ${TMP_FILE} 2>/dev/null		|
+	sort -u >${HLP_CLASSES}
+}
+
+# Initialize the file containing the classifications of the help-info that is referenced.
+>${HLP_USED}
+
+# Generate the entire hierarchical menu from the classifications in the data
+gen_menu()
+{
+	echo "<DIV class=SCC_SNAP_MENU>"
+
+	# Get all the hierarchical classifications from the snap-shot.
+	# Do not sort, we depend on the order of the collect-script.
+	grep "^[fv][ia][xr]:"			|
+	sed	-e 's/^var://'	\
+		-e 's/^fix://'	\
+		-e 's/::.*//'			|
+	awk -F: '{
+		# Make sure that each classification is treated once
+		if ( done[ $0 ] )
+		{
+			next
+		}
+		done[ $0 ] = 1
+
+		# Format of the input is (for level 3 classification):
+		# a:b:c
+		# Generate:
+		# - level 1 menu item: a
+		# - level 2 menu item: a:b
+		# - level 3 menu item: a:b:c
+		# Each line of output has the following format:
+		# <level>:<id of parent menu>:<id of menu-item>:<classification>
+		for ( level = 1; level <= NF; level++ )
+		{
+			if ( level == 1 )
+			{
+				prev_id = 11
+				class = $1
+			}
+			else
+			{
+				prev_id = id[ class ]
+				class = sprintf( "%s:%s", class, $level )
+			}
+			if ( ! id[ class ] )
+			{
+				# One line may cause several new submenus.
+				id[ class ] = ( 10 * NR ) + level
+
+				# Use broad, fixed width numbers to enable usage of busybox sort to order the data.
+				printf( "%03.3d:%010.10d:%010.10d:%s\n", level, prev_id, NR, class )
+				
+			}
+		}
+	}' -				|
+	sort				|
+	awk -F: '/^hlp:/	{
+					# Format of the data is:
+					# hlp:<classification>::<data>
+					class = $2
+					for ( i = 3; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+					{
+						class = sprintf( "%s_%s", class, $i )
+					}
+					gsub( /[^A-Za-z0-9_.-]/, "_", class );		# W3C restrictions and no ":".
+					help_avail[ class ] = 1
+					next
+				}
+		{
+			# Format of the data is:
+			# <level>:<submenu-id>:<line-number>:<classification>
+			if ( $1 != prev_level )
+			{
+				prev_level=$1
+				if ( NR > 1 )
+				{
+					print "<HR>"
+				}
+			}
+
+			if ( ( $1 > 1 ) && ( $2 != prev_menu ) )
+			{
+				# Produce the heading of a submenu (name, top-reference, optional help, label).
+
+				# Produce the name of this submenu.
+				url = $4
+				for ( i = 5; i < NF; i++ )
+				{
+					url = sprintf( "%s_%s", url, $i )
+				}
+				gsub( /[^A-Za-z0-9_.-]/, "_", url );		# W3C restrictions and no ":".
+				printf( "<H3 id=\"cfg_%s\">\n", url )
+
+				print "	" u;			# Reference to TOP
+				if ( help_avail[ url ] )
+				{
+					printf( "	<A HREF=\"#hlp_%s\" TITLE=\"%s\">Help</A>%s", url, url, s )
+					print "hlp_" url >>t;	# Indicate that this help-info is referenced.
+				}
+
+				# Produce references to parent menus.
+				url = "cfg"
+				for ( i = 4; i < ( NF - 1 ); i++ )
+				{
+					url = sprintf( "%s_%s", url, $i )
+					gsub( /[^A-Za-z0-9_.-]/, "_", url );	# W3C restrictions and no ":".
+					title = url
+					sub( "^cfg_", "", title )
+					printf( "	<A HREF=\"#%s\" TITLE=\"%s\">%s</A> - \n", url, title, $i )
+				}
+				print "	" $i
+
+				print "</H3>"
+				prev_menu = $2
+			}
+
+			url = $4
+			for ( i = 5; i <= NF; i++ )
+			{
+				url = sprintf( "%s_%s", url, $i )
+			}
+			gsub( /[^A-Za-z0-9_.-]/, "_", url );		# W3C restrictions and no ":".
+			printf( "		<A HREF=\"#cfg_%s\" TITLE=\"%s\">%s</A><BR>\n", url, url, $NF )
+		}'				\
+			s="${URL_SEP}"		\
+			t="${HLP_USED}"		\
+			u="${TOP_URL}"		\
+				${HLP_CLASSES}	\
+				-
+	echo "</DIV><!-- class=SCC_SNAP_MENU -->"
+}
+
+# Generate all the data
+gen_data()
+{
+	help_classes="${1}"
+	data="${2}"
+
+	echo "<DIV class=SCC_SNAP_ENTRY>"
+
+	# The entire menu-structure has been built.
+	# Show all the data.
+	# To "group" all data per classification, we rewrite the snapshot.
+	# - each "new" classification is prefixed by the line:
+	#	<first-line-number>:0:<class>
+	# - each line of a snapshot is extended with:
+	#	<first-line-number-of-classification>:<line-number>:<data>
+	# By sorting the resulting file, all data with the same classifications are
+	# grouped together, while the order of the lines within a classification
+	# is preserved from the original snapshot.
+	(
+		cat "${help_classes}"
+
+		awk -F":" '/^fix:|^var:/	{
+			# Get the classification, ignore the first part: fix/var.
+			class = $2
+			for ( i = 3; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+			{
+				class = sprintf( "%s - %s", class, $i )
+			}
+			if ( ! id[ class ] )
+			{
+				id[ class ] = NR
+				printf( "%010.10d:%010.10d:%s:%s", NR, 0, class, $2 )
+				for ( i = 3; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+				{
+					printf( ":%s", $i )
+				}
+				print ""
+			}
+			# Use broad, fixed width numbers to enable usage of busybox sort to order the data.
+			printf( "%010.10d:%010.10d:%s\n", id[ class ], NR, $0 )
+		}' "${data}"			|
+		sort
+	)						|
+	awk -F":" '
+	/^hlp/		{
+				# Syntax of each line:
+				#hlp:<classification>
+				help_avail[ $0 ]=1
+				next
+			}
+	/^[0-9]/	{
+		# Here we process the snapshot, prefixed with two numbers to group all data.
+		if ( $2 == 0 )
+		{
+			# This is the start of a new classification.
+			# Format is: <id>:<0>:<header of classification>:<classification>
+			if ( started )
+			{
+				print "</PRE>"
+				general=0
+			}
+			started = 1
+
+			# Check whether help-info is available.
+			class="hlp"
+			for ( i = 4; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+			{
+				class=sprintf( "%s:%s", class, $i )
+			}
+			help_class = "";
+			if ( help_avail[ class ] )
+			{
+				gsub( /[^A-Za-z0-9_.-]/, "_", class );		# W3C restrictions and no ":".
+				title = class
+				sub( "^hlp_", "", title )
+				print class >>t
+				help_class = class;
+			}
+
+			class=$4
+			for ( i = 5; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+			{
+				class=sprintf( "%s_%s", class, $i )
+			}
+			gsub( /[^A-Za-z0-9_.-]/, "_", class );		# W3C restrictions and no ":".
+
+			print "<HR>"
+			printf( "<H3 id=\"cfg_%s\">%s", class, u )
+			if ( length( help_class ) > 0 )
+			{
+				printf( "<A HREF=\"#%s\" TITLE=\"%s\">Help</A>%s", help_class, title, s )
+			}
+
+			# References to all previous menus in the hierarchy.
+			tag = ""
+			sep = ""
+			for ( depth = 4; ( depth < NF ) && ( length( $(depth + 1) ) > 0 ); depth++ )
+			{
+				if (length( tag ) == 0 )
+				{
+					tag = $depth
+				}
+				else
+				{
+					tag = sprintf( "%s_%s", tag, $depth )
+				}
+				gsub( /[^A-Za-z0-9_.-]/, "_", tag );	# W3C restrictions and no ":".
+				printf( "%s<A HREF=\"#cfg_%s\" TITLE=\"%s\">%s</A>\n", sep, tag, tag, $depth )
+				sep = " - "
+			}
+			print "	" sep $depth
+
+			print "</H3>"
+			print "<PRE>"
+			if ( $3 == "general" )
+			{
+				general=1
+			}
+			next
+		}
+
+		# Format is: <id>:<line-number>:<classification>::<data>
+		if ( $3 == "hlp" )
+		{
+			next;	# help-info is processed later in this program.
+		}
+
+		# Show var-data in a different color.
+		var_font_start=""
+		var_font_end=""
+		if ( ( $3 != "fix" ) && ( c != "no_color" ) )
+		{
+			var_font_start=sprintf( "<span class=\"scc_var\">" )
+			var_font_end="</span>"
+		}
+
+		if ( general )
+		{
+			# Format of the data is:
+			#<classID>:<lineNR>:fix_or_var:general::<label>:<data>
+			#1         2        3          4       5 6      7
+			printf( "%s", var_font_start )
+			sub( /^[ 	]*/, "", $7 );			# align data with ":" after the label
+			printf( "%-25s: %s", $6, $7 )
+			for ( i = 8; i <= NF; i++ )
+			{
+				printf( ":%s", $i )
+			}
+			print var_font_end
+		}
+		else
+		{
+			# Format of the data is:
+			#<classID>:<lineNR>:fix_or_var:<class>::<data>
+			#1         2        3          4        
+			# We only want to display the data, ignore leading fields.
+			for ( i = 4; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+			{ }
+			i++;		# skip ::
+
+			# Dennis Bieling indicated that sprintf cannot be used on Debian for lines containing too many fields.
+			if ( length( $i ) > 0 || i < NF )
+			{
+				printf( "%s%s", var_font_start, $i )
+				for ( i++; i <= NF; i++ )
+				{
+					printf( ":%s", $i )
+				}
+				printf( "%s\n", var_font_end )
+			}
+			else
+			{
+				print "&nbsp;"
+			}
+		}
+		next
+	}
+	END	{
+			print "</PRE>"
+		}'	s="${URL_SEP}"			\
+			t="${HLP_USED}"			\
+			u="${TOP_URL}"			\
+				-
+	echo "</DIV><!-- class=SCC_SNAP_ENTRY -->"
+}
+
+# Show all the help-info
+gen_help()
+{
+	# Determine the available classes.
+	echo "<DIV class=SCC_SNAP_HELP>"
+
+	awk -F: '
+	/^hlp_/		{
+				hlp_used[ $0 ] = 1
+				next
+			}
+	/^hlp:/		{
+				class=$0
+				sub( /::.*/, "", class )
+				gsub( /[^A-Za-z0-9_.-]/, "_", class );		# W3C restrictions and no ":".
+				if ( ! hlp_used[ class ] )
+				{
+					next
+				}
+
+				if ( class != prev_class )
+				{
+					if ( length( prev_class ) )
+					{
+						print "</PRE>"
+						# Some config files can be checked more than once.
+						# Show the helpinfo only once to avoid double definition of NAME entry.
+						hlp_used[ prev_class ] = 0
+					}
+					prev_class=class
+
+					print "<HR>"
+
+					printf( "<H3 id=\"%s\">%s", class, u )
+					back="cfg"
+					for ( i = 2; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+					{
+						back=sprintf( "%s_%s", back, $i )
+					}
+					gsub( /[^A-Za-z0-9_.-]/, "_", back );		# W3C restrictions and no ":".
+					title = back
+					sub( "^cfg_", "", title )
+					printf( "<A HREF=\"#%s\" TITLE=\"%s\">Back</A>&nbsp;&nbsp;&nbsp;&nbsp;", back, title )
+					printf( "%s", $2 )
+					for ( i = 3; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+					{
+						printf( " - %s", $i )
+					}
+					print "</H3>"
+					print "<PRE>"
+				}
+
+				# Ignore the classification.
+				for ( i = 1; ( i <= NF ) && ( length( $i ) > 0 ); i++ )
+				{ }
+				i++;		# skip ::
+
+				if ( length( $i ) > 0 || i < NF )
+				{
+					data=$i
+					for ( i++; i <= NF; i++ )
+					{
+						data=sprintf( "%s:%s", data, $i )
+					}
+					print data
+				}
+				else
+				{
+					print "&nbsp;"
+				}
+			}
+		END	{
+				if ( length( prev_class ) )
+				{
+					print "</PRE>"
+				}
+			}' u="${TOP_URL}"
+
+	echo "</DIV><!-- class=SCC_SNAP_HELP -->"
+}
+
+# Generate the legend and terminate the html file
+gen_trailer()
+{
+	echo "<HR>"
+	echo "<H2 id=\"legend\">${TOP_URL}Legend</H2>"
+	echo "<P>"
+	echo "Fix data in the snapshot has a default color."
+	echo "Variable data in the snapshot has a specific <span class=\"scc_var\">color</span>."
+	echo "</P>"
+
+	echo "<HR>"
+	echo "<P>Generated by SCC version 1.26.73 (&copy; Siem Korteweg) on $(date)</P>"
+
+	echo "</DIV><!-- class=SCC_SNAP -->"
+	echo "</BODY>"
+	echo "</HTML>"
+}
+
+# Generate statistics from data in the snapshot.
+gen_stats()
+{
+	# Generate the statistics sub-menu with the Profiling and the Class counters.
+
+	echo "<DIV class=SCC_SNAP_STATS>"
+	echo "<HR>"
+	echo "<H3 id=\"statistics\">Statistics${URL_SEP}"
+	echo "	${TOP_URL}"
+	echo "	<A HREF=\"#stats_profiling\">Profiling</A>${URL_SEP}"
+	echo "	<A HREF=\"#stats_classes\">Class counters</A>"
+	echo "</H3>"
+	echo "<HR>"
+
+	echo "<H4 id=\"stats_profiling\">Profiling${URL_SEP}${TOP_URL}<A HREF=\"#statistics\">Statistics</A></H4>"
+	# Format of profiling data:
+	#stats:profiling::<time>:<total_time>:<partial_time>:<module>:<label>
+	awk -F:	'/^stats:profiling::/	{
+						if ( profiling_hdr == 0 )
+						{
+							class="Odd"
+							print "<TABLE CLASS=SCC>"
+							print "<THEAD>"
+							printf( "<TR class=%s>\n", class )
+							print "	<TH>Time</TH>"
+							print "	<TH>Total seconds</TH>"
+							print "	<TH>Module seconds</TH>"
+							print "	<TH>Module</TH>"
+							print "	<TH>Label</TH>"
+							print "</TR>"
+							print "</THEAD>"
+							print "<TBODY>"
+
+							profiling_hdr = 1
+						}
+
+						if ( class != "Odd" )
+						{
+							class = "Odd"
+						}
+						else
+						{
+							class = "Even"
+						}
+						printf( "<TR class=%s>\n", class )
+						print "	<TD class=Odd>" $4 "</TD>"
+						print "	<TD class=Even style=\"text-align:right;\">" $5 "</TD>"
+						print "	<TD class=Odd style=\"text-align:right;\">" $6 "</TD>"
+						print "	<TD class=Even>" $7 "</TD>"
+						if ( length( $8 ) == 0 )
+						{
+							$8 = "&nbsp;"
+						}
+						print "	<TD class=Odd>" $8 "</TD>"
+						print "</TR>"
+						next
+					}
+		END	{
+				if ( profiling_hdr > 0 )
+				{
+					print "</TBODY>"
+					print "</TABLE>"
+				}
+			}' ${1}
+
+	echo "<H4 id=\"stats_classes\">Classes${URL_SEP}${TOP_URL}<A HREF=\"#statistics\">Statistics</A></H4>"
+	echo "<P>Help-info is excluded from the fix/var and class counters.</P>"
+
+	# Format of fix_var data:
+	#stats:fix_var::<lavel>:<cnt>:<perc>
+	awk -F:	'/^stats:fix_var::/	{
+						if ( profiling_hdr == 0 )
+						{
+							class="Odd"
+							print "<TABLE CLASS=SCC>"
+							print "<THEAD>"
+							printf( "<TR class=%s>\n", class )
+							print "	<TH>Category</TH>"
+							print "	<TH>Count</TH>"
+							print "	<TH>Percentage</TH>"
+							print "</TR>"
+							print "</THEAD>"
+							print "<TBODY>"
+
+							profiling_hdr = 1
+						}
+
+						if ( class != "Odd" )
+						{
+							class = "Odd"
+						}
+						else
+						{
+							class = "Even"
+						}
+						printf( "<TR class=%s>\n", class )
+						print "	<TD class=Odd>" $4 "</TD>"
+						print "	<TD class=Even style=\"text-align:right;\">" $5 "</TD>"
+						print "	<TD class=Odd style=\"text-align:right;\">" $6 "</TD>"
+						print "</TR>"
+						next
+					}
+		END	{
+				if ( profiling_hdr > 0 )
+				{
+					print "</TBODY>"
+					print "</TABLE>"
+				}
+			}' ${1}
+
+	echo "<BR>"
+
+	# Format of classes data:
+	#stats:classes::<main>:<sub>:<main_cnt>:<main_perc>:<sub_cnt>:<sub_perc>
+	awk -F:	'/^stats:classes::/	{
+						if ( profiling_hdr == 0 )
+						{
+							class="Odd"
+							print "<TABLE CLASS=SCC>"
+							print "<THEAD>"
+							printf( "<TR class=%s>\n", class )
+							print "	<TH>Main class</TH>"
+							print "	<TH>Sub class</TH>"
+							print "	<TH>Main cnt</TH>"
+							print "	<TH>Main perc</TH>"
+							print "	<TH>Sub cnt</TH>"
+							print "	<TH>Sub perc</TH>"
+							print "</TR>"
+							print "</THEAD>"
+							print "<TBODY>"
+
+							profiling_hdr = 1
+						}
+
+
+						if ( $4 != prev_main )
+						{
+							if ( class != "Odd" )
+							{
+								class = "Odd"
+							}
+							else
+							{
+								class = "Even"
+							}
+							# display only main label, count and perc.
+							main_url = $4
+							gsub( /[^A-Za-z0-9_.-]/, "_", main_url );		# W3C restrictions and no ":".
+							printf( "<TR class=%s>\n", class )
+							printf( "	<TD class=Odd><A HREF=\"#cfg_%s\" TITLE=\"%s\">%s</A></TD>\n", main_url, main_url, $4 )
+							print   "	<TD class=Even> &nbsp; </TD>"
+							print   "	<TD class=Odd style=\"text-align:right;\">" $6 "</TD>"
+							print   "	<TD class=Even style=\"text-align:right;\">" $7 "</TD>"
+							print   "	<TD class=Odd> &nbsp; </TD>"
+							print   "	<TD class=Even> &nbsp; </TD>"
+							print "</TR>"
+							
+							prev_main = $4
+						}
+						if ( length( $5 ) > 0 )
+						{
+							if ( class != "Odd" )
+							{
+								class = "Odd"
+							}
+							else
+							{
+								class = "Even"
+							}
+
+							sub_url = sprintf( "%s_%s", prev_main, $5 )
+							gsub( /[^A-Za-z0-9_.-]/, "_", sub_url );		# W3C restrictions and no ":".
+
+							printf( "<TR class=%s>\n", class )
+							print   "	<TD class=Odd> &nbsp; </TD>"
+							printf( "	<TD class=Even><A HREF=\"#cfg_%s\" TITLE=\"%s\">%s</A></TD>\n", sub_url, sub_url, $5 )
+							print   "	<TD class=Odd> &nbsp; </TD>"
+							print   "	<TD class=Even> &nbsp; </TD>"
+							print   "	<TD class=Odd style=\"text-align:right;\">" $8 "</TD>"
+							print   "	<TD class=Even style=\"text-align:right;\">" $9 "</TD>"
+							print "</TR>"
+						}
+						next
+					}
+		END	{
+				if ( profiling_hdr > 0 )
+				{
+					print "</TBODY>"
+					print "</TABLE>"
+				}
+			}' ${1}
+
+	echo "</DIV><!-- class=SCC_SNAP_STATS -->"
+}
+
+pre_process_data		>${TMP_FILE}
+grep "^stats:"	<${TMP_FILE}	>${STAT_DATA}
+prepare_help	<${TMP_FILE}	>${HLP_CLASSES}
+
+# Generate the entire HTML file:
+(
+	gen_header ${1}					# No input required
+	gen_menu	<${TMP_FILE}			# also writes in ${HLP_USED}
+	gen_data "${HLP_CLASSES}" "${TMP_FILE}"
+	if [ -s ${STAT_DATA} ]
+	then
+		gen_stats ${STAT_DATA}
+	fi
+	cat ${HLP_USED} ${TMP_FILE} | gen_help
+	gen_trailer					# No input required
+)
+
+exit 0

@@ -1,0 +1,76 @@
+Description
+===========
+This file describes the client part of System Configuration Collector aka SCC.
+
+Purpose
+=======
+The goal of SCC is to collect and categorize configuration data. The collected
+data can be used for auditing (for example SOX) and troubleshooting by administrators
+by reviewing the detected changes and comparing the configuration of systems.
+It is not an Intrusion Detection System nor a monitoring tool as the data is only 
+categorized and not classified. Such tools could use and analyze the data collected by SCC.
+
+Installation and operation
+==========================
+Refer to scc(5) and http://sysconfcollect.sourceforge.net/architecture.html for details.
+To access the manual page after installation, add /opt/scc/man to $MANPATH.
+
+Development and build
+=====================
+The remainder of this file describes the development environment of the SCC client.
+Download and unpack the src.tar.gz for local developments.
+
+Directories
+===========
+The development environment consists of the following subdirectories:
+- pkg_files	all files required during the production and installation of the software
+- scc_modules	the modules invoked by SCC during the collection of data
+- software	target for all packages that are produced by the build script
+- tests         bats tests
+
+The base directory contains the main scripts and manual pages of SCC.
+
+Building
+========
+The source tar.gz file of the software is produced by invoking the build script
+without options. As this script requires root permissions to change ownership 
+of packages files, you can use sudo to activate it.
+
+The exception is when you want to run SCC as non-root user. In that case, do not use 
+sudo and do add the --force option and the software will only be produced as a 
+tar.gz file that has to be unpacked and installed by means of the scc-install script.
+This also requires the use of the --conf, --data and --sw options to relocate the
+software from the default system directories.
+
+The (default) source tar.gz file is the base for the production of all package formats.
+They can be produced by invoking the build script with the --all option. This option
+also requires root permissions. All produced packages can be found in subdirectory
+"software". When specific packaging software is absent, the production of the
+corresponding package format fails and the production continues with the next format.
+
+Use the --help option with build for a full list of all its options.
+
+Customisation
+=============
+Download the latest version of the software:
+
+	svn checkout svn://svn.code.sf.net/p/sysconfcollect/code/scc/trunk scc
+
+Use the svn update command to keep your directory uptodate with the most recent
+commits. Customize scc by adding and deleting modules and then calling build 
+with the --all option to produce your customized packages as described in 
+the Building section.
+
+You can also use the --conf, --data, --sw_bin, --sw_doc and --sw_man options with 
+the build script to relocate the software. These options only work for those package 
+formats whose production does not use the relocate script already.
+
+Testing
+=======
+Install bats:
+
+	git clone https://github.com/bats-core/bats-core.git
+	cd bats-core
+	sudo ./install.sh /usr/local
+
+Run all tests: sudo bats tests/

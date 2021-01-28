@@ -1,0 +1,1276 @@
+#!/bin/sh
+
+# Shell script to collect and compare configuration data for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc-log 6287 2019-11-12 18:45:53Z siemkorteweg $
+
+
+set -u
+
+ProgName=${0##*/};			export ProgName
+
+export SCC_BIN=/opt/scc/bin
+export SCC_DATA=${SCC_DATA:-/var/opt/scc/data}
+export SCC_TMP=/tmp
+export SCC_CONF=/etc/opt/scc/conf
+export SCC_NEWCONF=/etc/opt/scc/newconfig
+
+case "${SCC_DATA}" in
+/*)	;;
+*)	echo "${ProgName}: alternative SCC_DATA (${SCC_DATA}) should be an absolute path" >&2
+	exit 2;;
+esac
+
+# Perform the security settings before calling any program.
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};	export PATH
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+
+# Avoid too strict permissions. Otherwise scc-srv will not work correctly when pulling client data.
+umask 022
+[ ! -d ${SCC_DATA} ] && mkdir -p ${SCC_DATA} 2>/dev/null
+[ ! -d ${SCC_DATA}/transfer ] && mkdir -p ${SCC_DATA}/transfer 2>/dev/null
+umask 077
+[ ! -d ${SCC_TMP} ] && mkdir -p ${SCC_TMP} 2>/dev/null
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+cd ${SCC_TMP}
+
+key_file_from_scc="${SCC_KEY_FILE:-}"
+[ -r ${SCC_CONF}/scc-localize ] && . ${SCC_CONF}/scc-localize
+if [ "${key_file_from_scc}" ]
+then
+	export SCC_KEY_FILE="${key_file_from_scc}"	# Keyfile specified by -k option of scc has precedence
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# PuppyLinux does not provide nice.
+n_exe="$(which nice 2>/dev/null)"
+if [ ! -x "${n_exe}" ]
+then
+	alias nice=""
+fi
+
+hostname_exe="$(which hostname 2>/dev/null)"
+if [ -x "${hostname_exe}" ]
+then
+	name=$(hostname 2>/dev/null)
+else
+	name=${HOSTNAME:-}
+fi
+name=${name%%.*}
+if [ -z "${name}" ]
+then
+	name="empty"			# same value as in scc and scc-collect
+fi
+
+index=${SCC_DATA}/index.html
+lock_cfg=${SCC_TMP}/scc.lock
+ito_log=${SCC_DATA}/cfg.log
+
+split_file=${SCC_CONF}/scc-split.conf
+
+random="$(get_RANDOM)"
+export TMP1_FILE=${SCC_TMP}/scc_log1_$$_${random}
+export TMP2_FILE=${SCC_TMP}/scc_log2_$$_${random}
+export TMP3_FILE=${SCC_TMP}/scc_log3_$$_${random}
+
+export PROC_FILE=${SCC_TMP}/scc_log_ps_$$_${random}
+
+# Produce head for html-file on stdout.
+# Argument: title
+scc_html_head( )
+{
+	echo "<!DOCTYPE HTML>"
+	echo "<HTML lang=\"en\">"
+	echo "<HEAD>"
+	echo '	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">'
+	echo '	<LINK HREF="style.css" REL="stylesheet" TYPE="text/css">'
+	echo "	<TITLE>Index for ${1}</TITLE>"
+	echo "</HEAD>"
+}
+
+# Check the correctness of the snapshot format:
+scc_check_snapshot()
+{
+	awk '/^fix:messages:/	{
+					# When a module signals an error, the syntax of the message-line is correct
+					visited[ "fix:messages::" ] = 1
+					compare[ ":messages:" ] = 1
+			}
+		/^fix:|^var:|^hlp:|^stats:/	{
+				class=$0
+				sub( /::.*/, "::", class )
+				cnt=split( class, part, ":" )
+
+				if ( visited[ class ] )			# Each visited class already has been checked.
+				{
+					print $0;			# print, but do not check again.
+					next
+				}
+
+				# line with classification with minimal number of elements:
+				#	fix:general::			# cnt is 4
+				# line with classification with maximal number of elements:
+				#	fix:1:2:3:4:5:6:7:8:9:10::	# cnt is 13
+				if ( cnt < 4 )
+				{
+					print "fix:messages::not enough fields in classification:", $0
+				}
+				else if ( cnt > 13 )
+				{
+					print "fix:messages::too many fields in classification:", $0
+				}
+				else if ( ( class == $0 ) && ( class !~ "::$" ) )
+				{
+					print "fix:messages::no end of classification:", $0
+				}
+				else
+				{
+					visited[ class ]=1
+
+					# A class conflict occurs in the following case:
+					# fix:a:b::data
+					# fix:a:b:c::data
+					# Either a:b is the classification of configuration data,
+					# or it is the entry-point for a sub-menu.
+					# Help-info can be available for a sub-menu.
+					# Therefore no class conflicts for help-info.
+					if ( class !~ "^hlp:" )
+					{
+						sub( /^.../, "", class );	# erase fix or var or hlp
+						sub( /::$/, ":", class );	# map :a:: to :a: to check for :a:b:
+						for ( c in compare )
+						{
+							if ( c == class )
+							{
+								break
+							}
+							if ( index( c, class ) == 1 )
+							{
+								print "fix:messages::class conflict for \"" class "\" and \"" c "\""
+								break
+							}
+							if ( index( class, c ) == 1 )
+							{
+								print "fix:messages::class conflict for \"" c "\" and \"" class "\""
+								break
+							}
+						}
+						compare[ class ]=1
+					}
+					print $0
+				}
+				next
+			}
+			{
+				print "fix:messages::unknown prefix:" $0
+			}'
+	return 0
+}
+
+# Check for the conditions in a split-file.
+# ARGUMENTS
+#	<condition>	"absent" or "present"
+#	<arg>		possible formats are:
+#			<file>
+#			<user>|<process>
+check_split_condition()
+{
+	if [ "${2}" != "${2#*|}" ]
+	then
+		# This is a very simple process checker.
+		user="${2%|*}"		# Split $2 into <user> and <proc>
+		proc="${2#*|}"
+		awk	'{
+				if ( $1 != u )
+				{
+					next
+				}
+				if ( $0 ~ p )
+				{
+					exit 2
+				}
+			}' u="${user}" p="${proc}" ${PROC_FILE}
+		ret=$?
+		if [ "${1}" = "present" -a "${ret}" -eq 2 ]
+		then
+			return 1
+		fi
+		if [ "${1}" = "absent" -a "${ret}" -ne 2 ]
+		then
+			return 1
+		fi
+	else
+		if [ "${1}" = "present" -a -f "${2}" ]
+		then
+			return 1
+		fi
+		if [ "${1}" = "absent" -a ! -f "${2}" ]
+		then
+			return 1
+		fi
+	fi
+
+	return 0
+}
+
+generate_class_counts()
+{
+	# Input is regular snapshot data.
+	# Count lines starting with "fix" or "var".
+	# Count the number and percentage of lines with the first and the second classification.
+	awk -F:	'/^fix/		{ fix_cnt+=1; }
+		/^var/		{ var_cnt+=1; }
+		/^stats/	{ next }		# stats-info is excluded from statistics.
+		/^hlp/		{ next }		# hlp-info is excluded from statistics.
+				{
+					c=sprintf( "%s:%s", $2, $3 )
+					main_cnt[ $2 ] += 1
+					sub_cnt[ c ] += 1
+				}
+	END	{
+			total = fix_cnt + var_cnt
+
+			# Display the counters for fix, var and total number of lines.
+			printf( "stats:fix_var::fix:%d:%d\n", fix_cnt, 0.5 + ( 100 * fix_cnt ) / total )
+			printf( "stats:fix_var::var:%d:%d\n", var_cnt, 0.5 + ( 100 * var_cnt ) / total )
+			printf( "stats:fix_var::total:%d:%d\n", total, 100 )
+
+			for ( s in sub_cnt )
+			{
+				split( s, part, ":" )
+				main_counter = main_cnt[ part[ 1 ] ]
+
+				# Use a separate, temporary file for the statistics as the process generating the
+				# statistics requires first the "fix" and then the "var" statistics.
+
+				# Use broad, fixed width numbers to enable usage of busybox sort to order the data.
+				printf( "%010.10d:%010.10d:%s:%d:%d\n",
+					main_counter, sub_cnt[ s ], s,
+					0.5 + ( 100 * main_counter ) / total,
+					0.5 + ( 100 * sub_cnt[ s ]) / main_counter ) >>tmp
+			}
+		}' tmp=${TMP3_FILE}
+
+	sort -r ${TMP3_FILE}					|
+	awk -F:	'{
+			# Input: <main_class_cnt>:<sub_class_cnt>:<main_class>:<sub_class>:<main_perc>:<sub_class>
+			printf( "stats:classes::%s:%s:%d:%d:%d:%d\n", $3, $4, $1, $5, $2, $6 ); 
+		}'
+
+	rm -f ${TMP3_FILE}
+
+	# Format of the output:
+	# fix/var::<total_line_cnt>:100:<nr_fix/var_lines>:<fix/var_percentage>
+	# <main_line_cnt>:<sub_line_cnt>:<main_class>:<sub_class>:<main_perc>:<sub_perc>
+}
+
+CMD_LINE="${ProgName}	[ -c|--comment <remark> ]
+			[ -e|--extra <mod> ]
+			[ -S|--selection <mod> ]
+			[ -f|--fqdn ]
+			[ -h|--help ]
+			[ -l|--label <label> ]
+			[ -m|--max_age <max> ]
+			[ --pretrans | --preinstall | --postinstall | --preremove ]
+			[ -r|--reset ]
+			[ -v|--virtual <host> ]"
+SYNTAX_ERROR="Syntax error, use: ${CMD_LINE}"
+
+MISSING_OPT_ARG="${ProgName}: Syntax error, missing argument for option:"
+remark=""
+max_months=0			# No limit
+user_modules=""
+select_modules=""
+restart=0
+fqdn=0
+virtual_host=0
+label=""
+while [ $# -gt 0 ]
+do
+	case ${1} in
+	-c|--comment)	if [ "${2:-}" ]			# Empty remark means: no comment
+			then
+				remark=$(echo "${2}" | tr -d "\012")	# be sure that the remark is single-line
+			fi
+			shift 1		# make sure that scc-log with a trailing -c option, without argument, finishes.
+			shift 1;;
+
+	-e|--extra)	# Empty is permitted, missing not
+			[ -z "${2:-}" ] && [ "${2+defined}" != "defined" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			scc_check_option_single "-e" "${user_modules}"
+			user_modules="${2:-}"
+			shift 2;;
+
+	-S|--selection)	# Empty is permitted, missing not
+			[ -z "${2:-}" ] && [ "${2+defined}" != "defined" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			scc_check_option_single "-S" "${select_modules}"
+			select_modules="${2:-}"
+			shift 2;;
+
+	-f|--fqdn)	fqdn="1"
+			shift 1;;
+
+	-h|--help)	echo "${CMD_LINE}"
+			scc_documentation
+			exit 0;;
+
+	-l|--label)	if [ "${2:-}" ]			# Empty label means: no label
+			then
+				label="${2}"
+			fi
+			shift 1		# make sure that scc-log with a trailing -l option, without argument, finishes.
+			shift 1;;
+
+	-m|--max_age)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			case "${2}" in
+			[0-9]*)	max_months=${2};;
+			*)	echo "${ProgName}: non-numeric argument for -m option: ${2}" >&2
+				exit 1;;
+			esac
+			shift 2;;
+
+	--pretrans)	if [ -f ${lock_cfg} ]
+			then
+				echo "ERROR:   install aborted, another instance of scc is active."
+				exit 5
+			fi
+			exit 0;;
+
+	--preinstall)	SCC_INSTALL_PHASE=preinstall
+
+			echo "NOTE:    Running scc to create a snapshot with the current"
+			echo "NOTE:    version of the software. This may take some minutes."
+
+			if [ -f ${lock_cfg} ]
+			then
+				echo "ERROR:   install aborted, another instance of scc is active."
+				exit 2
+			fi
+
+			shift 1;;
+
+	--postinstall)	SCC_INSTALL_PHASE=postinstall
+			restart=1
+			remark="install of SCC release 1.26.73"
+
+			# The correct situation is that the lock file does not exist (no preinstall hook)
+			# or that the lock file is empty because of the prein(stall) script.
+			if [ -s ${lock_cfg} ]
+			then
+				echo "ERROR:   install aborted, another instance of scc is active."
+				exit 2
+			fi
+
+			echo "NOTE:    Running scc to create a snapshot with the new version"
+			echo "NOTE:    of the software. This may take some minutes."
+
+			shift 1;;
+
+	--preremove)	rm -rf ${SCC_DATA} ${lock_cfg}
+			if [ -d "${SCC_PERSIST:-}" -a -d "${SCC_PERSIST:-}/scc" ]
+			then
+				rm -rf "${SCC_PERSIST:-}/scc"
+
+				# Files are removed by software vib remove, we remove the directories
+				rm -rf /etc/opt/scc /var/opt/scc /opt/scc
+			fi
+			exit 0;;			# We are done, no more arguments checking
+
+	-r|--reset)	restart=1
+			shift 1;;
+
+	-v|--virtual)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			virtual_host=1
+			name="${2}"		# Act as data is originating from virtual host.
+			shift 2;;
+
+	*)		echo "${SYNTAX_ERROR}" >&2
+			exit 1;;
+	esac
+done
+
+if [ ${virtual_host} -eq 0 -a "${select_modules}" ]
+then
+	echo "${ProgName}: cannot use -S option without -v option" >&2
+	exit 2
+fi
+
+filename_keep_config="scc.${name}.keep"
+export SCC_KEEP_CONFIG="${SCC_DATA}/${filename_keep_config}"
+
+if [ "${SCC_INSTALL_METHOD:-}" = "source" -a "${SCC_INSTALL_PHASE:-}" = "preinstall" -a -s ${SCC_KEEP_CONFIG} ]
+then
+	grep -q "fix:software:installed-source::scc:" ${SCC_KEEP_CONFIG}
+	if [ $? -eq 1 ]
+	then
+		echo "WARNING: mixing source and package installs"
+	fi
+fi
+
+if [ "${SCC_INSTALL_PHASE:-}" ]
+then
+	# During installs on HP-UX, stm often hangs; do not run it.
+	SCC_IGNORE_STM="yes";			export SCC_IGNORE_STM
+else
+	SCC_INSTALL_PHASE=""
+fi
+
+# To avoid that scc is run (by cron) between the pre- and the post-install,
+# an empty lock-file is created in the pre-install after running scc.
+if [ -f ${lock_cfg} -a ! -s ${lock_cfg} -a -n "${SCC_INSTALL_PHASE:-}" ]
+then
+	rm -f ${lock_cfg}	# make sure that scc-log will continue
+fi
+
+# Some commands might "hang", use a lock-file to avoid that more and more
+# invocations of Scc start and swamp the system.
+if [ -f ${lock_cfg} ]
+then
+	running=1
+	pid=$(<${lock_cfg})
+	if [ -n "${pid}" ]
+	then
+		# Check in a non-destructive way whether the process is still running.
+		kill -0 ${pid} 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			# Unable to signal the process: it is no longer active.
+			# Maybe hard-killed during a shutdown.
+			running=0
+		fi
+	fi
+	if [ ${running} -eq 1 ]
+	then
+		echo "${ProgName}: another instance is active, check process ID in ${lock_cfg}" >&2
+		exit 2
+	fi
+
+	rm -f ${lock_cfg}
+fi
+
+# Do not install the traps earlier, as the above exit will remove the
+# lock file from the other, running invocation of this program.
+trap 'rm -f ${TMP1_FILE} ${TMP2_FILE} ${TMP3_FILE} ${lock_cfg} ${PROC_FILE} 2>/dev/null' 0
+trap "exit 2" 1 2 3 15
+
+# Record our PID in the lock-file
+echo "$$" > ${lock_cfg}
+if [ ${virtual_host} -eq 1 -a -z "${select_modules}" -a -z "${user_modules}" ]
+then
+	echo "${ProgName}: use -e and/or -S option with -v option" >&2
+	exit 1
+fi
+
+# Do not overwrite an existing stylesheet.
+if [ ! -f ${SCC_DATA}/style.css -a -f ${SCC_NEWCONF}/style.css ]
+then
+	cp -p ${SCC_NEWCONF}/style.css ${SCC_DATA}
+	chmod 400 ${SCC_DATA}/style.css
+fi
+
+# Retrieve the keep file from persistent storage when it is missing
+if [ -d "${SCC_PERSIST:-}" -a -d "${SCC_PERSIST:-}/scc" ]
+then
+	# Preseved data present and run data absent: copy from preserved directory.
+	if [ -f "${SCC_PERSIST}/scc/${filename_keep_config}" -a ! -f ${SCC_KEEP_CONFIG} ]
+	then
+		cp "${SCC_PERSIST}/scc/${filename_keep_config}" ${SCC_KEEP_CONFIG}
+	fi
+fi
+
+touch ${SCC_KEEP_CONFIG}
+
+if [ "${label}" ]
+then
+	# Add the label to the keep file and the general module will pick it up 
+	# and preserve it for next runs. Class should be identical with code in general module.
+	echo "fix:general::label:${label}" >>${SCC_KEEP_CONFIG}
+fi
+log_cfg=${SCC_DATA}/scc.${name}.log
+
+split_hosts=""
+if [ -s "${split_file}" -a ${virtual_host} -eq 0 ]
+then
+	split_hosts="$(awk -F"|" '/^host\|/ { print $2 }' ${split_file} | sort -u)"
+fi
+
+if [ ${virtual_host} -eq 0 ]
+then
+	# For some programs that inspect the logbook, "fixed" filenames are easier. 
+	# Use a symbolic link to save disk-space.
+	if [ -h ${ito_log} ]
+	then
+		# Check whether the target of the symlink corresponds to ${log_cfg}.
+		# When this is not the case, the hostname of the system changed.
+		prev_host="$(ls -l ${ito_log}	|
+			awk '{ sub( /\.log$/, "", $NF ); sub( /.*scc\./, "", $NF ); print $NF }')"
+		if [ "${prev_host}" != "${name}" ]
+		then
+			# We have to move the files to reflect the new hostname.
+			for suffix in cur html log log.html keep old
+			do
+				mv ${SCC_DATA}/scc.${prev_host}.${suffix} ${SCC_DATA}/scc.${name}.${suffix} 2>/dev/null
+			done
+
+			# Rename also the files in data/transfer
+			for file in ${SCC_DATA}/transfer/scc.${prev_host}.*
+			do
+				if [ -f "${file}" ]
+				then
+					new_name="$(echo ${file} | sed -e "s|scc.${prev_host}|scc.${name}|")"
+					mv -f "${file}" "${new_name}"
+				fi
+			done
+
+			if [ -z "${remark}" ]		# Do not change remark supplied with -c option.
+			then
+				remark="Hostname changed from ${prev_host} to ${name}"
+			fi
+		fi
+	fi
+	rm -f ${ito_log}
+	touch ${log_cfg}
+	ln -s ${log_cfg} ${ito_log}
+fi
+
+# Reduce the log file to the specified number of months.
+if [ ${max_months} -gt 0 ]
+then
+	# Remove leading 0 from current month to avoid illegal octal numbers 08 and 09. Indicated by Eduardo Alvarenga.
+	cur_month=$(date '+%m')
+	cur_month=${cur_month#0}	# avoid 'octal' arithmetic
+	year="$(date '+%Y')"
+	limit=$(( ( year * 12 ) + cur_month - max_months ))
+
+	for h in ${name} ${split_hosts}
+	do
+		echo "${SCC_DATA}/scc.${h}.log"
+	done				|
+	sort -u				|
+	while read logfile
+	do
+		first=$(head -n 1 ${logfile} | awk -F- '{ print ( ( $1 * 12 ) + $2 ) }' )
+		if [ -n "${first}" -a ${first} -lt ${limit} ]
+		then
+			# Some of the log-entries are too old.
+			awk -F- '{
+					if ( ( ( $1 * 12 ) + $2 ) >= l )
+					{
+						print
+					}
+			}' l="${limit}" ${logfile} >${TMP1_FILE}
+
+			# The html-version of the log file is generated from scratch out of the shorter log file.
+			mv ${TMP1_FILE} ${logfile}
+		fi
+	done
+fi	# if [ ${max_months} -gt 0 ]
+
+# Record the start of collecting.
+d_n=$(date '+%Y-%m-%d')
+t_n_b=$(date '+%H.%M.%S')
+s=${t_n_b#*.*.}		# seconds
+s=${s#0}		# strip leading "0"
+h=${t_n_b%.*.*}		# hours
+h=${h#0}		# strip leading "0"
+m=${t_n_b#*.}		# minutes and seconds
+m=${m%.*}		# minutes
+m=${m#0}		# strip leading "0"
+tick_start=$(( s + ( 60 * m ) + ( 3600 * h ) ))
+
+# When scc is installed via installp, it runs with a non-default ODM environment. 
+# Correct this (we only read data from ODM).
+if [ -d /etc/objrepos ]
+then
+	export ODMDIR=/etc/objrepos
+fi
+
+# Refer to scc-collect for the exact string:
+PKG_DATA_LOCK_PREV_RUN="$(grep "pkgmngt:locked_database" ${SCC_KEEP_CONFIG})"
+
+env="$(which env 2>/dev/null)"
+if [ -x "${env}" ]
+then
+	# Run scc-collect in a "clean" environment.
+	# It needs TZ to use the correct time-settings.
+	# It needs ODMDIR to use the correct object database for AIX.
+	# It uses SCC_PROFILING to determine whether to add performance data to the snapshot.
+	# It uses SCC_IGNORE_STM to determine whether to run stm or not.
+	# It uses SCC_INSTALL_PHASE to determine whether SCC is called during installation.
+	# It uses SCC_INSTALL_METHOD to know whether source installs should be recorded.
+	# It uses SCC_DATA to know whether a user indicated an alternative data hierarchy
+	nice env -i						\
+		TZ="${TZ:-}"					\
+		ODMDIR="${ODMDIR:-}"				\
+		SCC_PROFILING="${SCC_PROFILING:-yes}"		\
+		SCC_IGNORE_STM="${SCC_IGNORE_STM:-}"		\
+		SCC_INSTALL_PHASE="${SCC_INSTALL_PHASE:-}"	\
+		SCC_INSTALL_METHOD="${SCC_INSTALL_METHOD:-}"	\
+		SCC_DATA="${SCC_DATA}"				\
+		SCC_KEEP_CONFIG="${SCC_KEEP_CONFIG}"		\
+		LOGNAME="root"					\
+		NIX_PATH="${NIX_PATH:-}"			\
+			${SCC_BIN}/scc-collect -e "${user_modules}" -S "${select_modules}" </dev/null >${TMP3_FILE} 2>&1 
+else
+	# Some systems do not provide env. Do not run in a clean environment.
+	nice ${SCC_BIN}/scc-collect -e "${user_modules}" -S "${select_modules}" </dev/null >${TMP3_FILE} 2>&1 
+fi
+
+if [ $? -ne 0 ]
+then
+	echo "${ProgName}: scc-collect failed." >&2
+	trap "" 0
+	exit 2
+fi
+
+scc_to_ascii <${TMP3_FILE}								|
+sed -e 's@\(.*scc_...._._.*: [0-9][0-9]* [Kk]illed\)@var:messages::\1@' >${TMP2_FILE}
+mv -f ${TMP2_FILE} ${TMP3_FILE}
+
+# Be aware thet SCC_KEEP_CONFIG has been replaced by scc-collect and now contains the keep-data of the current run
+
+# Record the end of collecting.
+t_n_e=$(date '+%H.%M.%S')
+
+s=${t_n_e#*.*.}		# seconds
+s=${s#0}		# strip leading "0"
+h=${t_n_e%.*.*}		# hours
+h=${h#0}		# strip leading "0"
+m=${t_n_e#*.}		# minutes and seconds
+m=${m%.*}		# minutes
+m=${m#0}		# strip leading "0"
+tick_end=$(( s + ( 60 * m ) + ( 3600 * h ) ))
+if [ ${tick_end} -lt ${tick_start} ]
+then
+	tick_end=$(( tick_end + ( 24 * 3600 ) ))
+fi
+runtime="$(( tick_end - tick_start ))"
+
+if [ ${restart} -eq 0 -a -f ${SCC_DATA}/scc.${name}.cur ]
+then
+	# Check for other layout-version in old (current) snapshot without -r option being used to indicate this.
+	prev_version="$(awk -F: '/fix:general::layout-version:/ { print $5; exit 0 }' ${SCC_DATA}/scc.${name}.cur)"
+	if [ "${prev_version}" != "1.26.73" ]
+	then
+		restart=1
+		remark="Version change detected, from '${prev_version}' to '1.26.73'"
+	fi
+fi
+
+if [ ${restart} -eq 1 ]
+then
+	# Erase the current snapshot(s) to indicate the restart.
+	rm -f ${SCC_DATA}/scc.${name}.cur
+	if [ ${virtual_host} -eq 0 ]
+	then
+		for h in ${split_hosts}
+		do
+			rm -f ${SCC_DATA}/scc.${h}.cur
+		done
+	fi
+fi
+
+# Check whether some classifications should be changed (via scc-localize):
+# Could be used to switch from fix: to var: or move some data to a separate class in the snapshot.
+if [ "${SCC_CLASS_MAP:-}" ]
+then
+	echo "${SCC_CLASS_MAP}"		|
+	sed	-e '/^#/d'	\
+		-e '/^ *$/d'		|
+	while read mapping
+	do
+		# mapping contains: <src>|<dest>
+
+		src="${mapping%|*}"
+		if [ "${src}" = "${mapping}" ]
+		then
+			echo "fix:messages::missing class separator '|' in class mapping '${mapping}'" >>${TMP3_FILE}
+			continue
+		fi
+
+		dest="${mapping#*|}"
+		if [ "${src}|${dest}" != "${mapping}" ]
+		then
+			echo "fix:messages::more than one class separator '|' in class mapping '${mapping}'" >>${TMP3_FILE}
+			continue
+		fi
+
+		sed -e "s|${mapping}|" <${TMP3_FILE} >${TMP3_FILE}.tmp 2>${TMP3_FILE}.err
+		if [ -s ${TMP3_FILE}.err ]
+		then
+			echo "fix:messages::regular expression error in class mapping '${mapping}'" >>${TMP3_FILE}
+			sed -e 's/^/fix:messages::/' <${TMP3_FILE}.err >>${TMP3_FILE}
+		else
+			mv -f ${TMP3_FILE}.tmp ${TMP3_FILE}
+		fi
+		rm -f ${TMP3_FILE}.err ${TMP3_FILE}.tmp
+	done
+fi
+
+# Check the syntax of the new snapshot.
+rm -f ${TMP1_FILE}
+sed	-e 's/[ 	][ 	]*$//'	\
+	-e '/^$/d' ${TMP3_FILE}				|
+scc_check_snapshot >${TMP2_FILE}
+
+rm -f ${TMP1_FILE} ${TMP3_FILE}
+
+# Do not use the split-file when -v option is used.
+if [ -s ${split_file} -a ${virtual_host} -eq 0 ]
+then
+	# The file ${PROC_FILE} only exists during the collection of data.
+	# Extract its contents from the new snapshot using the same classification
+	# used in scc-collect.
+	sed -n -e "s/^var:system:processes:://p" <${TMP2_FILE} >${PROC_FILE}
+
+	# Split the new snapshot according to the split-file.
+	# Produce the new snapshots for all pseudo hosts in the splitfile.
+	# ${TMP2_FILE} contains the collected data.
+	for host in ${split_hosts}
+	do
+		rm -f ${SCC_DATA}/scc.${host}.new
+
+		# Check whether pseudo host is active/present.
+		check="$(sed -n -e "s/^host|${host}|present|//p" ${split_file})"
+		if [ -n "${check}" ]
+		then
+			check_split_condition present "${check}"
+			if [ $? -eq 0 ]
+			then
+				continue
+			fi
+		fi
+		check="$(sed -n -e "s/^host|${host}|absent|//p" ${split_file})"
+		if [ -n "${check}" ]
+		then
+			check_split_condition absent "${check}"
+			if [ $? -eq 0 ]
+			then
+				continue
+			fi
+		fi
+
+		# Collect all the classifications that have to be moved/copied.
+		cp_file=${SCC_TMP}/${host}.cp.$$_${random}
+		del_file=${SCC_TMP}/${host}.del.$$_${random}
+		rm -f ${cp_file} ${del_file}
+
+		awk -F"|"	'/^[ 	]*#/	{ next }
+				/^[ 	]*$/	{ next }
+						{
+							if ( $2 != h )
+							{
+								next
+							}
+							data = ""
+							n_class = ""
+							del = 0
+							new = 0
+						}
+				/^class\|.*\|rm\|/	{
+							data = $4
+							del = 1
+						}
+				/^class\|.*\|cp\|/	{
+							data = $4
+							n_class = $4
+							if ( NF == 5 )
+							{
+								n_class = $5
+							}
+							new = 1
+						}
+				/^class\|.*\|mv\|/	{
+							data = $4
+							n_class = $4
+							if ( NF == 5 )
+							{
+								n_class = $5
+							}
+							del = 1
+							new = 1
+						}
+						{
+							if ( new == 0 && del == 0 )
+							{
+								next
+							}
+
+							if ( length( n_class ) == 0 )
+							{
+								n_class = ":"
+							}
+
+							if ( data ~ "^fix:" || data ~ "^var:" )
+							{
+								# Do not extend.
+								if ( new )
+								{
+									# n_class should also start with "fix:" or "var:"
+									printf( "s%s^%s%s%s%sp\n",
+										sep, data, sep,
+										n_class, sep ) >>cp_file
+								}
+								if ( del )
+								{
+									print data >>del_file
+								}
+							}
+							else
+							{
+								# Extend optional with fix, var and hlp.
+								col = ":"
+								if ( data ~ "^:" )
+								{
+									col = ""
+								}
+								if ( new )
+								{
+									printf( "s%s^fix%s%s%sfix%s%s%sp\n",
+										sep, col, data, sep,
+										col, n_class, sep ) >>cp_file
+									printf( "s%s^var%s%s%svar%s%s%sp\n",
+										sep, col, data, sep,
+										col, n_class, sep ) >>cp_file
+									printf( "s%s^hlp%s%s%shlp%s%s%sp\n",
+										sep, col, data, sep,
+										col, n_class, sep ) >>cp_file
+								}
+
+								if ( del )
+								{
+									print "fix" col data >>del_file
+									print "var" col data >>del_file
+									print "hlp" col data >>del_file
+								}
+							}
+							next
+						}'					\
+							cp_file="${cp_file}"		\
+							del_file="${del_file}"		\
+							h="${host}"			\
+							sep='\001'			\
+								${split_file}
+
+		if [ ! -s ${cp_file} -a ! -s ${del_file} ]
+		then
+			echo "${ProgName}: no class actions found for host: ${host}" >&2
+		fi
+
+		if [ -s ${cp_file} ]		# Something to copy?
+		then
+			sed -n -f ${cp_file} ${TMP2_FILE}		|
+			scc_check_snapshot >${TMP1_FILE}
+
+			{
+				# Some messages are variable to avoid frequent changes. However, the presence of messages is fix!
+				grep -l "^[fv][ia][xr]:messages::" ${TMP1_FILE} >/dev/null 2>/dev/null
+				if [ $? -eq 0 ]
+				then
+					echo "fix:messages::inspect scc.${host}.cur to determine cause of messages in system/user-modules"
+				fi
+				echo "var:general::date:${d_n}"
+				echo "var:general::start time:${t_n_b}"
+				echo "var:general::stop time :${t_n_e}"
+				echo "var:general::runtime:${runtime}"
+				echo "fix:general::hostname:${host}"
+				echo "var:general::remark:${remark}"
+				wc -c <${TMP1_FILE} | awk '{ printf( "var:general::size (MB):%.3f\n", $1  / ( 1024 * 1024) ); }'
+				if [ ${restart} -eq 1 ]
+				then
+					echo "var:general::restart:true"
+				fi
+
+				# Get the specification for this host from the split-file.
+				# Put them in the general part of the snapshot.
+				awk -F"|"	'/^[ 	]*#/	{ next }
+								{
+									if ( $2 != h )
+									{
+										next
+									}
+									print "fix:general::split-file:" $0
+								}' h="${host}" ${split_file}
+
+				cat ${TMP1_FILE}
+				rm -f ${TMP1_FILE}
+			} >${SCC_DATA}/scc.${host}.new
+		fi
+		if [ -s ${del_file} ]		# Something to remove?
+		then
+			grep -v -f ${del_file} ${TMP2_FILE} >${TMP2_FILE}.tmp
+			mv ${TMP2_FILE}.tmp ${TMP2_FILE}
+		fi
+
+		rm -f ${cp_file} ${del_file}
+
+	done	# while read host
+fi	# if [ -s ${split_file} ]
+
+# The data of the pseudo hosts has been split off from the entire scc-data of the host.
+# Now we can generate the new snapshot for the local host.
+{
+	# Some messages are variable to avoid frequent changes. However, the presence of messages is fix!
+	grep -l "^[fv][ia][xr]:messages::" ${TMP2_FILE} >/dev/null 2>/dev/null
+	if [ $? -eq 0 ]
+	then
+		echo "fix:messages::inspect scc.${name}.cur to determine cause of messages in system/user-modules"
+	fi
+	echo "var:general::date:${d_n}"
+	echo "var:general::start time:${t_n_b}"
+	echo "var:general::stop time :${t_n_e}"
+	echo "var:general::runtime:${runtime}"
+	echo "var:general::remark:${remark}"
+	wc -c <${TMP2_FILE} | awk '{ printf( "var:general::size (MB):%.3f\n", $1  / ( 1024 * 1024) ); }'
+	if [ ${restart} -eq 1 ]
+	then
+		echo "var:general::restart:true"
+	fi
+	cat ${TMP2_FILE}
+	rm -f ${TMP2_FILE}
+} >${SCC_DATA}/scc.${name}.new
+
+# Without diff, all compares should be done on the server (which should provide diff).
+export REMOTE_COMPARE=""
+diff_exe="$(which diff 2>/dev/null)"
+if [ ! -x "${diff_exe}" ]
+then
+	export REMOTE_COMPARE=yes
+fi
+
+# Compare with previous snapshot and generate html-files.
+{
+	echo "${name} local"
+	if [ -s ${split_file} -a ${virtual_host} -eq 0 ]
+	then
+		awk -F"|" '/^host\|/ { if ( $3 == "local" || $3 == "remote" ) print $2, $3 }' ${split_file}
+	fi
+}				|
+sort -u				|
+while read host compare
+do
+	cd ${SCC_TMP}
+
+	if [ "${REMOTE_COMPARE}" ]
+	then
+		compare=remote
+	fi
+
+	new_snapshot=${SCC_DATA}/scc.${host}.new
+	filename_prev_snapshot=scc.${host}.cur
+	prev_snapshot=${SCC_DATA}/${filename_prev_snapshot}
+	old_snapshot=${SCC_DATA}/scc.${host}.old
+	filename_logfile=scc.${host}.log
+	logfile=${SCC_DATA}/${filename_logfile}
+
+	if [ ! -f ${SCC_DATA}/scc.${host}.new ]
+	then
+		# No data split off.
+		if [ "${compare}" = "local" ]
+		then
+			# No new data available, do nothing. Previous data will be sent to server.
+			:
+		else
+			# Remove all files, to avoid that anything is sent to the server.
+			rm -f	${SCC_DATA}/scc.${host}.cur	\
+				${SCC_DATA}/scc.${host}.log	\
+				${SCC_DATA}/scc.${host}.html	\
+				${SCC_DATA}/scc.${host}.log.html
+		fi
+		continue
+	fi
+
+	# When the (default) data directory is not persistent (for example on esxi),
+	# the snapshot and logbook are preserved on a persistent volume configured 
+	# via scc-localize. Refer to vib-gen-scc for more details.
+	if [ -d "${SCC_PERSIST:-}" -a -d "${SCC_PERSIST:-}/scc" ]
+	then
+		# Preseved data present and run data absent: copy from preserved directory.
+		if [ -f "${SCC_PERSIST}/scc/${filename_prev_snapshot}" -a ! -f ${prev_snapshot} ]
+		then
+			if [ ${restart} -ne 1 ]
+			then
+				cp -f "${SCC_PERSIST}/scc/${filename_prev_snapshot}" ${prev_snapshot}
+			fi
+			cp -f "${SCC_PERSIST}/scc/${filename_logfile}" ${logfile}
+		fi
+	fi
+
+	if [ "${compare}" = "local" ]
+	then
+		# Each (non-install) invocation of scc records the result of the package database query in the new keep-file.
+		# During install (except for source install), the corresponding package database is locked and cannot be queried.
+		# Therefore the keep-file of the previous run is consulted for data and this is inserted into the snapshot.
+		# On the next run after the install/upgrade, the package database is not locked and the actual data is in the
+		# new snapshot and differences (upgrade of SCC) will be reported.
+		#
+		# During the very first install/run of scc, there is no keep-file of a previous run and thus the first snapshot does
+		# not contain any package data. The next (non-install) run is able to query the database and that data would be
+		# marked as differences in the logbook. To avoid these differences, scc-log ignores this data when comparing
+		# the previous and new snapshots. To detect a non-install run of scc after an install run with a locked package
+		# database, scc-collect records an indicator in the new keep file and scc-log checks for this string in the
+		# current keep-file.
+		#
+		# The install in the previous run has to be taken into account as much software on BSD systems originates from 
+		# base "components" and no packages are present after an system install. Absence of package data in the previous
+		# snapshot and presence in the new snapshot could appear from the first packages installed on the system. And 
+		# these packages should not be ignored.
+		#
+
+		# Indicate in the remark in the logfile (when the -c option was not used) when pkgmngt data is ignored.
+		log_remark="${remark}"
+
+		# To avoid some superfluous changes, we ignore some data.
+		# We use a sed file to remove data from the snapshot prior to comparing.
+		>${TMP1_FILE} 
+
+		# Check whether the run after the first (install) run retrieved package data that should not end up as changes
+		if [ -f "${prev_snapshot}" -a "${PKG_DATA_LOCK_PREV_RUN}" -a -z "${SCC_INSTALL_PHASE}" ]
+		then
+			# Ignore this when rpm is implemented by busybox.
+			busybox_check rpm
+			busybox_rpm=$?
+			rpm_exe="/bin/rpm"
+			if [ -x /usr/bin/rpm ]
+			then
+				rpm_exe="/usr/bin/rpm"
+			fi
+			if [ ${busybox_rpm} -eq 0 -a -x ${rpm_exe} ]
+			then
+				rpm_in_prev="$(grep -l "fix:software:installed-rpms:" "${prev_snapshot}" 2>/dev/null)"
+				rpm_in_new="$(grep -l "fix:software:installed-rpms:" "${new_snapshot}" 2>/dev/null)"
+				if [ -z "${rpm_in_prev}" -a "${rpm_in_new}" ]
+				then
+					echo "/^new::software:installed-rpms:/d" >>${TMP1_FILE}
+					[ -z "${log_remark}" ] && log_remark="rpm changes are ignored on the first run after the initial install"
+				fi
+
+				# AIX lists all rpms also as native installp packages. Ignore these too.
+				if [ "$(uname -s)" = "AIX" ]
+				then
+					lslpp_in_prev="$(grep -l "fix:software:installed-aix-filesets:" "${prev_snapshot}" 2>/dev/null)"
+					lslpp_in_new="$(grep -l "fix:software:installed-aix-filesets:" "${new_snapshot}" 2>/dev/null)"
+					if [ -z "${lslpp_in_prev}" -a "${lslpp_in_new}" ]
+					then
+						echo "/^new::software:installed-aix-filesets:/d" >>${TMP1_FILE}
+						[ -z "${log_remark}" ] && log_remark="AIX fileset changes are ignored on the first run after the initial install"
+					fi
+				fi
+
+				rpm_keys_in_prev="$(grep -l "fix:software:rpm:imported keys:" "${prev_snapshot}" 2>/dev/null)"
+				rpm_keys_in_new="$(grep -l "fix:software:rpm:imported keys:" "${new_snapshot}" 2>/dev/null)"
+				if [ -z "${rpm_keys_in_prev}" -a "${rpm_keys_in_new}" ]
+				then
+					echo "/^new::software:rpm:imported keys:/d" >>${TMP1_FILE}
+					[ -z "${log_remark}" ] && log_remark="rpm imported keys changes are ignored on the first run after the initial install"
+				fi
+			fi
+
+			# During install by yum from a repository, yum is locked and cannot return data.
+			if [ -x /usr/bin/yum -a ! -x /usr/sbin/rhn-channel ]
+			then
+				class="fix:software:yum:repolist::"
+				yum_in_prev="$(grep -l "${class}" "${prev_snapshot}" 2>/dev/null)"
+				yum_in_new="$(grep -l "${class}" "${new_snapshot}" 2>/dev/null)"
+				if [ -z "${yum_in_prev}" -a "${yum_in_new}" ]
+				then
+					echo "/^new::software:yum:repolist:/d" >>${TMP1_FILE}
+					[ -z "${log_remark}" ] && log_remark="yum changes are ignored on the first run after the initial install"
+				fi
+			fi
+			if [ -x /usr/bin/yum ]
+			then
+				class="fix:software:yum:channel in use::"
+				yum_in_prev="$(grep -l "${class}" "${prev_snapshot}" 2>/dev/null)"
+				yum_in_new="$(grep -l "${class}" "${new_snapshot}" 2>/dev/null)"
+				if [ -z "${yum_in_prev}" -a "${yum_in_new}" ]
+				then
+					echo "/^new::software:yum:channel in use:/d" >>${TMP1_FILE}
+					[ -z "${log_remark}" ] && log_remark="yum changes are ignored on the first run after the initial install"
+				fi
+			fi
+
+			# During install, the BSD package database is locked and cannot return the installed packages.
+			if [ -x /usr/sbin/pkg_info -o -x /usr/pkg/sbin/pkg_info ]
+			then
+				bsd_pkg_in_prev="$(grep -l "fix:software:installed-BSD-packages:" "${prev_snapshot}" 2>/dev/null)"
+				bsd_pkg_in_new="$(grep -l "fix:software:installed-BSD-packages:" "${new_snapshot}" 2>/dev/null)"
+				if [ -z "${bsd_pkg_in_prev}" -a "${bsd_pkg_in_new}" ]
+				then
+					echo "/^new::software:installed-BSD-packages:/d" >>${TMP1_FILE}		# do not report all packages as new
+					[ -z "${log_remark}" ] && log_remark="pkginfo changes are ignored on the first run after the initial install"
+				fi
+			fi
+		fi	# check for removal of package management data
+
+		# Moving data from the main-snapshot through the split-file should not
+		# add to the differences when the split-file is created or extended.
+		# Only appplicable for the "main"-snapshot.
+		if [ "${host}" = "${name}" -a -f ${split_file} -a -f "${prev_snapshot}" ]
+		then
+			# Retrieve the classifications of data that is moved.
+			# Adjust them to delete-statements in a sed-file.
+			# Replace all '/' by '\/' to avoid syntax errors.
+			sed	-n					\
+				-e 's/|$//'				\
+				-e 's@^class|.*|mv|\(.*\)|.*@\1@p'	\
+				-e 's@^class|.*|mv|\(.*\)@\1@p'		\
+					<${split_file}				|
+			sed	-e 's@/@\\/@g'	\
+				-e 's@^@/@'	\
+				-e 's@$@/d@'	\
+					>>${TMP1_FILE}
+		fi
+
+		${SCC_BIN}/scc-cmp "${prev_snapshot}" "${new_snapshot}" "${log_remark}" "${TMP1_FILE}" >>${logfile}
+		rm -f ${TMP1_FILE}
+	else	# if [ "${compare}" = "local" ]
+		# Just empty the logfile to indicate to the server a remote compare.
+		>${logfile}
+	fi
+
+	# class counters are not compared, so we add then after scc-cmp.
+	generate_class_counts <${new_snapshot} >${TMP1_FILE}
+	cat ${TMP1_FILE} >> ${new_snapshot}
+	rm -f ${TMP1_FILE}
+
+	if [ -f ${prev_snapshot} ]
+	then
+		rm -f ${old_snapshot}
+		mv -f ${prev_snapshot} ${old_snapshot}
+	fi
+	mv -f ${new_snapshot} ${prev_snapshot}
+
+	# When the (default) data directory is not persistent (for example on esxi),
+	# copy the snapshot and logbook to persistent volume configured via scc-localize.
+	# Refer to vib-gen-scc for more details.
+	if [ -d "${SCC_PERSIST:-}" ]
+	then
+		mkdir -p ${SCC_PERSIST}/scc
+		cp -f ${prev_snapshot} ${logfile} ${SCC_PERSIST}/scc
+		cp ${SCC_KEEP_CONFIG} "${SCC_PERSIST}/scc/${filename_keep_config}"
+	fi
+
+	# Produce the html files
+	nice ${SCC_BIN}/scc-snap2html ${host} <${prev_snapshot} >${SCC_DATA}/scc.${host}.html
+	if [ -s ${logfile} ]
+	then
+		nice ${SCC_BIN}/scc-log2html ${host} <${logfile} >${logfile}.html
+	else
+		> ${logfile}.html
+	fi
+
+	(
+		cd ${SCC_DATA}
+		if [ "${host}" = "${name}" -a "${SCC_HOST_ALIAS:-}" = "${host}" ]
+		then
+			# alias identical to hostname: use the hostname
+			scc_pack ${host}
+		elif [ "${host}" = "${name}" -a "${SCC_HOST_ALIAS:-}" ]
+		then
+			for suffix in cur html log log.html
+			do
+				rm -f scc.${SCC_HOST_ALIAS}.${suffix}
+				ln -s scc.${host}.${suffix} scc.${SCC_HOST_ALIAS}.${suffix}
+			done
+			scc_pack ${SCC_HOST_ALIAS}
+			rm -f scc.${SCC_HOST_ALIAS}.* ${SCC_DATA}/transfer/scc.${host}.*
+		elif [ "${host}" != "${name}" -o -${fqdn} -eq 0 ]
+		then
+			scc_pack ${host}
+		else
+			domain="$(sed -n -e 's/^fix:general::domain://p' scc.${host}.cur)"
+			if [ -z "${domain}" ]
+			then
+				scc_pack ${host}
+			else
+				for suffix in cur html log log.html
+				do
+					rm -f scc.${host}.${domain}.${suffix}
+					ln -s scc.${host}.${suffix} scc.${host}.${domain}.${suffix}
+				done
+				scc_pack ${host}.${domain}
+				rm -f scc.${host}.${domain}.*
+			fi
+		fi
+
+		# Upgrade after scc has been used with the -u option resets the ownership of transfer to root.
+		# Check the transfer (signal) file whether the -u option has been used and correct.
+		# Refer to --user option handling in scc.
+		owner="$(ls -ld transfer/scc*signal 2>/dev/null | awk '{ print $3; exit 0 }')"
+		if [ "${owner}" != "root" ]
+		then
+			chmod o+x .. . transfer
+			chmod o+r transfer
+			chown "${owner}" transfer 2>/dev/null
+		fi
+	)
+
+done	# while read host compare
+
+if [ ${virtual_host} -eq 0 ]
+then
+	# To ease navigation on the server, the html-file of the snapshot contains a reference
+	# to index.html (the main file for a realm). To avoid an 404 error when browsing on the client,
+	# we create a simple index.html on the client.
+	scc_html_head "Index for ${name}" >${index}
+	cat <<-_X_ >>${index}
+		<BODY>
+			<P>
+				<A HREF="scc.${name}.html">snapshot of ${name}</A>
+				<BR>
+				<A HREF="scc.${name}.log.html">logbook of ${name}</A>
+			</P>
+		</BODY>
+		</HTML>
+	_X_
+fi
+
+if [ "${SCC_INSTALL_PHASE}" = "preinstall" ]
+then
+	# Avoid that scc is started between the pre- and the post-install.
+	# We create an empty lock-file for scc-log indicating to 
+	# the postinstall that the install is running.
+	> ${lock_cfg}
+fi
+
+if [ "${SCC_INSTALL_PHASE}" = "postinstall" ]
+then
+	echo "NOTE:    The snapshot and logbook can be found in ${SCC_DATA}"
+	echo "NOTE:    Please refer to /opt/scc/doc/README for more details"
+fi
+
+exit 0

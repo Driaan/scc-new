@@ -1,0 +1,701 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-srv</TITLE></HEAD><BODY>
+<H1>scc-srv(5)</H1>
+<PRE>
+
+
+
+1mNAME0m
+       scc-srv - introduction SCC-SRV
+
+
+1mRELEASE0m
+       scc-srv	 1.19.44
+
+
+1mINTRODUCTION0m
+       The complete functionality of the server part of SCC consists of:
+
+       - receive files sent by scc from client systems
+       - transfer of these files to the directory used by the web server
+       - summarize data in the received files
+       - allow search and compare functionality through a web server
+
+       Refer to the manual pages of scc for details concerning the SCC client.
+
+
+   1mSummary of transfer of SCC-data0m
+       Basically there are three setups: push, pull and two-step.
+
+       In  the	push  setup,  all  clients schedule scc with the -p and the -s
+       options and transferred data is processed on scc-srv by means of sched‐
+       uled  invocations  of  <A HREF="scc-update.html">scc-update(1)</A>.   This  setup requires (non-root)
+       access of all clients to scc-srv, except when data is  transferred  via
+       email.
+
+       In  the pull setup, scc-srv schedules <A HREF="scc-pull.html">scc-pull(1)</A> with the -R option to
+       run the client, obtain the data and process the transferred data.  This
+       setup  requires	superuser  access  from	 scc-srv  to  all  clients and
+       involves all systems in a realm and all scc client  scripts  should  be
+       accessible via the same path.  Note that scc-win clients do not support
+       pulling scc data.
+
+       In the two-step setup, all clients schedule scc	with  -p  pull	option
+       without the -s option and scc-srv schedules <A HREF="scc-pull.html">scc-pull(1)</A> with the -R and
+       -n options to obtain and process the client data.  This setup  requires
+       (non-root)  access from scc-srv to all clients and involves all systems
+       in a realm and all scc client data should be accessible	via  the  same
+       path.
+
+       These three setups could be mixed on a realm basis.
+
+
+   1mSummary of activation0m
+       The  following  list  summarizes	 the steps to get scc-srv working.  We
+       assume that SCC-data is transferred via email and that it is referenced
+       by  a symbolic link from the document root of the web server.  When the
+       snapshots are not transported via email, you can skip the corresponding
+       steps.	Refer  to  the	remainder of this document for a more detailed
+       description and other setups.
+
+       1  activate the web server and email-processing
+       2  install scc-srv
+       3  extend the mail-alias file:
+	     scc-transfer: "| /opt/scc-srv/bin/scc-receive-mail"
+       4  activate the new alias:
+	     newaliases
+       5  determine the user and group used during the email delivery
+	  and assign the proper ownership (assume mail:mail):
+	     scc-update -m mail:mail
+       6  test whether scc-setup is able to determine the proper defaults by means of:
+	     scc-setup
+	  optional set environment variables to supply the proper values and activate
+	     scc-setup -a
+       7  schedule scc-update to process incoming SCC-data, frequency depends
+	  upon the amount of data and time of arrival of new SCC-data.
+	     scc-update	   # no arguments/options required
+
+       It is also possible to pull the scc-files from the clients after remote
+       execution.   This avoids steps 3, 4, 5 and the scheduling of scc on the
+       clients.	 Refer to the section "Pulling files  from  the	 clients"  for
+       more details.
+
+
+   1mInstallation0m
+       First of all we need a working scc server system.  Later we will need a
+       client system to send its data through email, scp, ftp, rcp  or	cp  to
+       the  server.   Install  scc-srv	with  your package management software
+       according to the instructions on the download page of the website.
+
+       This installs several programs in the directory 4m/opt/scc-srv/bin24m , man‐
+       ual pages in 4m/opt/scc-srv/man24m , documentation in 4m/opt/scc-srv/doc24m and a
+       directory tree under 4m/var/opt/scc-srv/data.24m	 To access  these  programs
+       and manual pages, you can extend your PATH and MANPATH variables during
+       the configuration phase.	 During "normal" operations, direct access and
+       usage of the scc-server software is not required and the following set‐
+       tings are not necessary after the completion of the configuration.
+
+	  PATH=${PATH}:/opt/scc-srv/bin
+	  MANPATH=${MANPATH}:/opt/scc-srv/man
+	  export PATH MANPATH
+
+
+       When you want to install the software in	 another  directory,  download
+       the  source tarball, customize and use the script "relocate" and gener‐
+       ate the appropriate depot/package/rpm.	The  source  tarball  contains
+       scripts	to  generate all native install formats.  This can be achieved
+       by unpacking the	 source	 tarball  and  adding/modifying	 the  required
+       files.	Refer  to  the README file in the source tree for more details
+       concerning producing the depot/rpm/package.
+
+       The following paragraphs describe how the data-directory tree should be
+       used to receive and transfer the files to their ultimate location.
+
+
+   1mReceiving files0m
+       When  the  scc  client  has  collected its data, it can send it through
+       email, scp, ftp, rcp or cp.  The destination of the  files  depends  on
+       the communication program:
+
+	  - cp:	       &lt;directory&gt;
+	  - ftp:       srv.dom:&lt;directory&gt;
+	  - scp/rcp:   &lt;user&gt;@srv.dom:&lt;directory&gt;
+	  - email:     &lt;user&gt;@srv.dom
+
+
+
+   1mReceiving files using scp/rcp0m
+       Suppose	you  decide  to	 send data from (some of) your systems to your
+       scc-server by means of scp or rcp.  Your steps depend on the  way  file
+       transfer	 between  systems in your network is done at the moment.  When
+       all or most of your systems use scp of rcp for user 4mroot,24m the necessary
+       key-files  and  rhost-files  are	 already  in  place.  Each transfer on
+       behalf of scc from a client can use the existing communication path and
+       has to specify the full path of the destination directory.
+
+	  scc -p scp \
+	      -s root@srv.dom:/var/opt/scc-srv/data/transfer/cp
+
+       When you use several accounts to transfer files to your server, you can
+       create  several	subdirectories	in  4m/var/opt/scc-srv/data/transfer/cp,0m
+       each owned by a specific user.
+
+       Add  the	 proper key files or rhosts file to the home-directory of (for
+       example) user scc to enable communication between the  client  and  the
+       server.	Clients can now send the data using the following command:
+
+	  /opt/scc/bin/scc -p scp -s scc@srv.dom:
+
+
+
+   1mReceiving files using ftp0m
+       Suppose you decide to send data from (some of) your systems with ftp to
+       your scc-server.	 You have to create a  4m~/.netrc24m  file  containing	the
+       data  of	 the account that receives the SCC-data.  The contents of this
+       file are:
+
+       machine &lt;scc-srv&gt; login &lt;account&gt; password &lt;password&gt;
+
+       Make sure only root can read this file as it contains a plaintext pass‐
+       word.   This file can also be used with an anonymous ftp-server.	 It is
+       obvious that you should not use the root-account of the	scc-server  in
+       this file.  Use a separate account as described with the transfer using
+       scp/rcp.
+
+
+   1mReceiving files using email0m
+       Suppose you decide to send data from (some of) your systems by email to
+       your  scc-server.   We  have to extend the alias file on the scc-server
+       with an alias that triggers a program that puts the email  contents  in
+       the proper directory.  This program is 1mscc-receive-mail(1).  22mSo, extend
+       your aliases file with:
+
+	  scc-transfer:	   "| /opt/scc-srv/bin/scc-receive-mail"
+
+       The   default   destination   directory	 of   1mscc-receive-mail(1)   22mis
+       4m/var/opt/scc-srv/data/transfer/mail.24m   Another  directory can be speci‐
+       fied as an argument for 1mscc-receive-mail(1).	22mDo  not  forget  to	run
+       1mnewaliases 22mto activate the new alias.
+
+       To  reduce  the likelihood of DOS-attacks, you should use a non-obvious
+       email-alias and not the alias from this documentation.
+
+       We have to consider the following security aspects of programs  invoked
+       through an email alias.	The program 1mscc-receive-mail(1) 22mruns under the
+       uid/gid specified by the mail-handler.  On a vanilla RedHat system with
+       sendmail,  this	is  4mmail/mail.24m   The  destination	directory should be
+       writable for this user.	The rpm for scc-srv sets the uid:gid for  this
+       directory  to  4mroot:root.24m	To  change  this, use the 4m-m24m option of 1mscc-0m
+       1mupdate(1).0m
+
+	  scc-update -m mail:mail
+
+       Subsequent calls of 1mscc-update(1) 22mdo not need to specify this option.
+
+       On some systems the smrsh option (sendmail restricted shell)  is	 acti‐
+       vated.	This  means  that  only	 programs  located  in	the  directory
+       4m/etc/smrsh24m can be activated through an email alias.	 When you  use	the
+       4msmrsh24m  option,  you	 have  to  add	some  additional  programs  to this
+       restricted shell environment:
+
+	  cd /etc/smrsh
+	  ln -s /opt/scc-srv/bin/scc-receive-mail scc-receive-mail
+	  ln -s /bin/cat cat
+
+       Modify the file 4msendmail.mc24m to alter this  option.	 The  program  1mscc-0m
+       1mreceive-mail(1)  22mis not complicated and only uses the program 4m/bin/cat.0m
+       Now clients can send their data to the scc-server  with	the  following
+       command:
+
+	  scc -s scc-transfer@srv.dom
+
+       When  you use another mail-handler, like postfix, all you need to do is
+       to determine the user:group that is used to run 1mscc-receive-mail(1) 22mand
+       change the ownership for the transfer-directory with the 4m-m24m option.
+
+
+   1mReceiving files using email without MTA0m
+       Contributed by David LeVene.
+
+       Just  wanted  to share a way to allow scc to recevie via email, without
+       running a MTA(sendmail/postfix).	 This can be due to  security  reasons
+       eg. you don&#39;t want a host recieving email.
+
+       1. Setup a mailbox (could be anywhere, even office365)
+       2.  Configure  fetchmail	 to download mail from that client. This is an
+       example config that will do the trick, for office365.
+
+	 set daemon	   300		# Poll every 5 minutes, or configure via
+					# cron if you want more control over the
+					# exact timing.
+	 set logfile scc-fetchmail.log	# Create a log to track stuff
+
+	 poll outlook.office365.com proto imap
+	   auth password
+	   user &#39;username&#39;
+	   pass &#39;password&#39; ssl
+	   folder "Inbox/test"		# Folder to download email from
+	   fetchall			# fetch everything, even read messages
+	   nokeep			# Will delete the email after its been
+					# downloaded. When testing.. perhaps
+					# turn this off
+	   mda &#39;/opt/scc-srv/bin/scc-receive-mail&#39;  # Send the email to the scc receiver
+
+       You can test fetchmail and make it verbose via:
+	 $ fetchmail -f /path/to/file/above -v
+
+       3. Make sure you perform an scc-update -m fetchmail:group once
+       4. Test sending an scc report via email
+       5. Run scc-update to process the file which  is	sitting	 in  the  mail
+       transfer directory (defaults to /var/opt/scc-srv/data/transfer/mail)
+
+       If  "other"  mail goes into this folder the scc-receive-mail just notes
+       that there is no attachment it expects to see and moves on. eg:
+
+       scc-transfer:  missing  scc-transfer-data  in  email:  file_6312	  from
+       "host@somedomain.com"
+
+       Use  the -k option for the client to encrypt the sensitive data of your
+       systems when you use an external MTA.
+
+
+   1mReceiving files using cp0m
+       The destination has to be a directory on the client (and server).  This
+       option can be used on the server and with NFS.
+
+
+   1mPulling files from the clients0m
+       In  the case of password-less ssh/rsh communication from your server to
+       clients, it is also possible to pull the scc-files  from	 the  clients.
+       Use  1mscc-pull(1)  22mto  start	 scc  on the clients and pull the resulting
+       files to the server.  The program supports several options  controlling
+       the  execution  on  the	clients.   It also supports several options to
+       specify from which clients to pull the scc-files.  In it simplest form,
+       the  program  can  be called without any options.  In that case, scc is
+       executed in the background on all systems whose snapshot resides in the
+       realm  All.   After waiting for 10 minutes, the scc-files are retrieved
+       from all clients and scc-update is called to update the website.	  Con‐
+       sult the manual page of 1mscc-pull(1) 22mfor the details.
+
+       After installing scc on a new client, the system has to be added to the
+       command-line of scc-pull.  When scc-pull uses the -R option to  process
+       all systems from a realm, it has to be called manually once with the -S
+       option to let the files become part of realm All.  Possibly you have to
+       use  1mscc-realm(1) 22mto add the new system to the required realm.  Now the
+       scc-files of the new client reside in the required realm and subsequent
+       calls  of scc-pull will access the system.  Before using scc-pull for a
+       new system, you should test the password-less  communication  from  the
+       scc-srv to the new system.
+
+
+   1mCombining push and pull0m
+       Schedule scc on the clients and specify the 4m-p24m 4mpull24m option.  Now sched‐
+       ule 1mscc-pull(1) 22mon scc-srv and specify the 4m-n24m option.	Make  sure  that
+       1mscc-pull(1)  22mruns  after  the  last client has finished.  Otherwise the
+       data of running clients are not transferred.
+
+
+   1mTransfer of data to web server0m
+       The data, that is sent by the scc-clients, ends up in directories  "cp"
+       and  "mail" under /var/opt/scc-srv/data/transfer.  The files are packed
+       by tar and compressed by gzip or compress.  Data sent by email is  also
+       uuencoded.  The command 1mscc-transfer(1) 22munpacks the data into files and
+       transfers  them	to  the	 directory  4m/var/opt/scc-srv/data/www/All24m	and
+       assigns	the  proper  permissions  and ownership.  It is called by 1mscc-0m
+       1mupdate(1).0m
+
+       The web server has to read the files.  Therefore we have to change  the
+       ownership  of the files to the user that is used to run the web server.
+       Use the 4m-w24m option of 1mscc-update(1)  22mto	 change	 the  ownership	 of  the
+       directories and files.  For example:
+
+	  scc-update -w apache
+
+       Subsequent  calls  of 1mscc-update(1) 22mdo not need to specify this option.
+       Now all html-files, snapshots, log files and summaries are  present  in
+       the directory 4m/var/opt/scc-srv/data/www/All.0m
+
+       The  summaries  of  the	runs  on the clients are generated by 1mscc-sum‐0m
+       1mmary(1).  22mThe specification of the System Tools (required by 1mscc-smt(1)0m
+       is  done	 by editing the file 4m/var/opt/scc-srv/data/www/All/custom/scc-0m
+       4msmt-select24m Refer to the manual page of  1mscc-smt(1)  22mfor  more	details.
+       The  specification of the rules for 1mscc-rules(1) 22mis done by editing the
+       file 4m/var/opt/scc-srv/data/www/All/custom/scc-rules.conf24m Refer  to	the
+       manual page of 1mscc-rules(1) 22mfor more details.  These three programs are
+       called by 1mscc-update(1).0m
+
+       Add 1mscc-update(1) 22mto the root-crontab.  The time and  frequency  depend
+       upon the time and frequency you use for running SCC on the clients.
+
+
+   1mTransfer through a firewall0m
+       When a group of systems is separated from scc-srv by a firewall, one of
+       these client systems can act as a gateway for the transfer.  Only  this
+       system requires an (ssh) allow rule in the firewall.
+
+       Install	scc-srv	 on the gateway system and ignore the configuration of
+       the web-part.  Make sure it contains the data of all of its&#39; local sys‐
+       tems.   Either  push data from the client to the gateway system or pull
+       data from the clients to the gateway system.  In the latter  case,  use
+       the  -U	option of scc-pull to avoid transferring the collected data to
+       the web directory of scc-srv on	the  gateway  and  keep	 them  in  the
+       data/transfer/cp directory.
+
+       Now make sure that the 4mmain24m scc-srv collects the data of all firewalled
+       clients via the gateway system by means of the following command:
+
+
+	  scc-pull -n -L &lt;gateway_system&gt; -D /var/opt/scc-srv/data/transfer/cp
+
+
+       As the 4mlocal24m clients of the gateway system cannot be accessed directly,
+       the -R option of scc-pull cannot be used unless all directly accessible
+       systems are in a separate, dedicated realm.
+
+
+   1mPerformance considerations0m
+       We tested scc-update with many snapshots and  scc-rules	consumes  some
+       40%  of	the  time  scc-update  requires.   When you do not require the
+       checks of  the  rules,  remove  the  configuration  file	 4m/var/opt/scc-0m
+       4msrv/data/www/All/custom/scc-rules.conf24m to speed up scc-update.  The web
+       interface notices the absence of this file and does not show the corre‐
+       sponding option.
+
+       The  programs  have  been tested with 100, 1000 and 2000 snapshots.  In
+       that range, there is a linear dependency between the required time  and
+       the number of systems.
+
+
+   1mDisplay of SCC-data by the web server0m
+       Releases	 more  recent  than 1.7.47 support the program 1mscc-setup(1) 22mto
+       configure the Apache webserver.	Call this program without options  and
+       it  will	 show its defaults.  Inspect these defaults and set the corre‐
+       sponding environment variables to adjust the  results  of  the  script.
+       Refer to the manual page for more details.  Then call:
+
+	  scc-setup -a
+
+       to  activate the web-interface of scc-srv.  This adds the file scc.conf
+       to the apache conf.d directory.	Its default contents are:
+
+	  ScriptAliasMatch "^.*/([^/]*)/cgi-bin/scc-wrapper.cgi" "/var/opt/scc-srv/data/www/$1/cgi-bin/scc-wrapper.cgi"
+
+	  Alias /scc /var/opt/scc-srv/data/www
+	  &lt;Directory "/var/opt/scc-srv/data/www"&gt;
+	     Options -Indexes FollowSymLinks +ExecCGI MultiViews
+	     AllowOverride AuthConfig
+	     Order allow,deny
+	     allow from all
+	  &lt;/Directory&gt;
+
+       The apache webserver is restarted to activate  this  configuration  The
+       ownership of the files and directories in the scc-srv data hierarchy is
+       set to the user running the apache webserver.
+
+       Note that there is no reason to convert an existing scc-srv to the  new
+       setup.
+
+       To  restrict  the  access  to  the  SCC-data in directory 4m/var/opt/scc-0m
+       4msrv/data/www/All,24m you can use an 4m.htaccess24m file in this directory.
+
+       Access to the data is achieved by  a  cgi-script,  called  by  the  web
+       server.	This script, 1mscc-wrapper.cgi(1) 22mis located in the 4mcgi-bin24m sub-
+       directory of 4m/var/opt/scc-srv/data/www/All24m The images,  shown  in  some
+       pages, are located in the subdirectory 4mcustom.0m
+
+       For Apache 1.x, the ScriptAliasMatch has to be replaced with:
+
+	  ScriptAlias prefix/All/cgi-bin/scc-wrapper.cgi \
+	    /var/opt/scc-srv/data/www/All/cgi-bin/scc-wrapper.cgi
+       Where  4mprefix24m  has	to  be replaced by the path under the documentroot.
+       This value is also supplied with the -d option of 1mscc-summary(1).  22mThis
+       line has to be repeated for each realm you create.
+
+       On  a  slitaz  2.0  system installing lighttpd and lighttpd-modules was
+       sufficient to run scc-srv after using 1mscc-setup(1).0m
+
+       To save space, the SCC-data of a system in a realm consists of symbolic
+       links  to  the realm 4mAll.24m  When you use only one realm ( 4mAll24m ), you can
+       do without the option 4mFollowSymLinks24m in the configuration-file  of	the
+       web server.
+
+       Note  that  the	data hierarchy of scc-srv is still present on a system
+       after removing the software.  You have  to  remove  this	 hierarchy  in
+       4m/var/opt/scc-srv24m manually.
+
+
+   1mAUTHORISATION0m
+       When  it	 is  not  desirable that all administrators have access to the
+       SCC-data of all your systems, you can create additional sub-directories
+       in  4m/var/opt/scc-srv/data/www24m  These sub-directories are called realms.
+       Realms are maintained by means of 1mscc-realm(1).  22mThis program  supports
+       the creation of a realm and adding/deleting systems to/from a realm.
+
+       To  create  a  new realm 1mEducation 22mand add the systems 4mc01224m and 4mc01424m to
+       this realm, use the following command:
+
+
+	  scc-realm -a -L c012,c014 -c Education
+
+       To generate the summaries for this new realm, 1mscc-update(1)  22mis  called
+       after  creating the directory and the links for the SCC-data.  Refer to
+       the manual page for more detailed description of setting up realms  and
+       their permissions.
+
+       It  is  possible	 to populate realms automatically by means of the file
+       scc-auto-realm.conf in the custom subdirectory of a  realm.   Based  on
+       hostname, OS and domain systems are (de)selected for a realm.  The sys‐
+       tems in the All realm are the base for this  process.   Refer  to  scc-
+       update(1) for more details.
+
+       You have to edit the file 4mEducation/.htaccess24m to restrict access to the
+       Eduction realm.
+
+       When you followed all the steps mentioned before in this document,  you
+       should  be  able to see the start-page of SCC.  Use the path you speci‐
+       fied with the WWW_PATH environment variable determined by 1mscc-setup(1).0m
+
+       This start-page allows access to the realm 4mAll24m and to the documentation
+       of  scc-srv.   Note  that new realms that are created with 1mscc-realm(1)0m
+       are only added automatically to this page as long as a specific	marker
+       is preserved in the file index.html.
+
+       You  are now ready to run a scc-client and transfer data to the server.
+       Choose a client-system and a transfer-option and	 run  scc.   Then  run
+       1mscc-update(1)	22mon the server to transfer the data to the web-server and
+       to generate summaries.  When all the above steps have been followed, no
+       options need to be specified.
+
+       Use  the -A option of 1mscc-realm(1) 22mto archive (part of) a realm.  With‐
+       out the -w option, no html files are archived and  only	snapshots  and
+       logbooks are copied.  Combining these files with tar and compression is
+       not part of the software.  When the -w option is used, a minimal webin‐
+       terface is provided by 1mscc-summary(1) 22min the specified directory.  Pro‐
+       viding and limiting access to the archive directory is not  handled  in
+       the software and left to the administrators.
+
+       When  system  foo  is no longer in use and you need to archive its data
+       for compliancy, you can archive the data and  then  remove  the	system
+       from the webinterface by means of one command:
+
+	  scc-realm -A /path_to_archive -d -L foo All
+
+       Replication  and duplication have not been built into the software, use
+       rsync to achive this.  Another option is to transfer the	 data  to  two
+       different scc-srv sites.	 When you are using 1mscc-pull(1) 22mto collect and
+       transfer the data, use the -k option on the first  call	to  make  sure
+       that  the  clients  preserve  the  data.	 On the second run, use the -n
+       option to avoid that the clients collect	 the  data  again.   When  the
+       clients	push the data to the server, you have to schedule scc twice on
+       the clients and use the -n option for the second invocation.
+
+
+   1mSECURITY0m
+       The server receives SCC-data from clients by email, scp,	 ftp,  rcp  or
+       cp.   A Denial Of Service is possible by frequently sending large snap‐
+       shots of fake  hosts  to	 the  SCC  server.   Furthermore,  anyone  can
+       (re)send	 SCC-data  from	 any system to the SCC server.	Therefore, the
+       SCC server should only be deployed in a trusted network.
+
+       When the client sends its data using email via the internet, the sensi‐
+       tive  data  should be encrypted.	 This is achieved by generating a pair
+       of public/private keys on the server.  The clients encrypt the SCC-data
+       using DES3 with random pass phrase.  The pass phrase is encrypted using
+       RSA with the public key	of  the	 server.   The	server	receives  both
+       encrypted  files	 and  uses  its	 private key to obtain the random pass
+       phrase used by the client.   Finally,  this  pass  phrase  is  used  to
+       decrypt the SCC-data.  To generate the keys on the server, use the fol‐
+       lowing commands:
+
+	  # cd /var/opt/scc-srv
+	  # umask 077
+	  # mkdir encryption
+	  # cd encryption
+	  # openssl genrsa -out private_key 2048
+	  Generating RSA private key, 2048 bit long modulus
+	  .................+++
+	  .........................................................+++
+	  e is 65537 (0x10001)
+	  # openssl rsa -in private_key -out public_key -pubout
+	  read RSA key
+	  writing RSA key
+	  # ls -l
+	  total 16
+	  -rw-------	1 root	   sys	     1679 Sep 29 08:51 private_key
+	  -rw-------	1 root	   sys	      451 Sep 29 08:52 public_key
+
+
+       The file 4mpublic_key24m should be transferred to the SCC-client.  The  path
+       of  the	file  4mprivate_key24m	should	be  added to the file 4m/var/opt/scc-0m
+       4msrv/conf/scc.conf24m with the following keyword:
+
+       SCC_PRIV_HOST_KEY=/var/opt/scc-srv/encryption/private_key
+
+
+       After  transferring  the	  public   key	 to   the   client   in	  file
+       4m/var/opt/scc/encryption/public_key24m	the  data can be encrypted and sent
+       with the command:
+
+       /opt/scc/bin/scc			       \
+	    -k /var/opt/scc/data/encryption/public_key	 \
+	    -s scc-transfer@srv.dom
+
+
+       When the client cannot use a mail-client, use the 4m-i24m and 4m-p24m options  to
+       send  the  data	via  SMTP.   Refer  to the manual page of scc for more
+       details.
+
+
+   1mTROUBLESHOOTING0m
+       First of all, check the URL you are using to display  the  data.	  This
+       should correspond with the path you specified (once) with the 4m-d24m option
+       of 1mscc-update(1).0m
+
+       When the data of a scc-client does not  show  up,  you  can  check  the
+       directories  under  4m/var/opt/scc-srv/data/transfer24m whether the 4mraw24m data
+       arrived.	 Also check any possible errors reported by the	 clients  when
+       sending	the  data.   1mscc-transfer(1)	22mlogs	 its  actions when the file
+       4m/var/opt/scc-srv/data/log/scc-transfer.log24m exists.	 Create	 this  file
+       and try to send the data again.
+
+       The  log	 files of the web server can also be checked.  When the start-
+       page of SCC and the start-page of the realm 4mAll24m show up, but  the  cgi-
+       script  does  not  function  correctly,	check  the  file 4m/var/opt/scc-0m
+       4msrv/data/log/scc.cgi.log.24m  1mscc.cgi(1) 22mlogs its	 actions  in  this  file
+       when  it	 exists	 and  is  writable by the user running the web-server.
+       Create this file and try to access the URL again.
+
+       A restrictive selinux can also avoid the display	 of  SCC-data.	 Check
+       the  appropriate	 logfile  to  find  out whether selinux is causing the
+       problems.
+
+       You can also use the program 1mscc-debug(1) 22mto obtain additional informa‐
+       tion concerning scc-srv.
+
+       When  this  does	 not  give any clues, you can edit the cgi-scripts and
+       trace their execution.  Add the following to  the  start	 of  scc-wrap‐
+       per.cgi or scc.cgi:
+
+	  exec 2&gt;/tmp/scc-log
+	  set -x
+
+       On abnormal termination of a run of a scc-client, the snapshot will not
+       be complete and the next run will produce huge differences.  To	remove
+       these differences, you have to edit the log file on the client.
+
+
+   1mDEPENDENCIES0m
+       The  clients of SCC try to use gzip or compress to reduce the amount of
+       data sent to the server.	 This means that the server has to be able  to
+       access  both  1mgunzip  22mand 1muncompress.  22mTo install 1muncompress 22mon RedHat,
+       install 4mncompress.0m
+
+       The SCC-data that is sent by email, is  uuencoded.   The	 server	 needs
+       1muudecode.  22mTo install 1muudecode 22mon RedHat, install 4mshar-utils.0m
+
+
+1mPROGRAMS AND FILES0m
+       The programs of scc-srv have the following relationship:
+
+       - scc-receive-mail: move SCC-data to transfer-area
+	 activated by /etc/aliases
+       - scc-update: main update of data on website
+	 activated by cron, this program calls:
+	    - scc-transfer: move data from transfer-area to website
+	    - for each realm:
+		 - scc-rules: check rules
+		 - scc-summary: update general summaries
+		 - scc-smt: generate summary of System Tools
+       - scc-pull: run scc on clients and pull files to server
+	 this program calls:
+	    - scc-update
+       - scc-wrapper.cgi: wrapper for web-interface
+	 activated by user, this program calls:
+	    - scc.cgi: handle web-interface
+		 - search/show summaries/log
+		 - scc-syscmp: compare parts of snapshots
+		      - scc-baseline: extract part of snapshot
+
+       The HTML-files have the following relationship:
+
+       - scc-help/scc*.html: help-files for the userinterface of scc-srv
+	 part of distribution
+       - scc-help/scc-srv/scc*.html: manual pages for scc-srv
+	 part of distribution
+       - scc-help/scc/scc*.html: manual pages for scc client
+	 part of distribution
+       - scc-help/scc-win/scc*.html: manual pages for scc-win
+	 part of distribution
+       - index.html: main-menu to realms
+	 part of distribution, contains a specific line to assist <A HREF="scc-realm.html">scc-realm(1)</A>
+       - All: directory of main realm
+	 part of distribution
+	    - index.html: interface to snapshots/log files and summaries
+	      calls scc-wrapper.cgi to perform action and display data
+	      generated by scc-summary
+		 - scc-summary-&lt;cat&gt;: summary of snapshots sorted on &lt;cat&gt;
+		   supported categories are:
+		      - host
+		      - OS
+		      - model
+		      - last run/change
+		   generated by scc-summary
+		      - scc.&lt;host&gt;.html: snapshot of &lt;host&gt;
+		      - scc.&lt;host&gt;.log.html: logbook of &lt;host&gt;
+			transported by scc-transfer
+		 - scc-log-index.html: summary of changes per day
+		   generated by scc-summary
+		      - scc-log-&lt;date&gt;.html: summary of systems with changes on &lt;date&gt;
+			generated by scc-summary
+			   - scc.&lt;host&gt;.log.html: logbook of &lt;host&gt;
+			     transported by scc-transfer
+		 - scc-rules-index.html: summary of messages
+		   generated by scc-rules
+		 - scc-smt-index.html: summary of System Tools
+		   generated by scc-smt
+		      - scc.&lt;host&gt;.smt.html: System Tools for &lt;host&gt;
+			generated by scc-smt
+		 - dynamic data with results of searching
+		   generated by scc.cgi (called by scc-wrapper.cgi)
+		      - scc.&lt;host&gt;.html: snapshot of &lt;host&gt;
+		      - scc.&lt;host&gt;.log.html: logbook of &lt;host&gt;
+			transported by scc-transfer
+		 - dynamic data with results of comparing snapshots
+		   generated by scc.cgi (called by scc-wrapper.cgi)
+
+
+1mCLASS0m
+       A class-file contains lines with (parts of) classifications.  When they
+       are not present, colons are added in front and at the end of each clas‐
+       sification.  Lines starting with "#" are treated as comments.
+
+       To  extract the boot configuration and start/stop links out a snapshot,
+       use the following class-file:
+
+	  boot:config:
+	  boot:rc-file:
+
+       Class-files are used by <A HREF="scc-baseline.html">scc-baseline(1)</A> and  <A HREF="scc-syscmp.html">scc-syscmp(1)</A>.  Check  the
+       snapshots to determine the classifications to be extracted.
+
+
+1mCOPYRIGHT0m
+       SCC is free software under the terms of the GNU General Public License.
+       Copyright (C) 2001-2004 Open Challenge B.V., 2004-2005 OpenEyeT Profes‐
+       sional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+
+1mSEE ALSO0m
+       <A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+       <A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+       <A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+       <A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+
+1mVERSION0m
+       $Revision: 6217 $
+
+
+
+</PRE>
+</BODY></HTML>

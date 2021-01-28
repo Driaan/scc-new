@@ -1,0 +1,51 @@
+This file describes the hierarchy of the source tarball when it is unpacked.
+Note that the sourceforge SVN hierarchy differs from the hierarchy in the source tarball.
+
+The source tarball hierarchy can be used to install the software by means of the command:
+
+	./scc-srv-install
+
+It can also be used to customize the software before packaging it.
+The packaging can be done with the following programs (in alphabetical order):
+
+	- debian-gen-scc-srv		DEB for Debian
+	- dragonflybsd-gen-scc-srv	TGZ for DragonFlyBSD
+	- freebsd-gen-scc-srv		TGZ for FreeBSD
+	- hpux-gen-scc-srv		SD-UX format for HP-UX
+	- netbsd-gen-scc-srv		TGZ for NetBSD
+	- openbsd-gen-scc-srv		TGZ for OpenBSD
+	- pacman-gen-scc-srv		.pkg.tar.gz for ArchLinux
+	- puppy-gen-scc-srv		PET for PuppyLinux
+	- rpm-gen-scc-srv		RPM
+	- slackware-gen-scc-srv		TGZ for Slackware
+	- src-gen-scc-srv		source format
+	- sunos-gen-scc-srv		package format for Solaris
+	- ttylinux-gen-scc-srv		TBZ for ttylinux
+
+These commands should be used in the top directory of the untarred source tarball.
+The resulting package, rpm, depot or tgz-file is located in this top directory.
+Other files and subdirectories are removed. Use script scc-srv_gen_all to
+generate all packages in the subdirectory "packages". This script does
+not remove other files and subdirectories.
+
+To install scc-srv in non-default directories you have to untar the
+source tarball, edit the script relocate, run it, followed by src-gen-scc-srv.
+This produces a new source tarball that can be used to produce other package formats.
+Note that some of the gen scripts already use relocate and they are ignored.
+To change the directories for those scripts, you have to change the corresponding
+script.
+
+The following list summarizes the steps to get scc-srv working. We assume that 
+SCC-data is transferred via scp. Refer to scc-srv.5 for a more detailled 
+description and other setups.
+
+1  activate the web server
+2  install scc-srv
+3  call scc-setup and check that all configuration variables are known
+4  activate the configuration by scc-setup -a
+5  schedule scc-update to process incoming SCC-data, frequency depends
+   upon the amount of data and time of arrival of new SCC-data.
+      scc-update	# no arguments/options required
+
+When you have password-less access to your clients, you can use
+scc-pull to pull the scc-files from the clients.

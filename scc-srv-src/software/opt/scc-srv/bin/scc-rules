@@ -1,0 +1,943 @@
+#!/bin/sh
+
+# Shell script to check snapshots/log files for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-rules 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_WWW=${SCC_DATA}/www
+export SCC_TMP=/tmp
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+export LANG=C
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};	export PATH
+
+if [ -d /usr/xpg4/bin ]
+then
+	PATH=/usr/xpg4/bin:${PATH}
+fi
+
+umask 077
+
+export TMP_DATA=${SCC_TMP}/scc_data_$$
+export TMP_FILE=${SCC_TMP}/scc_rules_$$
+export TMP_DIFF=${SCC_TMP}/scc_diff_$$
+export TMP_SIGNAL=${SCC_TMP}/scc_signal_$$
+
+trap 'rm -f ${TMP_DATA} ${TMP_FILE} ${TMP_DIFF} ${TMP_SIGNAL}' 0
+trap "exit 2" 1 2 3 15
+
+INTRO_SIGNAL=""
+
+scc_check_saved_files()
+{
+	# Arguments:
+	# 1: <systems>
+	#	comma separated list of systems or "all_systems"
+	#
+	# Output:
+	# CheckSavedFiles <system> saved data for <date>
+
+	if [ "${1}" != "all_systems" ]
+	then
+		check_sys="$(echo ${1} | sed -e 's/,/ /g')"
+	else
+		check_sys="${all_sys}"
+	fi
+
+	rm -f ${TMP_SIGNAL}
+	for sys in ${check_sys}
+	do
+		ls scc.${sys}.cur.[0-9]* 2>/dev/null	|
+		sed -e 's/.*cur\.//'			|
+		while read date
+		do
+			if [ ! -f ${TMP_SIGNAL} ]
+			then
+				echo "# CheckSavedFiles Check for saved files of ${sys_label}"
+				touch ${TMP_SIGNAL}
+			fi
+			echo "CheckSavedFiles ${sys} saved files for run on ${date}"
+		done
+	done
+	rm -f ${TMP_SIGNAL}
+
+	return 0
+}
+
+scc_check_max_snap_age()
+{
+	# Arguments:
+	# 1: <systems>
+	#	comma separated list of systems or "all_systems"
+	# 2: <max_snap_age>
+	#	maximum allowed age of snapshots
+	#
+	# Output:
+	# CheckSnapAge <system> last run on <last_run>
+
+	day=$(date '+%d')
+	day=${day#0}		# avoid 'octal' arithmetic
+	month=$(date '+%m')
+	month=${month#0}	# avoid 'octal' arithmetic
+	year=$(date '+%Y')
+
+	max_age="${2}"
+	if [ ${max_age} -gt 28 ]
+	then
+		echo "${ProgName}: reducing limit for max age of snapshots from ${max_age} to 28" >&2
+		max_age=28
+	fi
+
+	# Checking the age limit is done by subtracting the limit from the current date.
+	if [ ${max_age} -lt ${day} ]
+	then
+		day=$(( day - max_age ))
+	else
+		if [ ${month} -eq 1 ]
+		then
+			year=$(( year - 1 ))
+			month=12
+		else
+			month=$(( month - 1 ))
+		fi
+		last_day_prev_month=31
+		case ${month} in
+		4|6|9|11)	last_day_prev_month=30;;
+		2)		last_day_prev_month=28;;
+		esac
+		remainder=$(( max_age - day ))
+		day=$(( last_day_prev_month - remainder ))
+	fi
+	snap_age_limit=$(printf "%04d%02d%02d" ${year} ${month#0} ${day#0})
+
+	if [ "${1}" != "all_systems" ]
+	then
+		check_sys="$(echo ${1} | sed -e 's/,/ /g')"
+	else
+		check_sys="${all_sys}"
+	fi
+
+	rm -f ${TMP_SIGNAL}
+	for sys in ${check_sys}
+	do
+		last_run="$(tail -n 1 scc.${sys}.log 2>/dev/null | sed -e 's/:.*//' -e 's/-//g')"
+		if [ -n "${last_run}" ]
+		then
+			if [ "${last_run}" -lt "${snap_age_limit}" ]
+			then
+				# We cannot do date arithmetic, just signal the "overflow" of the limit.
+				last_run="$(tail -n 1 scc.${sys}.log | sed -e 's/:.*//')"
+				if [ ! -f ${TMP_SIGNAL} ]
+				then
+					echo "# CheckSnapAge Check max. age of ${sys_label}: ${max_age} day(s)"
+					touch ${TMP_SIGNAL}
+				fi
+				echo "CheckSnapAge ${sys} limit is ${max_age} days"
+			fi
+		else
+			# Empty logfile ?!? Ignore
+			:
+		fi
+	done
+	rm -f ${TMP_SIGNAL}
+
+	return 0
+}
+
+scc_check_change()
+{
+	# Arguments:
+	# 1: <systems>
+	#	comma separated list of systems or "all_systems"
+	# 2: <pattern>
+	#	optional, no pattern means: signal any change
+	#	regular expression to check in log files or file (in custom) with classifications
+	#
+	# Output:
+	# CheckLogEntries <system> changes for run on <last_date>
+
+	if [ "${1}" != "all_systems" ]
+	then
+		check_sys="$(echo ${1} | sed -e 's/,/ /g')"
+	else
+		check_sys="${all_sys}"
+	fi
+
+	rm -f ${TMP_SIGNAL}
+
+	for sys in ${check_sys}
+	do
+		last_line="$(tail -n 1 scc.${sys}.log 2>/dev/null | grep ":runtime::")"
+		if [ -n "${last_line}" ]
+		then
+			continue		# No changes, check next system
+		fi
+
+		# Retrieve the date of the last run
+		last_date="$(tail -n 1 scc.${sys}.log 2>/dev/null | awk -F: '{ print $1 ":" $2 }')"
+		if [ -z "${last_date}" ]
+		then
+			continue		# Empty/absent log file???
+		fi
+
+		if [ -n "${2}" ]
+		then
+			# Retrieve the changes of the last run.
+			grep "^${last_date}:data::" scc.${sys}.log >${TMP_FILE}
+			if [ -f "${rules_conf%/*}/${2}" -o -h "${rules_conf%/*}/${2}" ]
+			then
+				cnt="$(grep -c -f "${rules_conf%/*}/${2}" ${TMP_FILE} 2>/dev/null)"
+			else
+				cnt="$(grep -c "${2}" ${TMP_FILE} 2>/dev/null)"
+			fi
+			if [ $? -eq 1 ]
+			then
+				continue	# No changes that match our criteria
+			fi
+		else
+			# No specific changes, count all. 
+			cnt="$(grep -c "^${last_date}:data::" scc.${sys}.log)"
+		fi
+
+		if [ ! -f ${TMP_SIGNAL} ]
+		then
+			if [ -n "${2}" ]
+			then
+				echo "# CheckLogEntries Signal specific changes (${2}) in last run of ${sys_label}"
+			else
+				echo "# CheckLogEntries Signal any changes in last run of ${sys_label}"
+			fi
+			touch ${TMP_SIGNAL}
+		fi
+
+		echo "CheckLogEntries ${sys} ${cnt} changes for last run"
+	done
+	rm -f ${TMP_FILE}
+	rm -f ${TMP_SIGNAL}
+
+	return 0
+}
+
+scc_check_identical_cfg()
+{
+	# Note: use with care as this can be very time-consuming!
+	#
+	# Arguments:
+	# 1: <systems>
+	#	comma separated list of systems
+	#		first system in list is golden, compare with others
+	#	single system
+	#		system is golden, compare all other systems
+	#	"all_systems"
+	#		first (alphabeticsl) system is golden, compare with others
+	# 2: <classifications>
+	#	literal text of classification or file (in custom) with classifications
+	#
+	# Output:
+	# CompareSnapData <system> <text>
+	if [ -f "${rules_conf%/*}/${2}" -o -h "${rules_conf%/*}/${2}" ]
+	then
+		class_file="${rules_conf%/*}/${2}"
+	else
+		echo "${2}" >${TMP_FILE}
+		class_file=${TMP_FILE}
+	fi
+
+	multiple="$(echo "${1}" | grep ",")"
+	if [ -n "${multiple}" ]
+	then
+		# The first system in the list is the golden system.
+		golden=${1%%,*}
+	else
+		golden="${1}"
+		check_sys="${all_sys}"
+		sys_label="all systems"
+	fi
+
+	rm -f ${TMP_SIGNAL}
+
+	# Compare the other systems in the list with the golden system and report differences.
+	for sys in ${check_sys}
+	do
+		if [ "${golden}" != "${sys}" ]
+		then
+			${SCC_BIN}/scc-syscmp "${class_file}" scc."${golden}".cur scc."${sys}".cur 2>/dev/null	|
+			sed -e "s/^/CompareSnapData ${sys} /" >${TMP_DIFF}
+			if [ -s ${TMP_DIFF} ]
+			then
+				if [ ! -f ${TMP_SIGNAL} ]
+				then
+					echo "# CompareSnapData Check ${sys_label} (${golden} is leading) for differences in configuration: ${2}"
+					touch ${TMP_SIGNAL}
+				fi
+
+				cat ${TMP_DIFF}
+			fi
+		fi
+	done
+
+	rm -f ${TMP_SIGNAL}
+
+	return 0
+}
+
+scc_check_txt()
+{
+	# Arguments:
+	# 1: <systems>
+	#	comma separated list of systems or "all_systems"
+	# 2: <classifications>
+	#	literal text to search for
+	#
+	# Output:
+	# CheckSnapData <system> <found text>
+
+	# Search for the classifications.
+	# Ignore the specification of the patterns we are searching.
+	for sys in ${check_sys}
+	do
+		echo "scc.${sys}.cur"
+	done					|
+	xargs grep "${2}" /dev/null		|
+	grep -v ":fix:software:scc-srv:.*::scc-rules.conf:.*CheckSnapData:" >${TMP_FILE}
+
+	if [ -s ${TMP_FILE} ]
+	then
+		echo "# CheckSnapData Check snapshots of ${sys_label} for occurences of \"${2}\""
+
+		sed	-e 's/^scc./CheckSnapData /'	\
+			-e 's/\.cur:/ /' ${TMP_FILE}
+	fi
+	rm -f ${TMP_FILE}
+
+	return 0
+}
+
+scc_unique()
+{
+	# Arguments:
+	# 1: <systems>
+	#	comma separated list of systems or "all_systems"
+	# 2: <text>
+	#	start of text that is checked for uniqueness
+	#
+	# Output:
+	# CheckUnique|<found text>|<space separated list of systems>
+
+	# Search for the classifications.
+	# Ignore the specification of the patterns we are searching.
+	for sys in ${check_sys}
+	do
+		echo "scc.${sys}.cur"
+	done					|
+	xargs fgrep "${2}" /dev/null		|
+	grep -v ":fix:software:scc-srv:.*::scc-rules.conf:.*Unique:" >${TMP_FILE}
+
+	if [ -s ${TMP_FILE} ]
+	then
+		echo "# CheckUnique Check snapshots of ${sys_label} for uniqueness of \"${2}\""
+
+		sed	-e 's/^scc\.//'	\
+			-e 's/\.cur:/ /'	\
+				<${TMP_FILE}			|
+		awk	'{
+				host=$1
+				$1=""
+				data[ $0 ] = sprintf( "%s %s", data[ $0 ], host )
+			}
+			END	{
+					for ( line in data )
+					{
+						cnt = split( data[ line ], parts )
+						if ( cnt > 1 )
+						{
+							for ( i = 1; i <= cnt; i+=1 )
+							{
+								printf( "CheckUnique %s %s\n", parts[ i ], line )
+							}
+						}
+					}
+				}' -
+	fi
+	rm -f ${TMP_FILE}
+
+	return 0
+}
+
+scc_page_header()
+{
+	cat <<-EndOfTxt
+		<!DOCTYPE HTML>
+		<HTML lang="en">
+			<HEAD>
+				<LINK HREF="${web_realm_dir}/custom/style.css" REL="stylesheet" TYPE="text/css">
+				<LINK HREF="${web_realm_dir}/custom/favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+				<TITLE>${html_title}</TITLE>
+			</HEAD>
+			<BODY>
+				<A id="rules_top" HREF="${scc_web_path_dir}/scc-help/scc-rules-index.html">
+				<IMG SRC="${web_realm_dir}/custom/scc-logo.png" ALT=HelpInfo>
+				</A>
+
+				<P class="header">
+					${HOME_URL}
+					${CONFIG_URL}
+					${html_hdr}
+				</P>
+
+	EndOfTxt
+}
+
+scc_table_start( )
+{
+	description="${1}"
+	shift 1
+	titles=""
+	for i in "$@"
+	do
+		titles="${titles}<TH>${i}</TH>"
+	done
+
+	cat <<-EndOfTxt
+		<P class="header">${description}</P>
+		<TABLE CLASS=SCC>
+		<THEAD>
+			<TR class=Odd style="text-align:left">
+				${titles}
+			</TR>
+		</THEAD>
+
+		<TBODY>
+	EndOfTxt
+}
+
+scc_table_end()
+{
+	cat <<-EndOfTxt
+				</TD>
+			</TR>
+		</TBODY>
+		</TABLE>
+	EndOfTxt
+}
+
+scc_scrub_html()
+{
+	grep "^#* *${1} "			|
+	sed	-e 's/&/\&amp;/g'	\
+		-e 's/</\&lt;/g'	\
+		-e 's/>/\&gt;/g'	\
+		-e "s/'/\&#39;/g"	\
+		-e 's/"/\&quot;/g'
+}
+
+scc_format_html()
+{
+	if [ -z "${INTRO_SIGNAL}" ]
+	then
+		if [ -s "${1}" ]
+		then
+			echo "<P>The last run of scc-rules produced the following messages:</P>"
+			INTRO_SIGNAL="done"
+		else
+			return				# No data to format, we are ready
+		fi
+	fi
+
+	for check in CheckSavedFiles CheckSnapAge CheckLogEntries CheckSnapData
+	do
+		grep "^${check}" "${1}" >/dev/null 2>/dev/null
+		if [ $? -eq 0 ]
+		then
+			title="$(sed -n -e "s/# ${check} //p" "${1}")"
+			scc_table_start "${title}" "System" "OS" "Last run" "Data" 
+
+			(
+				# Translate the colon separated fields (containing spaces) into space separated fields.
+				# First sed expression: :::: => :_::_:, repeat to convert to :_:_:_:
+				sed	-e 's/::/:_:/g'	\
+					-e 's/::/:_:/g'	\
+					-e 's/ /_/g'	\
+					-e 's/:/ /g'	\
+						${SCC_WWW}/${realm}/scc-summary.data
+
+				scc_scrub_html "${check}" <"${1}"
+			)						|
+			awk	'BEGIN	{
+						c[ 0 ] = "Even"
+						c[ 1 ] = "Odd"
+					}
+				/^#/			{
+								tr_c = 0;		# TR class; start new table with even
+								prev_url = ""
+								next
+							}
+				/^general_data/		{
+								# Format of the input is: "general_data":<host>:<model>:<os>:<release>:<last_day>:<last_time>:<domain>:<runtime>:<size>:<virtualization>
+								os[ $2 ] = "&nbsp;"
+								if ( length( $4 ) > 1 ) { os[ $2 ] = $4 }					# OS name, no release
+								last_run[ $2 ] = "&nbsp;"
+								if ( length( $6 ) > 1 ) { last_run[ $2 ] = sprintf( "%s&nbsp;%s", $6, $7 ) }	# date and time
+								next
+							}
+							{
+								if ( $1 == "CheckLogEntries" )
+								{
+									url = sprintf( "<A HREF=\"%s/scc.%s.log.html#%s_%s\"><SPAN CLASS=\"mono\">%s</SPAN></A>",
+											d, $2, $(NF - 2), $NF, $2 )
+								}
+								else
+								{
+									url = sprintf( "<A HREF=\"%s/scc.%s.html\"><SPAN CLASS=\"mono\">%s</SPAN></A>", d, $2, $2 )
+								}
+
+								extra_os = sprintf( "	<TD class=Odd style=\"vertical-align:top;\">%s</TD>", os[ $2 ] )
+								extra_lr = sprintf( "	<TD class=Even style=\"vertical-align:top;\">%s</TD>", last_run[ $2 ] )
+							
+								$1 = ""; $2 = "";	# erase rule-id and system-name
+								sub( "^ *", "", $0 )
+							
+								if ( url != prev_url )
+								{
+									if ( length( prev_url ) > 0 )
+									{
+										# Terminate previous row.
+										print "		</TD>"
+										print "	</TR>"
+									}
+									prev_url = url
+
+									printf( "<TR class=%s style=\"text-align:left\">\n", c[ tr_c++ % 2 ] )
+									printf( "	<TD class=Even style=\"white-space: nowrap; vertical-align:top;\">%s</TD>\n", url )
+									printf( "%s\n", extra_os )
+									printf( "%s\n", extra_lr )
+									print "<TD class=Odd style=\"white-space: nowrap\">"
+								}
+								printf( "	<DIV class=\"mono\">%s</DIV>\n", $0 )
+							}' d="${web_realm_dir}"
+
+			scc_table_end
+		fi
+	done
+
+	for check in CheckUnique
+	do
+		grep "^${check}" "${1}" >/dev/null 2>/dev/null
+		if [ $? -eq 0 ]
+		then
+			title="$(sed -n -e "s/# ${check} //p" "${1}")"
+			scc_table_start "${title}" "Text" "System" 
+
+			scc_scrub_html "${check}" <"${1}"		|
+			awk	'BEGIN	{
+						c[ 0 ] = "Even"
+						c[ 1 ] = "Odd"
+					}
+				/^#/			{
+								tr_c = 0;		# TR class; start new table with even
+								prev_txt = ""
+								next
+							}
+							{
+								url = sprintf( "<A HREF=\"%s/scc.%s.html\"><SPAN CLASS=\"mono\">%s</SPAN></A>", d, $2, $2 )
+
+								$1 = ""; $2 = "";	# erase rule-id and system-name
+								sub( "^ *", "", $0 )
+							
+								if ( $0 != prev_txt )
+								{
+									if ( length( prev_txt ) > 0 )
+									{
+										# Terminate previous row.
+										print "		</TD>"
+										print "	</TR>"
+									}
+									prev_txt = $0
+
+									printf( "<TR class=%s align=left>\n", c[ tr_c++ % 2 ] )
+									printf( "	<TD class=Even style=\"white-space: nowrap; vertical-align:top;\"><DIV class=\"mono\">%s</DIV></TD>\n", $0 )
+									print "<TD class=Odd style=\"white-space: nowrap\">"
+								}
+								printf( "	%s\n", url )
+							}' d="${web_realm_dir}"
+
+			scc_table_end
+		fi
+	done
+
+	for check in CompareSnapData
+	do
+		grep "^${check}" "${1}" >/dev/null 2>/dev/null
+		if [ $? -eq 0 ]
+		then
+			title="$(sed -n -e "s/# ${check} //p" "${1}")"
+			scc_table_start "${title}" "System" "Text" 
+
+			scc_scrub_html "${check}" <"${1}"		|
+			awk	'BEGIN	{
+						c[ 0 ] = "Even"
+						c[ 1 ] = "Odd"
+					}
+				/^#/			{
+								tr_c = 0;		# TR class; start new table with even
+								prev_txt = ""
+								next
+							}
+							{
+								url = sprintf( "<A HREF=\"%s/scc.%s.html\"><SPAN CLASS=\"mono\">%s</SPAN></A>", d, $2, $2 )
+
+								if ( url != prev_url )
+								{
+									if ( length( prev_url ) > 0 )
+									{
+										# Terminate previous row.
+										print "		</TD>"
+										print "	</TR>"
+									}
+									prev_url = url
+
+									printf( "<TR class=%s align=left>\n", c[ tr_c++ % 2 ] )
+									printf( "	<TD class=Even style=\"white-space: nowrap; vertical-align:top;\">%s</TD>\n", url )
+									print "<TD class=Odd style=\"white-space: nowrap\">"
+								}
+
+								sys=$2
+								$1 = ""; $2 = "";	# erase rule-id and system-name
+								sub( "^ *", "", $0 )
+							
+								b_f = ""; e_f = ""
+								msg_sys = $1
+								sub( " *:", "", msg_sys )
+								if ( msg_sys == sys )
+								{
+									b_f = "<SPAN CLASS=\"scc_sys_a\">"
+								}
+								else
+								{
+									b_f = "<SPAN CLASS=\"scc_sys_b\">"
+								}
+								e_f = "</SPAN>"
+								printf( "	<DIV class=\"mono\">%s%s%s</DIV>\n", b_f, $0, e_f )
+							}' d="${web_realm_dir}"
+
+			scc_table_end
+		fi
+	done
+}
+
+now=$(date '+%Y-%m-%d %H:%M:%S')
+
+copy_right="<BR><HR><P>Generated by SCC-SRV version 1.19.44 (&copy; Siem Korteweg) on ${now}</P>"
+
+SYNTAX="Syntax error, use: ${ProgName} [ -d|--directory <scc_web_path> ] [ -f|--file <rule> ] [ -h|--host <host> ] <realm>"
+
+scc_web_path_dir=""
+single_system=""
+rules_conf="custom/scc-rules.conf"
+while [ $# -gt 2 ]
+do
+	case "${1}" in
+	-d|--directory)	if [ "${2}" != "/" ]
+			then
+				scc_web_path_dir="$2"
+			fi
+			shift 2
+			;;
+
+	-f|--file)	rules_conf="${2}"
+			shift 2
+			;;
+
+	-h|--host)	# Stdin contains the realm specific rules data. Ignore the following checks as they are not usefull for single systems:
+			# - uniqueness of data across systems
+			# - comparing data across systems
+			sed	-e '/^#* *CheckUnique/d'	\
+				-e '/^#* *CompareSnapData/d'	\
+					>${TMP_FILE}
+			single_system="${2}"
+			shift 2
+			;;
+
+	*)		echo "${SYNTAX}" >&2
+			exit 1
+			;;
+	esac
+done
+
+if [ $# -ne 1 ]
+then
+	echo "${SYNTAX}" >&2
+	exit 1
+fi
+
+if [ -z "${scc_web_path_dir}" ]
+then
+	scc_web_path_dir="$(sed -n 's/^SCC_WEB_PATH=//p' ${SCC_CONF}/scc.conf 2>/dev/null)"
+fi
+
+html_title="Messages for realm ${1}"
+html_hdr="Check rules for realm ${1}"
+
+realm="${1}"
+web_realm_dir="${scc_web_path_dir}/${realm}"
+HOME_URL="<A HREF=\"${web_realm_dir}/index.html\">Home</A>&nbsp;&nbsp;&nbsp;&nbsp;"
+CONFIG_URL="<A HREF=\"${web_realm_dir}/scc-rules-config.html\">Configuration</A>&nbsp;&nbsp;&nbsp;&nbsp;"
+
+if [ "${single_system}" ]
+then
+	html_title="Messages for system ${single_system}"
+	html_hdr="Check rules for system ${single_system} in realm ${realm}"
+	CONFIG_URL=""
+	scc_page_header
+
+	if [ -s "${TMP_FILE}" ]
+	then
+		scc_format_html "${TMP_FILE}"
+	else
+		echo "<P>No messages</P>"
+	fi
+
+	echo "	</BODY>"
+	echo "</HTML>"
+
+	exit 0
+fi
+
+if [ ! -d "${SCC_WWW}/${realm}" ]
+then
+	echo "${ProgName}: directory ${SCC_WWW}/${realm} does not exist" >&2
+	exit 1
+fi
+cd "${SCC_WWW}/${realm}"
+
+# Use the owner/group/permissions of the destination directory for the files we put there.
+# We are only interested in the read-permissions of the directory.
+set dummy $(ls -ld .)
+case "${2}" in
+?r??r??r??*)	umask 333;;
+?r??r??-??*)	umask 337;;
+?r??-??-??*)	umask 377;;
+?r??-??r??*)	umask 373;;
+*)		umask 077;;
+esac
+new_owner_group="${4}:${5}"
+
+# Use scc-summary.data to determine all system file names, format is:
+# "general_data":<host>:<model>:<os>:<release>:<last_day>:<last_time>:<domain>:<runtime>:<size>:<virtualization>
+all_sys="$(awk -F: '{ print $2 }' scc-summary.data 2>/dev/null)"
+
+# Check the rules.
+rm -f scc-rules.data
+> scc-rules-index.html		# no remove to preserve Selinux context
+if [ -f "${rules_conf}" -o -h "${rules_conf}" ]
+then
+	scc_page_header >scc-rules-index.html
+
+	sed	-e 's/:/ /'		\
+		-e 's/:/ /'		\
+		-e '/^[ 	]*$/d'	\
+		-e '/^[ 	]*#/d' "${rules_conf}" 2>/dev/null	|
+	while read check systems parm
+	do
+		if [ "${systems}" != "all_systems" ]
+		then
+			check_sys="$(echo ${systems} | sed -e 's/,/ /g')"
+			check_list=""
+			for sys in ${check_sys}
+			do
+				if [ ! -f scc.${sys}.cur ]
+				then
+					echo "${ProgName}: ${realm} check ${check}: unknown system: ${sys}" >&2
+				else
+					check_list="${check_list} ${sys}"
+				fi
+			done
+			check_sys="${check_list}"
+			sys_label="specific systems"
+		else
+			check_sys="${all_sys}"
+			sys_label="all systems"
+		fi
+
+		case "${check}" in
+		CheckSavedFiles)	scc_check_saved_files "${systems}"			|
+					tee -a scc-rules.data >"${TMP_DATA}"
+					scc_format_html "${TMP_DATA}" >>scc-rules-index.html
+					;;
+		CheckSnapAge)		scc_check_max_snap_age "${systems}" "${parm}"		|
+					tee -a scc-rules.data >"${TMP_DATA}"
+					scc_format_html "${TMP_DATA}" >>scc-rules-index.html
+					;;
+		CheckLogEntries)	scc_check_change "${systems}" "${parm}" 		|
+					tee -a scc-rules.data >"${TMP_DATA}"
+					scc_format_html "${TMP_DATA}" >>scc-rules-index.html
+					;;
+		CompareSnapData)	scc_check_identical_cfg "${systems}" "${parm}"		|
+					tee -a scc-rules.data >"${TMP_DATA}"
+					scc_format_html "${TMP_DATA}" >>scc-rules-index.html
+					;;
+		CheckSnapData)		scc_check_txt "${systems}" "${parm}"			|
+					tee -a scc-rules.data >"${TMP_DATA}"
+					scc_format_html "${TMP_DATA}" >>scc-rules-index.html
+					;;
+		Unique)			scc_unique "${systems}" "${parm}"			|
+					tee -a scc-rules.data >"${TMP_DATA}"
+					scc_format_html "${TMP_DATA}" >>scc-rules-index.html
+					;;
+		SIGNAL*)		:	# Ignore signalling directions.
+					;;
+		*)			echo "${ProgName}: unknown check: ${check}" >&2
+					;;
+		esac
+	done
+
+	{
+		if [ ! -s scc-rules.data ]
+		then
+			if [ -f "${rules_conf}" -o  -h "${rules_conf}" ]
+			then
+				echo "<P>The last run of scc-rules produced NO messages</P>"
+			else
+				echo "<P>There is no file custom/scc-rules.conf to check for rules.</P>"
+			fi
+		fi
+
+		echo "<HR>"
+		echo "	${copy_right}"
+		echo "	</BODY>"
+		echo "</HTML>"
+	} >>scc-rules-index.html
+
+fi	# if [ -f "${rules_conf}" -o -h "${rules_conf}" ]
+
+# Signal the output.
+if [ -s scc-rules.data ]
+then
+	s_prog="$(sed -n -e 's/^SIGNAL_PROG=//p' <"${rules_conf}")"
+	s_dest="$(sed -n -e 's/^SIGNAL_DEST=//p' <"${rules_conf}")"
+	case "X${s_prog}" in
+	Xmail)		(
+				echo "Results from scc-rules check for realm: ${realm}"
+				echo ""
+				cat scc-rules.data
+			)		|
+			mail "${s_dest}"
+			;;
+	Xopc)		cnt=$(wc -l <scc-rules.data)
+			/opt/OV/bin/OpC/opcmsg	a="SCC"		\
+						o="scc-rules"	\
+						msg_g="OS"	\
+						s="major"	\
+						msg_t="scc-rules: reports in ${realm} ${cnt} lines"
+			;;
+	Xcat)		case "X${s_dest}" in
+			Xstdout)	cat scc-rules.data
+					;;
+			Xnull)		:
+					;;
+			*)		cat scc-rules.data >"$(basename "${s_dest}")"
+					;;
+			esac
+			;;
+	X*)		:		# default: ignore!
+			;;
+	esac
+fi
+
+# Add the configuration to the output.
+if [ -f "${rules_conf}" -o -h "${rules_conf}" ]
+then
+	cat <<-EndOfTxt
+		<!DOCTYPE HTML>
+		<HTML lang="en">
+			<HEAD>
+				<LINK HREF="${web_realm_dir}/custom/style.css" REL="stylesheet" TYPE="text/css">
+				<LINK HREF="${web_realm_dir}/custom/favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+				<TITLE>Rules configuration</TITLE>
+			</HEAD>
+			<BODY>
+			<A HREF="${scc_web_path_dir}/scc-help/scc-srv/scc-srv-5.html"><IMG SRC="${web_realm_dir}/custom/scc-logo.png" ALT=scc-logo></A>
+
+	EndOfTxt
+
+	echo "<P class=\"header\">Configuration files</P>"
+	echo "<P>The program scc-rules uses the following configuration files for this realm:</P>"
+
+	sed -e '/^#/d' "${rules_conf}"		|
+	awk -F: 'BEGIN	{
+				print "scc-rules.conf"
+			}
+		{
+			if ( $3 != "" )
+			{
+				if ( ! visited[ $3 ] )
+				{
+					print $3
+					visited[ $3 ] = 1
+				}
+			}
+		}'				|
+	while read file
+	do
+		if [ -f "${rules_conf%/*}/${file}" -o -h "${rules_conf%/*}/${file}" ]
+		then
+			echo "<P class=\"header\">${file}</P>"
+			echo "<PRE>"
+			sed	-e '/^#/d'		\
+				-e '/^[ 	]*$/d'	\
+				-e 's/&/\&amp;/g'	\
+				-e 's/</\&lt;/g'	\
+				-e 's/>/\&gt;/g'	\
+				-e "s/'/\&#39;/g"	\
+				-e 's/"/\&quot;/g' "${rules_conf%/*}/${file}"
+			echo "</PRE>"
+		fi
+	done
+
+	echo "<HR>"
+	echo "	</BODY>"
+	echo "</HTML>"
+else
+	cat <<-EndOfTxt
+		<!DOCTYPE HTML>
+		<html> <head> <title>empty</title> </head> <body> </body> </html>
+	EndOfTxt
+fi >scc-rules-config.html	# no remove to preserve selinux context
+
+chown "${new_owner_group}" scc-rules-index.html scc-rules-config.html scc-rules.data 2>/dev/null
+
+exit 0

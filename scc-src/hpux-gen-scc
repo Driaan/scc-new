@@ -1,0 +1,134 @@
+#!/bin/sh
+
+# Generate SD-UX depot to install scc by means of swinstall.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: hpux-gen-scc 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# After using this program, the directory contains one file:
+#
+#	scc-1.26.73.hpux.depot
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+if [ ! -x /usr/sbin/swpackage ]
+then
+	echo "${ProgName}: cannot find /usr/sbin/swpackage" >&2
+	exit 2
+fi
+
+# Calling by non-root users results in wrong permissions of the installed files.
+uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+if [ "${uid}" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+VERSION=${1:-1.26.73}
+
+DEPOT=scc-${VERSION}.hpux.depot;	export DEPOT
+PSF=hpux-scc.psf;			export PSF
+
+umask 077
+
+cat >${PSF} << _X_
+product
+	tag		scc
+	revision	${VERSION}
+	title		"System Configuration Collector"
+	description	"System Configuration Collector"
+	os_name		HP-UX
+	os_release	?.1?.*
+	is_locatable	false
+
+fileset
+	tag		scc-run
+	revision	${VERSION}
+	title		"System Configuration Collector"
+	description	"System Configuration Collector"
+
+	preinstall	./install/preinstall
+	postinstall	./install/postinstall
+	postremove	./install/postremove
+
+	directory	./software/opt/scc = /opt/scc
+	file_permissions -o root -g sys -u 000
+		file	*
+
+	directory	./software/var/opt/scc = /var/opt/scc
+	file_permissions -o root -g sys -u 000
+		file	*
+
+	directory	./software/etc/opt/scc = /etc/opt/scc
+	file_permissions -o root -g sys -u 000
+		file	*
+
+end	# fileset scc-run
+
+end	# product scc
+_X_
+
+# swinstall requires the INDEX file to be the first file in a depot-file.
+# By specifying -x target_type=tape we indicate swpackage to place this
+# file at the beginning of the depot-file.
+/usr/sbin/swpackage	-v					\
+			-x create_target_acls=false		\
+			-x target_type=tape			\
+			-s ./${PSF}				\
+				@ "| cat > ${DEPOT}"
+
+chmod 444 ./${DEPOT}
+
+rm -rf install software $(cat file_list) ${PSF}
+
+exit 0

@@ -1,0 +1,233 @@
+.TH scc 5 "SCC" 
+.nf
+
+
+
+.SH NAME
+.nf
+       scc - introduction SCC
+
+
+.SH RELEASE
+.nf
+       scc  1.26.73
+
+
+.SH DESCRIPTION
+.nf
+       System  Configuration Collector is yet another configuration collector.
+       Just like the other collectors it collects configuration data  on  Unix
+       systems. The difference is that each line of collected data is extended
+       with a hierarchical classification of the nature of the data  and  with
+       an  indicator  whether  that  data is supposed to be static or dynamic.
+       For example: the size of a file system is static data and  the  current
+       usage  is  dynamic  data. Consecutive collections of configuration data
+       (snapshots) are compared and differences in the static data  are	 added
+       to  a  logbook.	Filling a file system will not be reported in the log-
+       book, but the extension of a file system will be.  Additional  software
+       converts the snapshot and logbook to html-format.
+
+       The  classification  of the data is a hierarchy with the following top-
+       level items (among others):
+
+       - general
+       - boot
+       - hardware
+       - Volume Management
+       - kernel
+       - network
+       - software
+       - system
+       - users
+
+
+.SH Summary of transfer of SCC-data
+.nf
+       Basically there are three setups: push, pull and two-step.
+
+       In the push setup, all clients schedule scc(1) with the -p and  the  -s
+       options and transferred data is processed on scc-srv by means of sched-
+       uled invocations of scc-update.	This setup requires (non-root)	access
+       of all clients to scc-srv, except when data is transferred via email.
+
+       In the pull setup, scc-srv schedules scc-pull with the -R option to run
+       the client, obtain the data and process	the  transferred  data.	  This
+       setup  requires	superuser  access  from	 scc-srv  to  all  clients and
+       involves all systems in a realm and all scc client  scripts  should  be
+       accessible via the same path.  Note that scc-win clients do not support
+       pulling scc data.
+
+       In the two-step setup, all clients schedule scc(1) with -p pull	option
+       without the -s option and scc-srv schedules scc-pull with the -R and -n
+       options to obtain and process the client	 data.	 This  setup  requires
+       (non-root)  access from scc-srv to all clients and involves all systems
+       in a realm and all scc client data should be accessible	via  the  same
+       path.
+
+       These three setups could be mixed on a realm basis.
+
+
+.SH INSTALLATION
+.nf
+       SCC  is	available  in many native system package formats and also as a
+       source tarball.	The software from the depots/packages/rpms on the web-
+       site  is	 NOT relocatable, it installs in /opt/scc/bin Data- and tempo-
+       rary files are located in /var/opt/scc and config files in /etc/opt/scc
+       It  is  possible	 to install the software in other directories.	Unpack
+       the source tarball, edit and use the relocate script and	 generate  the
+       required	 rpm/package.	Throughout this documentation only the default
+       directories are mentioned.
+
+       During the pre-install phase, the software runs	a  possibly  installed
+       version	of SCC to capture the changes in configuration just before the
+       installation.  During the post-install phase, the software removes  the
+       current	snapshot  (made by the previous version of SCC) and starts the
+       new version of SCC.  This means that SCC does not compare two  possibly
+       incompatible  snapshots,	 avoiding  flooding  the  logbook with changes
+       caused by code changes.
+
+       This means that the installation may take  some	time  (typically  less
+       than  5 minutes).  On a moderate pentium with CentOS 6, SCC completed a
+       run within 1.5 minutes.	On large  and  overloaded  servers,  SCC  will
+       require much longer.
+
+       To install release 1.26.73 of the source package, use the commands:
+	    tar xf scc-1.26.73.src.tar
+	    cd scc-1.26.73
+	    ./scc-install
+
+
+.SH PROGRAMS
+.nf
+       The programs of SCC have the following relationship:
+
+       scc: main program
+       this program calls scc-log and sends data to the SCC-server.
+       scc-log: this program calls:
+       - scc-collect: collect all data by calling modules in scc_modules
+       - scc-cmp: compare new and old snapshots, add differences to logbook
+       - scc-snap2html: convert snapshot to HTML
+       - scc-log2html: convert logbook to HTML
+
+
+.SH USING SCC
+.nf
+       After   the   installation,   the   data	  is  available	 in  directory
+       /var/opt/scc/data.  The file scc.<hostname>.log	contains  the  logbook
+       and the file scc.<hostname>.cur contains the current snapshot.
+
+       To  run	SCC  again,  just start /opt/scc/bin/scc.  To keep an accurate
+       logbook of your system, you can schedule it with cron:
+
+	    0 6 * * * /opt/scc/bin/scc
+
+       Any errors produced by programs called by scc-collect, appear under the
+       classification  "messages".  Most of the times they indicate some hard-
+       ware or software error on the system.  Running SCC is some  kind	 of  a
+       health check for your system.
+
+       It is possible to send your SCC-data (snapshots, logbooks and the html-
+       files) to a  server  running  the  server-software  of  SCC  (scc-srv).
+       Before  you  send your data to a server, you have to prepare the server
+       by installing scc-srv and configuring the server.  On the server,  sum-
+       maries of the SCC-data are generated and all data is accessible through
+       a web-interface.
+
+       To mark the completion of certain changes you performed	on  a  system,
+       use  the	 -c  option  of	 scc(1).  To mark changes in the snapshot when
+       implementing a RFC, use the following commands:
+
+       scc		  # record changes up to this moment
+       # perform the tasks required by the RFC
+       scc -c "RFC 123"	  # record changes due to RFC
+
+
+.SH CUSTOMIZING/EXTENDING SCC
+.nf
+       scc-collect(1) and its modules use sensible defaults to avoid that many
+       systems	require	 a configuration file.	When the defaults are insuffi-
+       cient, check the code for a reference  of  scc-localize.	  This	script
+       contains	 several  environment variables that influence the behavior of
+       scc.   To  adjust  scc,	copy  /etc/opt/scc/newconfig/scc-localize   to
+       /etc/opt/scc/conf/scc-localize  and  uncomment  the required variables.
+       When the -no_conf_sub_dir option was used with	the  relocate  script,
+       the copy is not required.
+
+       scc-collect(1)  collects OS and OS-related configuration data.  It does
+       not collect data of the applications  you  developed.   To  extend  the
+       snapshots,  refer  to  the  manual  page of scc-plugin(1).  It offers a
+       starting point to collect other configuration data.
+
+       DBAs will only be interested in part of the SCC-data of a  system.   By
+       using the file /etc/opt/scc/conf/scc-split.conf it is possible to split
+       the snapshot in several parts.  Each Oracle SID can have its own	 snap-
+       shot  and  logfile.   When  these snapshots are send to the scc-server,
+       they can be added to a separate realm that only	contains  SCC-data  of
+       Oracle  SIDs.   Refer  to  /etc/opt/scc/newconfig/scc-split.conf and to
+       scc-log(1) for examples and more details.
+
+       SCC ships with several user modules that are not run by default.	 Check
+       the  directory /opt/scc/bin/scc_modules for scripts containing "_u_" in
+       their name.  These are user-modules that can be activated by  means  of
+       the  -e	option of scc.	Refer to the manual page of scc-collect(1) and
+       scc(1) for a more detailed description of the use of modules.
+
+       Module scc_0640_s_local uses a configuration file to collect  the  con-
+       tents  of additional files.  Use this module to extend the SCC snapshot
+       on individual systems.  To extend the SCC snapshot on all systems,  you
+       better customize the code and generate your own version of SCC.
+
+       To  add or modify specific user modules for all your systems, customize
+       the depot/rpm and packages.  This can  be  achieved  by	unpacking  the
+       source  tarball	and adding/modifying the required files.  Refer to the
+       README file in the source tree for more	details	 concerning  producing
+       the  depot/rpm/package.	Refer to scc-plugin(1) for more details of new
+       modules.
+
+
+.SH PERFORMANCE
+.nf
+       Usually scc completes its runs within minutes.  When  you  notice  that
+       runs  of	 scc  on  a system take very long to complete, you can use the
+       profiling data to determine the cause.  Profiling data is added to  the
+       snapshot	 and  can  be found in the html-file under the classification:
+       "profiling".  The html file of the snapshot contains a "Statistics" ta-
+       ble  containing	the  processing times of (parts of) the modules.  Look
+       for large values in the "Module seconds" column to locate the  code  of
+       scc  that  is  causing  this performance problem.  Optionally add extra
+       calls to the scc_timing function to exactly determine the bottleneck.
+
+
+.SH SECURITY
+.nf
+       As the programs of SCC is by default run as root to obtain all the nec-
+       essary  configuration  data,  the  environment of SCC must be well pro-
+       tected.	This is accomplished by creating separate directories for  the
+       data and programs of SCC and properly securing them.
+
+       Optionally a source package can be build from the SVN sources that will
+       run SCC as an ordinary user.  Note that this reduces the amount of col-
+       lected  configuration data and could lead to "messages" in the snapshot
+       when used programs produce data on stderr as they  are  not  called  by
+       root.
+
+
+.SH COPYRIGHT
+.nf
+       SCC is free software under the terms of the GNU General Public License.
+       Copyright (C) 2001-2004 Open Challenge B.V., 2004-2005 OpenEyeT Profes-
+       sional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+
+.SH SEE ALSO
+.nf
+	scc(1), scc-cmp(1), scc-collect(1), scc-log(1), scc-log2html(1),
+	scc-plugin(1), scc-snap2html(1), scc(4), scc(5)
+
+
+.SH VERSION
+.nf
+       $Revision: 6297 $
+
+
+

@@ -1,0 +1,677 @@
+#!/bin/sh
+
+# Shell script to collect boot data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0100_s_boot 6291 2019-11-14 21:01:37Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+scc_check_file /etc/bcheckrc		"fix:boot:config:/etc/bcheckrc::"		"#"
+scc_check_file /etc/lvmrc		"fix:boot:config:/etc/lvmrc::"			"#"
+scc_check_file /etc/pre_init_rc		"fix:boot:config:/etc/pre_init_rc::"		"#"
+scc_check_file /etc/bootparams		"fix:boot:config:/etc/bootparams::"		"#"
+scc_check_file /etc/boot.conf		"fix:boot:config:/etc/boot.conf::"		"#"
+scc_check_file /boot/loader.rc		"fix:boot:config:/boot/loader.rc::"		"#"
+scc_check_file /etc/init.d/boot.local	"fix:boot:config:/etc/init.d/boot.local::"	"#"
+scc_check_file /etc/init.d/halt.local	"fix:boot:config:/etc/init.d/halt.local::"	"#"
+for file in /etc/init.d/.depend.*	# Suse: paralel starting/stopping of services
+do
+	scc_check_file "${file}" "fix:boot:config:${file}::" "#"
+done
+for file in /etc/init/*			# Google Chrome OS
+do
+	scc_check_file "${file}" "fix:boot:config:${file}::" "#"
+done
+scc_check_file /etc/rc.config		"fix:boot:config:/etc/rc.config::"		"#"
+scc_check_file /etc/rc.conf		"fix:boot:config:/etc/rc.conf::"		"#"
+scc_check_file /etc/rc.securelevel	"fix:boot:config:/etc/rc.securelevel::"		"#"
+scc_check_file /etc/rc.local		"fix:boot:config:/etc/rc.local::"		"#"
+scc_check_file /etc/rc.d/rc.local	"fix:boot:config:/etc/rc.d/rc.local::"		"#"
+scc_check_file /etc/rc.d/rc.sysinit	"fix:boot:config:/etc/rc.d/rc.sysinit::"	"#"
+scc_check_file /etc/rc.lkm		"fix:boot:config:/etc/rc.lkm::"			"#"
+scc_check_file /etc/rc.subr		"fix:boot:config:/etc/rc.subr::"		"#"
+scc_check_file /etc/rcS.conf		"fix:boot:config:/etc/rcS.conf::"		"#"
+scc_check_file /stand/bootconf		"fix:boot:config:/stand/bootconf::"		"#"
+scc_check_file /etc/rc.shutdown		"fix:boot:config:/etc/rc.shutdown::"		"#"
+scc_check_file /etc/shutdown.allow	"fix:boot:config:/etc/shutdown.allow::"		"#"	|
+sort
+scc_check_file /bosinst.data		"fix:boot:install:/bostinst.data::"		"#"
+for file in /etc/rc.d/*.conf
+do
+	scc_check_file "${file}"	"fix:boot:install:${file}::"			"#"
+done
+
+if [ -x /usr/sbin/beadm ]
+then
+	# Display BootEnvironment data for OpenSolaris.
+	# Most of it is variable. Need to split into fix and var?
+	/usr/sbin/beadm list -H		|
+	sed -e 's/;/ /g'	|
+	while read item uuid remainder
+	do
+		echo "fix:boot:beadm:${item}::uuid:	${uuid}"
+
+		/usr/sbin/beadm list -d "${item}" 	|
+		sed -e "s/^/var:boot:beadm:${item}::dataset:	/"
+
+		/usr/sbin/beadm list -s "${item}" 	|
+		sed -e "s/^/var:boot:beadm:${item}::snapshot:	/"
+	done
+fi
+
+if [ -x /usr/sbin/bootinfo ]
+then
+	# Contributed by Doug Probst.
+	echo "fix:boot:devices::IPL Device: $(bootinfo -b )"
+	bootlist -m normal -o		|
+	awk 'BEGIN	{ printf( "fix:boot:devices::bootlist:" ); }
+			{ printf( "  %s", $0 ); }
+		END	{ printf( "\n" ); }'
+fi
+
+for file in	/etc/insserv.conf /etc/insserv.conf.d/* /etc/insserv/overrides/*
+do
+	scc_check_file "${file}" "fix:boot:insserv:${file}::" "#"
+done
+
+if [ -x /usr/sbin/lustatus -a "${OS_NAME}" = "SunOS" ]
+then
+	/usr/sbin/lustatus 2>/dev/null				|
+	sed -e 's/^/fix:boot:boot environment:lustatus::/'
+
+	# Example output of lustatus:
+	#Boot Environment     Is       Active Active    Can    Copy
+	#Name                 Complete Now    On Reboot Delete Status
+	#-------------------- -------- ------ --------- ------ ----------
+	#disk_a_S7            yes      yes    yes       no     -
+	/usr/sbin/lustatus 2>/dev/null				|
+	awk '{ if ( NR > 3 ) print }'				|
+	while read BE
+	do
+		/usr/sbin/lufslist "${BE}" 2>/dev/null			|
+		sed -e "s/^/fix:boot:boot environment:lufslist ${BE}::/"
+	done
+fi
+
+if [ -x /usr/bin/lifcp -o -x /usr/sbin/idisk ]
+then
+	raw_boot=""
+	if [ -x /usr/sbin/vxdctl ]
+	then
+		raw_boot="$(/usr/sbin/vxdctl list 2>/dev/null |
+				sed -n -e 's@.*disk \([^ ]*\) .*@/dev/rdsk/\1@p')"
+	fi
+	if [ -f /etc/lvmtab ]
+	then
+		boot=$(/sbin/lvlnboot -v 2>&1 | awk '/Disk/ { print $1 } ')
+		raw_boot="${raw_boot} $(echo "${boot}" | sed -e 's/dsk/rdsk/' -e 's/ .*//')"
+	fi
+	for b in ${raw_boot}
+	do
+		if [ ! -c "${b}" ]
+		then
+			continue
+		fi
+
+		if [ -x /usr/bin/lifcp ]
+		then
+			/usr/bin/lifcp "${b}:AUTO" ${TMP1_FILE} 2>${TMP1_FILE}
+			if [ -f ${TMP1_FILE} ]
+			then
+				tr -d "\000" <${TMP1_FILE}			|
+				sed -e "s@^@fix:boot:device:${b}::autoboot:	@"
+			fi
+			rm -f ${TMP1_FILE}
+
+			# Remove the date and time. This reduces the amount of
+			# differences when comparing snapshots of different systems.
+			/usr/bin/lifls -l "${b}"				|
+			sed	-e 's@../../..  *..:..:.. *$@@'		\
+				-e "s@^@fix:boot:device:${b}::lifls:	@"
+		fi
+
+		if [ -x /usr/sbin/idisk ]
+		then
+			/usr/sbin/idisk "${b}" 2>/dev/null			|
+			sed -e "s@^@fix:boot:device:${b}::idisk:	@"
+		fi
+
+		if [ -x /usr/sbin/efi_ls ]
+		then
+			# Remove the date and time. This reduces the amount of
+			# differences when comparing snapshots of different systems.
+			/usr/sbin/efi_ls -d "${b}" 2>/dev/null			|
+			awk '/^total/	{
+						printf( "fix:boot:device:%s::efi_ls:	%s\n", b, $0 )
+						next
+					}
+					{
+						data = ""
+						if ( NF > 1 )
+						{
+							data = sprintf( "%-40s %s", $1, $(NF) )
+						}
+						printf( "fix:boot:device:%s::efi_ls:	%s\n", b, data )
+					}' b="${b}"
+		fi
+	done
+
+	if [ -f /etc/lvmtab ]
+	then
+		# Sometimes the label 'Boot' is replaced by 'PV Name'.
+		# Replace the latter by the first.
+		# Ignore the messages caused by inactive volume groups in a ServiceGuard environment.
+		/sbin/lvlnboot -v 2>&1						|
+		sed	-e 's/^PV Name:/Boot:/'				\
+			-e '/Volume group not activated/d'		\
+			-e '/Cannot display volume group/d'		\
+			-e '/is an alternate link/d'			\
+			-e 's/^/fix:boot:info::lvlnboot:	/'
+	fi
+
+	if [ -x /usr/sbin/vxdctl ]
+	then
+		/usr/sbin/vxdctl list 2>/dev/null |
+		sed -e 's/^/fix:boot:info::vxdctl:	/'
+	fi
+fi
+
+if [ -x /usr/sbin/dmesg -a "${OS_NAME}" = "SunOS" ]
+then
+	/usr/sbin/dmesg					|
+	grep "^root on"					|
+	tail -n 1					|
+	sed -e 's/^/fix:boot:root-device::/'
+fi
+
+# On *BSD systems, the boot-messages are preserved in a seperate file.
+# Each reboot adds data to this file. On hard reboots it is initialized.
+scc_check_file "/var/run/dmesg.boot" "var:boot:/var/run/dmesg.boot::" "#"
+
+if [ -x "/usr/platform/$(uname -m 2>/dev/null)/sbin/eeprom" ]
+then
+	"/usr/platform/$(uname -m 2>/dev/null)/sbin/eeprom" 2>/dev/null		|
+	sed -e 's/^/fix:boot:eeprom::/'
+fi
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli hpbootcfg show		|
+	sed -e 's/^/fix:boot:mode::/'
+fi
+
+for file in /etc/rc.config.d/* /etc/conf.d/* /etc/rc.conf.d
+do
+	fname="${file##*/}"           # get file basename
+	if [ -f "${file}" -a "${fname}" != "core" ]
+	then
+		if [ "${OS_NAME}" = "HP-UX" -a "${fname##*[.,~\#]}" != "${fname}" ]
+		then
+			# HPUX is strict on the names of files in this directory, check the code in /etc/rc.config
+			continue
+		fi
+
+		awk '/^[ 	]*$/	{ next }
+			/^[ 	]*#/	{ next }
+					{ printf( "%s", p ); print; data_shown=1 }
+			END	{
+					if ( ! data_shown )
+					{
+						# Indicate the presence of this file, even if it contains only
+						# blank/comment lines. Add an empty line.
+						print p
+					}
+				}' p="fix:boot:rc-file:${file}::" "${file}"
+	fi
+done
+
+if [ -x /sbin/rcorder -a -d /etc/rc.d ]
+then
+	# List all boot scripts in the proper order and list the dependencies.
+	# We separate the order and the dependencies to make changes of boot order more clear in the logbook.
+	(
+		cd /etc/rc.d
+		rcorder ./* 2>/dev/null		|
+		awk	'{
+				printf( "fix:boot:rcorder:survey::%03d %s\n", NR, $0 )
+			}'
+	)
+
+	for file in /etc/rc.d/*
+	do
+		if [ -f "${file}" ]
+		then
+			# The dependencies are marked by a comment line with a capitol keyword.
+			sed -n -e "s@^\(# [A-Z][A-Z][A-Z]*: .*\)@fix:boot:rcorder:${file}::\1@p" "${file}"
+		fi
+	done
+fi
+
+if [ "${OS_NAME}" = "AIX" ]
+then
+	for file in /etc/rc.*
+	do
+		scc_check_file "${file}" "fix:boot:rc-file:${file}::" "#"
+	done
+fi
+
+if [ -x /sbin/startpar ]
+then
+	for parm in boot start stop
+	do
+		# Data in these files is not sorted. Sort to avoid "extra" changes.
+		scc_check_file "/etc/init.d/.depend.${parm}" "fix:boot:/etc/init.d/.depend.${parm}::" "#"	|
+		sort
+	done
+fi
+
+if [ -x /sbin/services ]
+then
+	# Remove the escape sequences at start and end.
+	/sbin/services status-all 2>&1	|
+	sed	-e 's/^ ..//' -e s'/^[^ ]* //'	\
+		-e 's/ [^ ]*$//'		\
+		-e 's/^/fix:boot:services::/'
+fi
+
+if [ -x /usr/bin/service ]
+then
+	/usr/bin/service list 2>/dev/null			|
+	sed	-e 's/^.\[[0-9]*;[0-9]*[a-z]//'		\
+		-e 's/.\[[0-9]*[a-z] /:/'		\
+		-e 's/ : .\[[0-9]*;[0-9]*[a-z]\[/:/'	\
+		-e 's/].*//'				\
+		-e 's/^/fix:boot:services::/'
+fi
+
+scc_check_file --xml /etc/vmware/hostd/hostsvc.xml "fix:boot:file:/etc/vmware/hostd/hostsvc.xml::" "#"
+
+if [ -d /etc/systemd ]
+then
+	for entry in system user
+	do
+		scc_check_file /etc/systemd/${entry}.conf "fix:boot:systemd:${entry}:/etc/systemd/${entry}.conf::" "#"
+		for sub_entry in /etc/systemd/${entry}/*
+		do
+			if [ -h ${sub_entry} ]
+			then
+				ls -l ${sub_entry}				|
+				sed -e "s${sed_sep}.*${sub_entry}${sed_sep}fix:boot:systemd:${entry}:dependencies:general::${sub_entry}${sed_sep}"
+			elif [ -d ${sub_entry} ]
+			then
+				ls -l ${sub_entry}/* 2>/dev/null		|
+				sed -e "s${sed_sep}.*${sub_entry}/${sed_sep}fix:boot:systemd:${entry}:dependencies:${sub_entry}::${sed_sep}"
+			elif [ -f ${sub_entry} ]
+			then
+				scc_check_file "${sub_entry}" "fix:boot:systemd:${entry}:unit:${sub_entry}::" "#"
+			fi
+		done
+
+		unit_dir=""
+		if [ -x /usr/bin/pkg-config ]
+		then
+			unit_dir="$(/usr/bin/pkg-config systemd --variable=systemd${entry}unitdir 2>/dev/null)"
+		fi
+		if [ ! -d "${unit_dir}" ]
+		then
+			if [ -d /lib/systemd/${entry} ]
+			then
+				unit_dir=/lib/systemd/${entry}
+			elif [ -d /usr/lib/systemd/${entry} ]
+			then
+				unit_dir=/usr/lib/systemd/${entry}
+			fi
+		fi
+
+		if [ -n "${unit_dir}" ]
+		then
+			for file in "${unit_dir}"/*
+			do
+				scc_check_file "${file}" "fix:boot:systemd:${entry}:unit:${file}::" "#"
+			done
+		fi
+	done
+
+	for file in /etc/systemd/*.conf
+	do
+		case "${file}" in
+		*/user.conf|*/system.conf)	;;
+		*)				scc_check_file "${file}" "fix:boot:systemd:config:${file}::" "#"
+						;;
+		esac
+	done
+fi
+
+if [ -x /bin/systemctl ]
+then
+	/bin/systemctl get-default 2>/dev/null			|
+	sed -e 's/^/fix:boot:systemd:get-default::/'
+
+	/bin/systemctl show-environment 2>/dev/null		|
+	sed -e 's/^/fix:boot:systemd:show-environment::/'
+
+	# variable as changes will be detected via list-unit-files
+	systemctl --full --type=service --state=running		|
+	sed -e 's/^/var:boot:systemd:running services::/'
+
+	# Too much variations after reboots, all data is variable:
+	/bin/systemctl --no-legend 2>/dev/null			|
+	sort 							|
+	sed	-e '/session.*scope/d'			\
+		-e 's/  *loaded/ loaded/'		\
+		-e 's/^/var:boot:systemd:active::/'
+
+	/bin/systemctl list-unit-files --no-legend 2>/dev/null		|
+	sort 								|
+	sed	-e '/session.*scope/d'				\
+		-e 's/  */ /g'					\
+		-e 's/^/fix:boot:systemd:list-unit-files::/'	\
+		-e 's/^fix:\(.*::user.*slice\)/var:\1/'		\
+		-e 's/^fix:\(.*::docker\)/var:\1/'		\
+		-e 's/^fix:\(.*::machine-qemu\)/var:\1/'
+fi
+
+if [ -x /usr/bin/systemd-analyze ]
+then
+	/usr/bin/systemd-analyze blame 2>/dev/null	|
+	sed -e "s/^/var:boot:systemd:analyze blame::/"
+fi
+
+# On Server Optimized Linux /usr/local/etc is a symlink to /etc. Do not follow this symlink.
+if [ ! -h /usr/local/etc ]
+then
+	for entry in /usr/local/etc/*
+	do
+		if [ -d "${entry}" ]
+		then
+			# Ignore ssh as it also contains the private key file.
+			# Ignore rc.d as it contains the start-stop scripts itself (for FreeBSD).
+			# Ingore codepages for FreeBSD.
+			if [	"${entry}" != "/usr/local/etc/ssh" -a	\
+				"${entry}" != "/usr/local/etc/rc.d" -a	\
+				"${entry}" != "/usr/local/etc/codepages"	]
+			then
+				for f in ${entry}/*
+				do
+					scc_check_file "${f}" "fix:boot:rc-file:${entry##*/}/${f##*/}::" "#"
+				done
+			fi
+		else
+			# OSF1: Do not record the profiles of the users.
+			name="${entry##*/}"
+			if [ "${name%.*}" != "profile" ]	
+			then
+				scc_check_file "${entry}" "fix:boot:rc-file:${entry##*/}::" "#"
+			fi
+		fi
+	done
+fi
+
+# Ignore scripts, php and html files; we are not interested in code.
+# Ignore networking files as they are handled by the networking module.
+# Ignore rhn/virt as this directory contains xml files per VM.
+find /etc/sysconfig -type f 2>/dev/null			|
+sed	-e '/scripts\//d'	\
+	-e '/\.php$/d'		\
+	-e '/\.html$/d'		\
+	-e '/\/networking\//d'	\
+	-e '/\/rhn\//d'					|
+sort							|
+while read file
+do
+	scc_check_file "${file}" "fix:boot:sysconfig:${file}::" "#"
+done
+
+for file in /etc/default/* /etc/defaults/*
+do
+	scc_check_file "${file}" "fix:boot:defaults:${file}::" "#"
+done
+
+if [ -x /usr/sbin/prtconf ]
+then
+	if [ "$OS_NAME" = "AIX" ]
+	then
+		# Contributed by Doug Probst.
+		echo "fix:boot:firmware::prtconf:$(/usr/sbin/prtconf 2>/dev/null | awk -F, '/Firmware Version/ {print $2}')"
+	else
+		/usr/sbin/prtconf -V 2>/dev/null		|
+		sed -e 's/^/fix:boot:firmware::prtconf:	/'
+	fi
+fi
+
+scc_check_file /etc/inittab "fix:boot:file:/etc/inittab::" "#"
+
+# Support for Grub1 and Grub2
+for grub_dir in /boot/grub /boot/grub2 /igelleroot/boot/grub
+do
+	if [ -d "${grub_dir}" ]
+	then
+		for file in "${grub_dir}"/*cfg "${grub_dir}"/*map "${grub_dir}"/*lst "${grub_dir}"/*conf
+		do
+			scc_check_file "${file}" "fix:boot:grub:${file}::" "#"
+		done
+	fi
+done
+
+if [ -x /sbin/lilo ]
+then
+	/sbin/lilo -q -v 2>/dev/null			|
+	sed -e 's/^/fix:boot:lilo:lilo::/'
+
+	scc_check_file /etc/lilo.conf "fix:boot:lilo:/etc/lilo.conf::" "#"
+fi
+scc_check_file /etc/milo.conf "fix:boot:file:/etc/milo.conf::" "#"		# Alpha boot
+scc_check_file /etc/silo.conf "fix:boot:file:/etc/silo.conf::" "#"		# SPARC boot
+
+scc_check_file /etc/palo.conf "fix:boot:file:/etc/palo.conf::" "#"		# Palo boot manager
+
+# Void Linux
+for file in /etc/sv/*/conf
+do
+	scc_check_file "${file}" "fix:boot:${file}::" "#"
+done
+
+scc_check_file /proc/cmdline "fix:boot:kernel /proc/cmdline::" "#"
+
+scc_check_file /var/run/reboot-required.pkgs "fix:boot:reboot required::" "#"
+if [ -f /var/run/reboot-required ]
+then
+	echo "fix:boot:reboot required::/var/run/reboot-required"	# This is a flag-file, no content
+fi
+
+for dir in /sbin/rc*.d /etc/rc?.d /etc/rc.d/rc?.d /etc/rc.d/boot.d /etc/runlevels/*
+do
+	# On RH7 /etc/rc?.d are symlinks to /etc/rc.d/rc?.d
+	if [ -h "${dir}" -o ! -d "${dir}" ]
+	then
+		continue
+	fi
+
+	ls -l "${dir}"			|
+	awk '{
+		if ( NF < 8 )
+		{
+			next
+		}
+		if ( $(NF-1) == "->" )
+		{
+			print $(NF-2), $(NF-1), $NF
+		}
+		else
+		{
+			print $NF
+		}
+	}'				|
+	sed -e "s@^@fix:boot:run level:${dir}::@"
+done
+
+# Server Optimized Linux: SOL
+scc_check_file /etc/rc.d/runlevel.xml "fix:boot:run level:/etc/rc.d/runlevel.xml::" "#"
+for file in /etc/rc.d/cfg/*
+do
+	scc_check_file "${file}" "fix:boot:run level:${file}::" "#"
+done
+
+for file in /etc/rc.d/rc.?
+do
+	# Slackware
+	if [ -h "${file}" ]
+	then
+		ls -l "${file}"				|
+		sed -e "s/.* -> /fix:boot:run level:${file##*/}::${file##*/} -> /"
+	else
+		scc_check_file "${file}" "fix:boot:run level:${file##*/}::" "#"
+	fi
+done
+
+if [ -f /etc/rc.d./init.d ]
+then
+	ls -l /etc/rc.d/init.d				|
+	awk	'{	printf( "fix:boot:run level:/etc/rc.d/init.d::%-20s %s %s %s %s %s\n",
+				$NF, $1, $2, $3, $4, $5 )
+		}'
+fi
+
+if [ -x /bin/rc-status ]
+then
+	/bin/rc-status --list show		|
+	sed -e "s/^/fix:boot:rc runlevels::/"
+fi
+
+if [ -x /sbin/rc-update ]
+then
+	# Do not use rc-status for Gentoo, as it show the current status of rc-scripts.
+	rc-update -v show			|
+	sed -e "s/^/fix:boot:run level:rc-update::/"
+elif [ -x /bin/rc-status ]
+then
+	/bin/rc-status -a -nc 2>/dev/null	|
+	sed -e "s/^/fix:boot:rc-status::/"
+fi
+
+if [ -x /usr/bin/lssrc ]
+then
+	# AIX
+	/usr/bin/lssrc -a	|
+	sed -e 's/^/var:boot:System Resource:survey::/'
+
+	/usr/bin/lssrc -S	|
+	awk -F:	'{
+			if ( NR == 1 )
+			{
+				# Record the labels for the fields in the next lines.
+				for ( i = 1; i < NF; i++ )
+				{
+					label[ i ] = $i
+				}
+				next
+			}
+			# First field is the name of the subsystem, the field before the last colon is the group.
+			group = $(NF-1)
+			if ( length( group ) == 0 )
+			{
+				group = "_NONE_"
+			}
+			for ( i = 2; i < ( NF - 1 ); i++ )
+			{
+				printf( "fix:boot:System Resource:group %s:%s::%-20s: %s\n", group, $1, label[ i ], $i )
+			}
+		}'		|
+	sort
+fi
+
+if [ -x /usr/bin/svcs ]
+then
+	# SunOS
+	/usr/bin/svcs -a 2>/dev/null			|
+	awk '/svc:/ { print $3 }'			|
+	sort						|
+	while read entry
+	do
+		# Example of entry: svc:/network/rpc/keyserv:default
+		# The contract_id is incremented at each restart of the service: ignore.
+		# The state_time is variable data, but can be usefull.
+		# The logfile and alt_logfile are also variable.
+		label=${entry#svc:/}
+		/usr/bin/svcs -l "${entry}" 2>/dev/null		|
+		sed	-e "/^contract_id/d"		\
+			-e "s@^@${label}:	@"	\
+			-e "s@:@::@"			\
+			-e "s@/@:@"				|
+		sed	-e "s/^/fix:boot:svcs:/"				\
+			-e "s/^fix:\(.*[ 	]state_time[ 	]\)/var:\1/"	\
+			-e "s/^fix:\(.*[ 	]logfile[ 	]\)/var:\1/"	\
+			-e "s/^fix:\(.*[ 	]alt_logfile[ 	]\)/var:\1/"
+	done
+fi
+
+if [ -x /sbin/chkconfig ]
+then
+	/sbin/chkconfig --list 2>/dev/null		|
+	sed -e '/^xinetd based services/,$d'		|
+	sort						|
+	sed -e 's/^/fix:boot:run level:chkconfig::/'
+fi
+
+if [ -x /usr/sbin/setboot ]
+then
+	/usr/sbin/setboot 2>&1						|
+	sed -e 's/^/fix:boot:stable-storage::/'
+fi
+
+if [ -x /sbin/consvar ]
+then
+	/sbin/consvar -l 2>&1				|
+	sed -e 's/^/fix:boot:firmware::/'
+fi
+
+for file in /etc/readahead.d/*
+do
+	scc_check_file "${file}" "fix:boot:readahead:${file}::" "#"
+done
+
+scc_check_file /etc/zipl.conf "fix:boot:Z S/390:/etc/zipl.conf::" "#"
+
+exit 0

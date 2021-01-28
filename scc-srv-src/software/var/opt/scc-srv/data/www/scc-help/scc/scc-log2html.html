@@ -1,0 +1,122 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc-log2html 1 "SCC" </TITLE>
+</HEAD><BODY>
+<H1>scc-log2html(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-log2html - convert a SCC-logbook to HTML-format
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc	1.25.35
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-log2html [ -h|--help ] [ -s|--standalone ] &lt;name&gt;
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program reads a SCC-logbook from stdin and converts it to HTML-
+	format on stdout. Refer to <A HREF="scc-4.html">scc(4)</A> for a detailed description of 
+	SCC-logbook. An empty logbook results in an empty html-file.
+
+	The html-file consists of a table with entries for each run of scc.
+	For reported differences in the logbook, the menu contains an URL
+	pointing to the corresponding report.
+
+	The logbook contains DIV-tags with the following nested classes:
+	    - SCC_LOG
+	        - SCC_LOG_NAV
+	        - SCC_LOG_SUMMARY
+	        - SCC_LOG_STATS
+	        - SCC_LOG_ENTRY
+	The sylesheet style.css in /var/opt/scc/data controls the markup.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	-h|--help       Display the syntax and exit.
+	-s|--standalone Embed the stylesheet in the html-data and do not
+	                show "externel" links to snapshot and index.html.
+	                Use this option before transferring the html
+	                version of the logbook to a user.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;name&gt;          name of the host to convert the SCC-snapshot for
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following message to stderr:
+
+	Syntax error, use: scc-log2html [ -h|--help ] [ -s|--standalone ] &lt;name&gt;
+	A syntax error was detected and reported.
+
+	scc-log2html: insufficient permissions to write in data directory: &lt;data_dir&gt;
+	To run this program, log in as the owner of the directory.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	Use environment variable SCC_DATA to specify an alternative directory
+	for the SCC data files. Should be an absolute path.
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-log2html is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH,
+	2019 Siem Korteweg.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	/var/opt/scc/data/style.css - stylesheet
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-cmp.html">scc-cmp(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-4.html">scc(4)</A>, <A HREF="scc-5.html">scc(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6232 $
+
+</PRE>
+</BODY></HTML>

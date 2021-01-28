@@ -1,0 +1,121 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc-win 4 "SCC-WIN" </TITLE>
+</HEAD><BODY>
+<H1>scc-win(4)</H1>
+<PRE>
+
+
+
+1mNAME0m
+       scc-win - file formats used by SCC
+
+
+1mRELEASE0m
+       scc-win	 1.10.38
+
+
+1mDESCRIPTION0m
+       SCC  stores  configuration data from systems in flat files called snap‐
+       shots. All configuration data is structured  by	prefixing  it  with  a
+       fixed-variable  indication and with a hierarchical classification.  The
+       indication, all elements of the classification  and  the	 configuration
+       data are separated by colons.
+
+       By  comparing two consecutive snapshots and ignoring the variable data,
+       we are able to maintain a logbook of a system.  Lines  in  the  logbook
+       also consist of colon separated fields.
+
+
+1mSNAPSHOTS0m
+       Each installed hotfix is recorded in the snapshot in the following way:
+
+	    fix:system:hotfix:KB834707::Description	 : Windows XP Hotfix - KB834707
+	    fix:system:hotfix:KB834707::FixComments	 : Update
+	    var:system:hotfix:KB834707::InstalledBy	 : Administrator
+	    var:system:hotfix:KB834707::InstalledOn	 : 8/26/2005
+	    fix:system:hotfix:KB834707::ServicePackInEffect   : SP3
+
+
+       After the indicator "fix" for fixed data, there are at most five levels
+       of hierarchical classifications of the remaining data. The  classifica‐
+       tion and the data are separated by two consecutive colons.
+
+       When  additional	 hotfixes  are	installed, new entries in the snapshot
+       will be reported in the logbook.	 The reported data contains the change
+       itself (the hotfix) and the classification of the new data (system:hot‐
+       fix:KB999999::).
+
+
+1mCLASSIFICATIONS0m
+       The output of scc-collect is checked by scc-log. Any line that does not
+       start with "fix:" of "var:" is prefixed with "fix:messages::", indicat‐
+       ing unexpected output from one of the commands used by scc-collect.  As
+       the html-file groups data per classification, the original snapshot has
+       to be inspected to locate the commands causing this output.
+
+       The snapshot is converted to a hierarchical menu. Therefore the follow‐
+       ing combination of classifications cannot be used:
+
+	  fix:software:myprogram::
+	  fix:software:myprogram:config::
+
+
+       The  first classification results in html-code to access "myprogram" as
+       an option in the sub-menu "software".  The second classification should
+       result  in  html-code  to  access a sub-menu "myprogram" containing the
+       option "config".
+
+       It is the responsibility of the developer to  ensure  a	correct	 menu-
+       structure  by  using  the correct classifications in scc-collect and in
+       the plug-ins.  This kind of errors is  detected	and  reported  in  the
+       snapshot by scc-collect.
+
+
+1mLOGBOOK0m
+       Two consecutive snapshots are compared using diff. The resulting output
+       is altered to indicate the old and the new configuration.  A  shift  in
+       daylight saving time is recorded in the logbook:
+
+	    2006-03-28:20.46.29:result::different
+	    2006-03-28:20.46.29:runtime::19
+	    2006-03-28:20.46.29:count::4
+	    2006-03-28:20.46.29:previous date::2006-03-25
+	    2006-03-28:20.46.29:previous time::17.33.26
+	    2006-03-28:20.46.29:data::old::general::CurrentTimeZone: 60
+	    2006-03-28:20.46.29:data::new::general::CurrentTimeZone: 120
+	    2006-03-28:20.46.29:data::old::general::DaylightInEffect:0
+	    2006-03-28:20.46.29:data::new::general::DaylightInEffect:1
+
+
+       Again we see colon separated fields. The first fields indicate the date
+       and time of the change. Then there is a classification of the remaining
+       fields, separated by two, consecutive colons from the differences.  The
+       classification is limited to: result,  remark,  count,  previous	 date,
+       previous time and data.
+
+       After  reporting	 the result and some administrivia, finally the actual
+       change is reported. The keyword old indicates that this data  was  only
+       present	in  the	 old snapshot. So it has been removed from the current
+       configuration of the system. The keyword new indicates that  this  data
+       only appears in the current (new) snapshot.
+
+
+1mCOPYRIGHT0m
+       SCC is free software under the terms of the GNU General Public License.
+       Copyright (C) 2006-2018 QNH, 2019 Siem Korteweg.
+
+
+1mSEE ALSO0m
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-win-4.html">scc-win(4)</A>, <A HREF="scc-win-5.html">scc-win(5)</A>
+
+
+1mVERSION0m
+       $Revision: 6241 $
+
+
+
+</PRE>
+</BODY></HTML>

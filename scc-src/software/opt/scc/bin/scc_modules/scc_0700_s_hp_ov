@@ -1,0 +1,561 @@
+#!/bin/sh
+
+# Shell script to collect HP OpenView data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0700_s_hp_ov 6299 2019-12-20 21:47:57Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+###############################################################################
+# OV Performance ##############################################################
+###############################################################################
+
+# OV Performance agent ########################################################
+fixclass="fix:HP OpenView:Performance agent"
+
+if [ -x /opt/perf/bin/agsysdb ]
+then
+	/opt/perf/bin/agsysdb -l 2>/dev/null		|
+	sed -e "s/^/${fixclass}:agsysdb::/"
+fi
+scc_check_file /var/opt/perf/parm			"${fixclass}:/var/opt/perf/parm::"			"#"
+scc_check_file /var/opt/perf/adviser.syntax		"${fixclass}:/var/opt/perf/adviser.syntax::"		"#"
+scc_check_file /var/opt/perf/alarmdef			"${fixclass}:/var/opt/perf/alarmdef::"			"#"
+scc_check_file /var/opt/perf/perflbd.rc			"${fixclass}:/var/opt/perf/perflbd.rc::"		"#"
+scc_check_file /var/opt/OV/conf/perf/datasources	"${fixclass}:/var/opt/OV/conf/perf/datasources::"	"#"
+scc_check_file /var/opt/perf/ttd.conf			"${fixclass}:/var/opt/perf/ttd.conf::"			"#"
+
+# OV Performance server #######################################################
+fixclass="fix:HP OpenView:Performance manager"
+
+# Performance Manager up to version 3
+if [ -x /opt/perf/bin/pvsysdb ]
+then
+	# From Paul te Vaanholt:
+	/opt/perf/bin/pvsysdb -ll 2>/dev/null			|
+	sed	-e 's/:  */:/'	\
+		-e 's/  *$//'					|
+	awk -v class="${fixclass}" -F: '$1 ~ /System Name/	{ groups = ""; sysname = $2; next }
+		$1 ~ /Data comm key/	{ dckey = $2; next }
+		$1 ~ /GroupName/	{
+						if ( length( $2 ) )
+						{
+							groups = sprintf( "%s %s,", groups, $2 )
+						}
+						next
+					}
+		$1 ~ /Monitor Alarms/	{
+						printf( "%s:database::%s:%s:alarm %s:%s\n",
+							class, sysname, dckey, $2, groups )
+				}'				|
+	sort
+fi
+scc_check_file /var/opt/perf/pv.hosts "${fixclass}:pv.hosts::" "#"
+
+# Performance Manager version 4 and up
+ovpmini="/opt/OV/OVPM/webapps/OVPM/WEB-INF/OVPMinstall.ini"
+
+if [ -f "${ovpmini}" ]
+then
+	scc_check_file "${ovpmini}" "${fixclass}:OVPMinstall.ini::" ""
+
+	# Check for the SHAREDPATH entry in the ini file
+	# If it's not set, use the default
+	ovpmshare="$(awk -F= '/SHAREDPATH/ { print $NF }' "${ovpmini}" | sed 's/^[ 	]*//')"
+	ovpmshare="${ovpmshare:-/var/opt/OV}"
+
+	# Log the configuration files
+	scc_check_file "${ovpmshare}/conf/perf/OVPMconfig.ini" "${fixclass}:OVPMconfig.ini::" ";"
+	scc_check_file "${ovpmshare}/conf/perf/OVPMSystems.xml" "${fixclass}:OVPMSystems.xml::" ""
+	scc_check_file "${ovpmshare}/conf/perf/OVPMUsers.xml" "${fixclass}:OVPMUsers.xml::" ""		|
+	sed	-e 's/password=".*"/password="hidden"/'
+	scc_check_file "${ovpmshare}/conf/perf/systemsCODA.txt" "${fixclass}:systemsCODA.txt::" "#"
+	scc_check_file "${ovpmshare}/conf/perf/systemsMWA.txt" "${fixclass}:systemsMWA.txt::" "#"
+fi
+
+###############################################################################
+# OV Network Node Manager #####################################################
+###############################################################################
+fixclass="fix:HP OpenView:Network Node Manager"
+varclass="var:HP OpenView:Network Node Manager"
+
+if [ -x /opt/OV/bin/ovversion ]
+then
+	/opt/OV/bin/ovversion		|
+	sed -e "s/^/${fixclass}:ovversion::/"
+fi
+
+export NNM_CONF=/etc/opt/OV/share/conf
+export NNM_WWW=/etc/opt/OV/share/www
+scc_check_file "${NNM_CONF}/ov.conf" "${fixclass}:ov.conf::" "#"
+scc_check_file "${NNM_CONF}/ovsuf" "${fixclass}:ovsuf::" "#"
+scc_check_file "${NNM_CONF}/polling"  "${fixclass}:polling::" "#"
+scc_check_file "${NNM_CONF}/trustedCmds.conf"  "${fixclass}:trustedCmds.conf::" "#"
+
+# Comment starts with ";". When a line starts with "#", it is also comment.
+scc_check_file /var/opt/OV/share/databases/analysis/default/solid.ini "${fixclass}:solid.ini::" ";"	|
+sed -e "/${fixclass}:solid.ini::#/d"
+
+if [ -x /opt/OV/bin/xnmtopoconf ]
+then
+	/opt/OV/bin/xnmtopoconf -print 2>/dev/null		|
+	sed -e "s/^/${fixclass}:collector stations::/"
+fi
+
+if [ -x /opt/OV/bin/snmpwalk ]
+then
+	/opt/OV/bin/snmpwalk "$(hostname)" .1.3.6.1.4.1.11.2.17.4.3.1.1.2 2>/dev/null	|
+	awk '$0 !~ /^no MIB/ { print $NF }'						|
+	sort										|
+	sed -e "s/^/${fixclass}:remote managers::/"
+fi
+
+if [ -f ${NNM_CONF}/C/trapd.conf ]
+then
+	awk -v class="${fixclass}"	'/^#/		{ next }
+		/^FORMAT/	{ next }
+		/^DISPLAY/	{ next }
+				{
+					if ( ! event_seen )
+					{
+						prefix = $1
+					}
+				}
+		/^EVENT/	{ prefix = "EVENT"; event_seen = 1 }
+		/^EXEC/		{ $0 = substr( $0, 1, 60 ) }
+		/^SDESC/	{ ignore = 1; next }
+		/^EDESC/	{ ignore = 0; next }
+				{
+					if ( ! ignore )
+					{
+						if ( $1 == prefix )
+							$1 = " "
+						print class ":trapd.conf " prefix "::" $0
+					}
+				}' ${NNM_CONF}/C/trapd.conf
+fi
+
+if [ -f ${NNM_CONF}/C/filters ]
+then
+	# This file can contain very long lines. Split line after the OR operator (||).
+	sed	-e 's/\/\/.*//'		\
+		-e '/^[ 	]*$/d'	\
+		-e 's/||[ 	]*/||\
+/g' ${NNM_CONF}/C/filters					|
+	sed	-e "s@^@${fixclass}:C/filters::@"
+fi
+
+for f in ${NNM_CONF}/eventFilters/*
+do
+	scc_check_file "${f}" "${fixclass}:eventFilters/$(basename ${f})::" "#"
+done
+
+scc_check_file "${NNM_CONF}/stacks/pmd/OV_EVENT.cfg" "${fixclass}:stacks/pmd/OV_EVENT.cfg::" "#"
+
+if [ -f ${NNM_CONF}/snmpmib ]
+then
+	grep "^-- START OF MIB" ${NNM_CONF}/snmpmib	|
+	sed -e "s/^/${fixclass}:snmpmib::/"
+fi
+
+scc_check_file "${NNM_CONF}/mib.coerce" "${fixclass}:mib.coerce::" "#"
+
+if [ -f /etc/opt/OV/share/conf/mibExpr.conf ]
+then
+	# Ignore the comments in this file. The parts of the expressions are on
+	# separate lines. Join the lines to reduce the size of the snapshot.
+	# This also clarifies detected changes.
+	awk '/^[ 	]*#/	{ next }
+		/^[ 	]*$/	{ next }
+		/^"/		{ ignore = 1; next }
+		/"[ 	]*\\$/	{ ignore = 0; next }
+		/\\$/		{
+					# Fold continuation lines on a single line.
+					if ( ! ignore )
+					{
+						printf( "%s ", $0 )
+					}
+					next
+				}
+				{
+					# End of continuation reached.
+					if ( ! ignore )
+					{
+						print
+					}
+					ignore = 0
+				}' /etc/opt/OV/share/conf/mibExpr.conf	|
+	sed	-e 's/\\//g'	\
+		-e "s/^/${fixclass}:mibExpr.conf::/"
+fi
+
+scc_check_file "${NNM_CONF}/snmpCol.conf" "${fixclass}:snmpCol.conf::" "#"
+scc_check_file "${NNM_CONF}/snmpRep.conf" "${fixclass}:snmpRep.conf::" "#"
+
+if [ -f ${NNM_CONF}/ovsuf ]
+then
+	grep "^0:netmon:.*-s" ${NNM_CONF}/ovsuf		|
+	sed	-e 's/.*-s[ 	]*//'	\
+		-e 's/[ 	]*:.*//'		|
+	while read seedfile
+	do
+		scc_check_file "${seedfile}" "${fixclass}:netmon seed file ${seedfile}::" "#"
+	done
+fi
+
+for f in	netmon.cmstr		\
+		netmon.equivPorts	\
+		netmon.MACnoDiscover	\
+		netmon.migratable	\
+		netmon.noDiscover	\
+		netmon.snmpStatus	\
+		netmon.statusIntervals	\
+		netmon.statusMapping	\
+		excludeip.conf
+do
+	scc_check_file "${NNM_CONF}/${f}" "${fixclass}:${f}::" "#"
+done
+
+scc_check_file "${NNM_CONF}/oid_to_sym" "${fixclass}:oid_to_sym::" "#"
+
+# In NNM 7.x, oid_to_sym is split into several files, although the oid_to_sym is still read for compatibility
+if [ -d "${NNM_CONF}/oid_to_sym_reg" ]
+then
+	find "${NNM_CONF}/oid_to_sym_reg" -type f	|
+	sort						|
+	while read f
+	do
+		scc_check_file "${f}" "${fixclass}:${f#${NNM_CONF}/}::" "#"
+	done
+fi
+
+scc_check_file "${NNM_CONF}/oid_to_type" "${fixclass}:oid_to_type::" "#"
+scc_check_file "${NNM_CONF}/HPoid2type" "${fixclass}:HPoid2type::" "#"
+
+scc_check_file "${NNM_CONF}/physAddr.conf" "${fixclass}:physAddr.conf::" "#"
+
+scc_check_file "${NNM_CONF}/ovdbconf" "${fixclass}:ovdbconf::" "#"
+
+scc_check_file "${NNM_CONF}/ovspmd.auth" "${fixclass}:ovspmd.auth::" "#"
+scc_check_file "${NNM_CONF}/ovw.auth" "${fixclass}:ovw.auth::" "#"
+scc_check_file "${NNM_CONF}/ovwdb.auth" "${fixclass}:ovwdb.auth::" "#"
+scc_check_file "${NNM_WWW}/conf/session.conf" "${fixclass}:conf/session.conf::" "#"
+scc_check_file "${NNM_CONF}/defaultperms.conf" "${fixclass}:defaultperms.conf::" "#"
+if [ -f ${NNM_WWW}/etc/htpasswd ]
+then
+	sed	-e 's/:.*//'	\
+		-e "s@^@${fixclass}:www/etc/htpasswd::@" ${NNM_WWW}/etc/htpasswd
+fi
+scc_check_file "${NNM_WWW}/etc/htgroup" "${fixclass}:www/etc/htgroup::" "#"
+if [ -x /opt/OV/bin/ovwls ]
+then
+	/opt/OV/bin/ovwls 2>&1		|
+	sort -k 2			|
+	sed -e "s/^/${varclass}:ovwls::/"
+fi
+
+###############################################################################
+# End of OV Network Node Manager ##############################################
+###############################################################################
+
+###############################################################################
+# OV Data Protector ###########################################################
+###############################################################################
+
+# OV Data Protector agent #####################################################
+fixclass="fix:HP OpenView:Data Protector agent"
+varclass="var:HP OpenView:Data Protector agent"
+
+if [ -d /opt/omni/newconfig/etc/opt/omni/customize ]
+then
+	(
+		cd /opt/omni/newconfig/etc/opt/omni/customize
+		for f in .Version*
+		do
+			sed -e "s/^/${fixclass}:agent::${f}:	/" "${f}"
+		done
+	)
+fi
+
+# Additions for DP 5.5 provided by Paul te Vaanholt.
+scc_check_file /etc/opt/omni/cell/omni_info "${fixclass}:omni_info::" "#"
+scc_check_file /etc/opt/omni/client/omni_info "${fixclass}:omni_info::" "#"		# DP 5.5
+scc_check_file /etc/opt/omni/cell/cell_server "${fixclass}:cell_server::" "#"
+scc_check_file /etc/opt/omni/client/cell_server "${fixclass}:cell_server::" "#"		# DP 5.5
+scc_check_file /opt/omni/.omnirc "${fixclass}:.omnirc::" "#"
+
+# OV Data Protector manager ###################################################
+fixclass="fix:HP OpenView:Data Protector manager"
+varclass="var:HP OpenView:Data Protector manager"
+
+omni=/etc/opt/omni
+if [ -d ${omni}/server/cell ]
+then
+	omni=/etc/opt/omni/server				# DP 5.5
+fi
+### cell information
+scc_check_file "${omni}/cell/installation_servers" "${fixclass}:cell:installation_servers::"	"#"
+scc_check_file "${omni}/cell/CellServers"          "${fixclass}:cell:CellServers::"		"#"
+scc_check_file "${omni}/cell/cell_info"            "${fixclass}:cell:cell_info::"			"#" |
+sort
+
+if [ -x /opt/omni/lbin/rds -a -n "$(ps -e 2>/dev/null | awk '$NF == "rds"  { print }')" ]
+then
+	scc_check_file "${omni}/options/global" "${fixclass}:cell:parameters::" "#"
+
+	/opt/omni/bin/omnicc -query			|
+	sed -e "s/^/${fixclass}:cell:license::/"
+
+	scc_check_file "${omni}/Version" "${fixclass}:cell:initial version::" "#"
+	scc_check_file "/opt/omni/newconfig/${omni}/Version" "${fixclass}:cell:current version::" "#"
+
+	### user information
+	scc_check_file "${omni}/users/ClassSpec" "${fixclass}:cell:group permissions::" "#"
+	scc_check_file "${omni}/users/UserList"  "${fixclass}:cell:users::" "#"
+
+	### device information
+	/opt/omni/bin/omnidownload -list_libraries -detail	|
+	sed -e "s/^/${fixclass}:devices and media:library details::/"
+
+	# Only preserve the first heading!
+	/opt/omni/bin/omnidownload -list_devices		|
+	awk	'/^[ 	]*$/	{ next }
+		/^Device|^====/	{
+					if ( header_done >= 2 )
+					{
+						next
+					}
+					header_done++
+				}
+				{
+					print l $0
+				}' l="${fixclass}:devices and media:device overview::"
+
+	/opt/omni/bin/omnidownload -list_devices -detail	|
+	awk	'/^[ 	]*$/	{ next }
+		/^========/	{ next }
+		/^NAME/		{
+					# Contents of line:
+					#NAME "hslsdp01_TLB4_D10"
+					$1=""
+					sub( "^[ 	]*", "" )
+					gsub( /"/, "" )
+					name = $0
+					next
+				}
+				{
+					print l name "::" $0
+				}' l="${fixclass}:devices and media:device detail:"
+
+	# Erase the last two colums: # of media and free
+	# The lines -disable after CLEANME appear to be variable.
+	label="devices and media:media pools"
+	/opt/omni/bin/omnicellinfo -mm				|
+	sed	-e 's/[ 	][ 	]*[0-9][0-9]*[ 	][ 	]*[0-9][0-9]*$//'	\
+		-e '/^[ 	]*$/d'							\
+		-e "s/^-disable/${varclass}:${label}::-disable/"			\
+		-e "s/^/${fixclass}:${label}::/"
+
+	### datalist information
+	/opt/omni/bin/omnicellinfo -group 2>/dev/null		|
+	sed -e "s/^/${fixclass}:datalists:datalist groups::/"
+
+	ls ${omni}/schedules 2>/dev/null			|
+	grep -v "core$"						|
+	while read sched
+	do
+		sys="$(basename "${sched}")"
+
+		scc_check_file "${omni}/datalists/${sys}" "${fixclass}:datalists:(file system) ${sys}::" "#"
+
+		scc_check_file "${omni}/schedules/${sys}" "${fixclass}:datalists:(file system) ${sys} - schedule::" "#"
+	done
+
+	ls ${omni}/barschedules/oracle 2>/dev/null		|
+	grep -v "core$"						|
+	while read sched
+	do
+		sys="$(basename "${sched}")"
+
+		scc_check_file "${omni}/barlists/oracle/${sys}" "${fixclass}:datalists:(oracle)     ${sys}::" "#"
+
+		scc_check_file "${omni}/barschedules/oracle/${sys}" "${fixclass}:datalists:(oracle)     ${sys} - schedule::" "#"
+	done
+
+	### Database information
+	scc_check_file "${omni}/purge_schedule" "${fixclass}:database:purge_schedule::" "#"
+
+	/opt/omni/sbin/omnidbutil -list_dcdirs 2>/dev/null	|
+	sed -e "s/^/${fixclass}:database:dc directories::/"
+
+	/opt/omni/sbin/omnidbutil -info 2>/dev/null		|
+	sed -e "s/^/${varclass}:database:usage::/"
+fi
+
+###############################################################################
+# End of OV Data Protector ####################################################
+###############################################################################
+
+###############################################################################
+# OV Operations agent #########################################################
+###############################################################################
+fixclass="fix:HP OpenView:Operations agent"
+
+scc_check_file /var/opt/OV/conf/OpC/nodeinfo "${fixclass}:/var/opt/OV/conf/OpC/nodeinfo::" "#"
+scc_check_file /var/opt/OV/conf/OpC/opcnetls "${fixclass}:/var/opt/OV/conf/OpC/opcnetls::" "#"
+scc_check_file /opt/OV/bin/OpC/install/opcinfo "${fixclass}:/opt/OV/bin/OpC/install/opcinfo::" "#"
+
+if [ -x /opt/OV/bin/OpC/opctemplate -o -x /opt/OV/bin/ovpolicy ]
+then
+	if [ -x /opt/OV/bin/ovpolicy ]
+	then
+		label="ovpolicy"
+		/opt/OV/bin/ovpolicy -list 2>/dev/null
+	else
+		# OPC version 6
+		label="opctemplate"
+		/opt/OV/bin/OpC/opctemplate 2>/dev/null
+	fi >${TMP1_FILE}
+
+	sed	-e '1,3d' <${TMP1_FILE}				|
+	sort -i							|
+	sed	-e '/^[ 	]*$/d'	\
+		-e "s/^/${fixclass}:${label}::/"
+
+	rm -f ${TMP1_FILE}
+fi
+
+export OPCDCODE=/opt/OV/bin/OpC/utils/opcdcode
+if [ -x "${OPCDCODE}" ]
+then
+	{
+		# Decode the description of the logfile encapsulator and the monitor.
+		for file in le monitor
+		do
+			if [ -e /var/opt/OV/conf/OpC/${file} ]
+			then
+				${OPCDCODE} /var/opt/OV/conf/OpC/${file} 2>/dev/null
+			fi
+		done
+	}				|
+	awk	'/^MONITOR|^SCHEDULE|^LOGFILE/	{
+				label = tolower( $1 )
+				$1 = ""
+				sub( "^[ 	]*\"", "" )
+				sub( "\"[ 	]*$", "" )
+				name = $0
+				type = "description"
+				next
+			}
+		/^[ 	]*MSGCONDITIONS/	{
+				type = "condition"
+				next
+			}
+		/^[ 	]*DESCRIPTION/		{
+				$1 = ""
+				sub( "^[ 	]*\"", "" )
+				sub( "\"[ 	]*$", "" )
+				print c ":monitoring:" label "::" name ":" type ":" $0
+				next
+			}' c="${fixclass}"
+fi
+
+###############################################################################
+# XPL #########################################################################
+###############################################################################
+fixclass="fix:HP OpenView:XPL"
+
+if [ -x /opt/OV/bin/ovcoreid ]
+then
+	/opt/OV/bin/ovcoreid		|
+	sed -e "s/^/${fixclass}:ovcoreid::/"
+fi
+
+scc_ovreg() {
+	awk	'/[[]/	{
+				sub( "[[]", "" )
+				sub( "]", "" )
+				class = $0
+				next
+			}
+		/^$/	{ next }
+			{
+				printf( "%s:ovconfget:%s::%s\n", label, class, $0 )
+				next
+			}' label="${fixclass}"
+	return
+}
+
+if [ -x /opt/OV/bin/ovconfget ]
+then
+	rm -f ${TMP1_FILE} ${TMP2_FILE}
+
+	/opt/OV/bin/ovconfget				|
+	scc_ovreg					|
+	tee ${TMP1_FILE} 
+
+	/opt/OV/bin/ovconfget -ovrg server		|
+	scc_ovreg >${TMP2_FILE} 
+
+	cmp -s ${TMP1_FILE} ${TMP2_FILE}
+	if [ $? -ne 0 ]
+	then
+		sed -e 's/ovconfget/ovconfget server/' <${TMP2_FILE}
+	fi
+
+	rm -f ${TMP1_FILE} ${TMP2_FILE}
+fi
+
+if [ -x /opt/OV/bin/ovcert ]
+then
+	/opt/OV/bin/ovcert -list		|
+	sed -e "s/^/${fixclass}:ovcert::/"
+fi
+
+###############################################################################
+# End of OV Operations ########################################################
+###############################################################################
+
+exit 0

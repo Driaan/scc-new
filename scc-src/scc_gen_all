@@ -1,0 +1,121 @@
+#!/bin/sh
+
+# Generate all packages for SCC.
+# Copyright (C) 2010-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_gen_all 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	*-gen-scc		scripts to generate packages
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# After using this program, the directory packages the generated packages.
+
+# To customize the software:
+# - optionally edit and use the relocate script to install scc in non default directories
+# - add/delete module(s)
+# - change code
+# - remove the generate scripts for the package formats you do not support
+# - call this script with new version as argument
+#   be aware of the limitations of the version format for certain types of packages
+# - the directory "packages" contains all produced software packages
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+if [ ! -d software -o ! -d install ]
+then
+	echo "${ProgName}: missing directories: software and install" >&2
+	echo "use this script in the unpacked source tarball environment" >&2
+	exit 1
+fi
+
+# Calling by non-root users results in wrong permissions of the installed files.
+uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+if [ "${uid}" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+VERSION=${1:-1.26.73}
+
+TARGET=packages
+rm -rf ${TARGET}
+mkdir ${TARGET}
+
+for script in *gen-scc
+do
+	if [ -f ${script} ]
+	then
+		chmod u+x ${script}
+	fi
+	if [ ! -x ${script} ]
+	then
+		continue
+	fi
+
+	export prod_dir=_prod_$$
+	rm -rf "${prod_dir}"
+	mkdir -p "${prod_dir}"
+	cp -pR * ${prod_dir} 2>/dev/null	# Copy all and ignore error concerning ${prod_dir}
+	(
+		cd ${prod_dir}
+		rm -rf ${TARGET} ${prod_dir}
+		echo "run ${script}"
+		./${script} ${VERSION} 2>&1	|
+		sed -e 's/^/	/'
+	)
+	result=$?
+	if [ ${result} -ne 0 ]
+	then
+		echo "	${script} failed, exit status: ${result}"
+	else
+		if [ $(ls ${prod_dir} | wc -l) -ne 1 ]
+		then
+			echo "	${script} failed, it left additional files"
+		fi
+
+		if [ $(ls ${prod_dir} | wc -l) -eq 1 ]
+		then
+			mv ${prod_dir}/* ${TARGET}
+		fi
+	fi
+	rm -rf "${prod_dir}"
+done
+
+chmod 444 ${TARGET}/*
+
+exit 0

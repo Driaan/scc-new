@@ -1,0 +1,121 @@
+#!/bin/sh
+
+# Alter source-tree to install scc-srv in alternate directories.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: relocate 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install				pre/post install scripts
+#	software/opt/scc-srv		bin, doc and man		change via ${SCC_SW} or --sw option
+#	software/var/opt/scc-srv	data				change via ${SCC_DATA} or --data option
+#
+# After using this program, the directory contains the new hierarchy.
+#
+# This script is called from some of the generate scripts.
+
+# Use options or edit the following lines to install the software in other directories than the default.
+# Then call this script, followed by the appropriate generate-script.
+# Note that this script will not work correctly when SCC_DATA contains the string: "/opt/scc-srv".
+# Be sure to use absolute paths for the following variables.
+#SCC_DATA=""		# for example: /usr/pkg/share/scc-srv	contains conf, data and newconfig
+#SCC_SW=""		# for example: /usr/pkg			contains bin, doc and man
+export SCC_DATA SCC_SW
+
+# We have to ignore the gen-scc script that is calling us.
+ignore="NoFileHasThisName"
+while [ $# -gt 0 ]
+do
+	case "${1}" in
+	--data)	SCC_DATA="${2}"
+		shift 2;;
+	--ign)	ignore="${2}"	
+		shift 2;;
+	--sw)	SCC_SW="${2}"
+		shift 2;;
+	*)	echo "${0}: unknown option: ${1}, available options are: --data --ign --sw" >&2
+		exit 2;;
+	esac
+done
+
+if [ -z "${SCC_DATA}" -o -z "${SCC_SW}" ]
+then
+	echo "customize ${0} to alter directory settings or use options" >&2
+	exit 2
+fi
+
+case "${SCC_DATA}" in
+*/opt/scc-srv*)	echo "data path should not contain /opt/scc-srv" >&2
+		exit 2;;
+esac
+
+(
+	# Ignore files that call relocate.
+	grep -l "\./relocate" * 2>/dev/null	|
+	sed	-e 's@^@/@'	\
+		-e 's@$@/d@'
+	echo "/${ignore}/d" 
+	echo "/favicon.ico/d"
+	echo "/scc-logo.png/d"
+) >relocate_ignore
+
+# Replace the default paths with the indicated paths.
+find . -type f					|
+sed -f relocate_ignore				|
+while read file
+do
+	sed	-e "s@/var/opt/scc-srv@${SCC_DATA}@g"	\
+		-e "s@var/opt/scc-srv@${SCC_DATA}@g"	\
+		-e "s@/opt/scc-srv@${SCC_SW}@g"		\
+		-e "s@opt/scc-srv@${SCC_SW}@g"		\
+			<${file}			\
+			>${file}.tmp
+
+	# Preserve the original permissions.
+	chmod u+w ${file}
+	>${file}
+	cat ${file}.tmp >>${file}
+	chmod u-w ${file}
+	rm -f ${file}.tmp
+done
+
+# The software/ directory should reflect the new layout, move all files.
+cd software
+
+mkdir -p ./${SCC_SW}
+mv opt/scc-srv/* ./${SCC_SW}
+rm -rf opt/scc-srv
+
+mkdir -p ./${SCC_DATA}
+mv var/opt/scc-srv/* ./${SCC_DATA}
+rm -rf var/opt/scc-srv
+
+# Remove the possibly empty top directories of the old (default) layout.
+for dir in opt var/opt var etc/opt etc
+do
+	rmdir ${dir} 2>/dev/null
+done
+
+exit 0

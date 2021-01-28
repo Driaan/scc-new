@@ -1,0 +1,2836 @@
+#!/bin/sh
+
+# This module has been developed and contributed by: Paul te Vaanholt
+
+# Shell script for HP OpenView OV Operations module for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0700_u_hp_ovou_srv 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# Logic of opccfgdwn data processing:
+#
+# - If needed ($OPCDWN = 1), a download is created (in $OPCDWN_DIR)
+#
+# - The download data is split into separate files (in $SPLIT_DIR)
+#
+# - The template group file is split to:
+#   + tgd_*:	template group details, including members of the template group
+#   + tgm_*:	template group members, used for removing template group
+#		nesting
+#   + tmotg_*:	template is member of template groups, used for template
+#		reporting
+#   + tgmotg_*:	template group is member of template groups, used for template
+#		group reporting
+#
+# - The template files are split to:
+#   + td_*:	template details
+#
+# - The node group file is split to:
+#   + ngd_*:	node group details, including node members and template (group)
+#		assignments
+#   + ngm_*:	node group members (both node and template (group)), used for
+#		removing template group nesting
+#   + nmong_*:	node is member of node group, used for node reporting
+#   + tatng_*:	template is assigned to node group, used for template reporting
+#   + tgatng_*:	template group is assigned to node group, used for template
+#		group reporting and removing nesting
+#
+# - The node file is split to:
+#   + nd_*:	node details, including template (group) assignments
+#   + nm_*:	node members (template (group)), used for removing template
+#		group nesting
+#   + tatn_*:	template is assigned to node, used for template reporting
+#   + tgatn_*:	template group is assigned to node, used for template group
+#		reporting and removing nesting
+#
+# - The node hierarchy file is split to:
+#   + nhd_*:	node hierarchy details
+#   + nh_*:	node hierarchy components
+#
+# - User file (containing operators, template administrators and profiles) is split to:
+#   + u_op_*:	operator details
+#   + u_ta_*:   template administrator details
+#   + u_pr_*:   user profile details
+#   + u_uk_*:	unknown user type files (these files should not show up)
+#   + aatop_*:	application is assigned to operator
+#   + aatpr_*:	application is assigned to user profile
+#   + agatop_*:	application group is assigned to operator
+#   + agatpr_*:	application group is assigned to user profile
+#   + prop_*:	profile is assigned to user
+#
+# - Application file (containing both applications and application groups) is split to:
+#   + ad_*:	application details
+#   + amoag_*:	application is member of application group
+#   + agd_*:	application group details, including members (applications and
+#		sub application groups)
+#   + agm_*:	application group members, used for removing nesting
+#
+# - Instruction text interface file is split to:
+#   + ii_*:	instruction text interface details
+#
+# - Template group nesting is removed from:
+#   + tgm_*:	template group members
+#   + ngm_*:	node group members
+#   + nm_*:	node members
+#
+# - Application group nesting is removed from:
+#   + agm_*:	application group  members
+#
+# - Node group members: template (group) are added to node member files:
+#   + nm_*:	node members
+#
+# - Template active on node information is extracted from nm_* into:
+#   + taon_*:	template active on node
+#
+# - Responsibility data is reformatted in:
+#   + u_pr_*:	user profiles
+#   + u_op_*:	operators
+#
+# - Template data is reported from:
+#   + td_*:	template details
+#   + tmotg_*:	template member of template groups
+#   + tatn_*:	template is assigned to nodes
+#   + tatng_*:	template is assigned to node groups
+#   + taon_*:	template is active on nodes (nesting removed, treated as var
+#		to prevent unnecessary difference messages)
+#
+# - Template group data is reported from:
+#   + tgd_*:	template group details
+#   + tgmotg_*:	template group is member of template groups
+#   + tgatn_*:	template group is assigned to nodes
+#   + tgatng_*:	template group is assigned to node groups
+#   + tgm_*:	template group members (nesting removed, treated as var to
+#		prevent unnecessary difference messages)
+#
+# - Template usage data is reported from:
+#   + nm_*:	node member files (nesting removed, contains templates on
+#		node)
+#
+# - Message group data is reported from
+#   +		download file
+#
+# - Node data is reported from:
+#   + nd_*:	node details
+#   + nmong_*:	node member of node groups
+#   + nm_*:	node members (templates active on that node) (nesting removed,
+#		treated as var to prevent unnecessary difference messages)
+#
+# - Node group data is reported from:
+#   + ngd_*:	node group details
+#   + ngm_*:	node group members, only templates (nesting removed, treated
+#		as var to prevent unnecessary difference messages)
+#
+# - Node hierarchy data is reported from:
+#   + nhd_*:	node hierarchy details
+#   + nhm_*:	node hierarchy members
+#
+# - Application data is reported from:
+#   + ad_*:	application details
+#   + amoag_*:	application is member of application groups
+#   + aatop_*:	application is assigned to operators
+#   + aatpr_*:	application is assigned to user profiles
+#
+# - Appliaction group data is reported from:
+#   + agd_*:	application group details
+#   + agmoag_*:	application group is member of application group
+#   + agatop_*:	application group is assigned to operators
+#   + agotpr_*:	application group is assigned to user profiles
+#
+# - User profile data is reported from:
+#   + u_pr_*:	user profiles
+#
+# - Operator data is reported from:
+#   + u_op_*:	operators
+#
+# - Template administrator data is reported from:
+#   + u_ta_*:	template administrators
+
+fixclass="fix:HP OpenView:Operations manager"
+varclass="var:HP OpenView:Operations manager"
+msgclass="fix:HP OpenView:Operations manager:messages::"
+
+OV_CONF=/etc/opt/OV/share/conf
+OV_BIN=/opt/OV/bin
+
+# First check whether this host runs OpenView Operations for Unix.
+if [ ! -x ${OV_BIN}/OpC/opcsv -o "$(${OV_BIN}/OpC/opcsv 2>/dev/null | grep opcctlm | grep -c "is running")" -ne 1 ]
+then
+	# it seems either opcsv does not exist or opcctlm is not running
+	# no further checks needed
+	exit 0
+fi
+
+OPCDWN=${OPCDWN:-1}
+
+OPCDWN_DIR=${OPCDWN_DIR:-${SCC_TMP}/opcdwn}
+SPLIT_DIR=${SCC_TMP}/opcsplit
+
+TGROUP=${OPCDWN_DIR}/C/TEMPLATES/TEMPLGROUP/templgroup.dat
+NGROUP=${OPCDWN_DIR}/C/NODEGROUPS/nodegroups.dat
+NODES=${OPCDWN_DIR}/C/NODES/nodes.dat
+LE_TEMPL=${OPCDWN_DIR}/C/TEMPLATES/LOGFILE/logfile.dat
+MI_TEMPL=${OPCDWN_DIR}/C/TEMPLATES/INTERFACE/interface.dat
+M_TEMPL=${OPCDWN_DIR}/C/TEMPLATES/MONITOR/monitor.dat
+TI_TEMPL=${OPCDWN_DIR}/C/TEMPLATES/TRAP/trap.dat
+CM_TEMPL=${OPCDWN_DIR}/C/TEMPLATES/CONSOLE/console.dat
+SA_TEMPL=${OPCDWN_DIR}/C/TEMPLATES/SCHEDULE/schedule.dat
+EC_TEMPL=${OPCDWN_DIR}/C/TEMPLATES/EC/ec.dat
+OPERS=${OPCDWN_DIR}/C/OPERATORS/operators.dat
+MSGGRPS=${OPCDWN_DIR}/C/MSGGROUPS/msggroups.dat
+NODEHIER=${OPCDWN_DIR}/C/NODEHIER/nodehier.dat
+APPS=${OPCDWN_DIR}/C/APPLICATIONS/applications.dat
+DBMAINT=${OPCDWN_DIR}/C/OTHER/DBMAINT/dbmaint.dat
+INSTR_INTERF=${OPCDWN_DIR}/C/OTHER/INSTINTF/instintf.dat
+SVRCFG=${OPCDWN_DIR}/C/OTHER/MGMTSV/mgmtsv.dat
+TROUBLET=${OPCDWN_DIR}/C/OTHER/TROUBLET/troublet.dat
+
+OV_CUST=/var/opt/OV/share/databases/OpC/mgd_node/customer
+
+###############################################################################
+# Clear split directory #######################################################
+###############################################################################
+clear_split ()
+{
+	[ -d ${SPLIT_DIR} ] && rm -Rf ${SPLIT_DIR}
+
+	mkdir -p ${SPLIT_DIR}
+}
+
+
+###############################################################################
+# Remove tmp directories ######################################################
+###############################################################################
+remove_tmp_dirs ()
+{
+	[ -d ${SPLIT_DIR} ] && rm -Rf ${SPLIT_DIR}
+	[ -d ${SCC_TMP}/opcdwn ] && rm -Rf ${SCC_TMP}/opcdwn  # default download dir
+}
+
+
+###############################################################################
+# AWK functions in variables ##################################################
+###############################################################################
+AWK_LIB='
+	function w_out (w_text, w_file) {
+		if (w_file == detailfile)
+			printf ("%s", SCC_CLASS) > w_file
+		print w_text > w_file
+	}
+
+	function w_outf (w_text1, w_text2, w_file) {
+		sub (/^[ 	]*/, "", w_text2)
+		sub (/[ 	]*$/, "", w_text2)
+		if ( w_text2 != "" && w_text2 != "\"\"" ) {
+			if (w_file == detailfile)
+				printf ("%s", SCC_CLASS) > w_file
+			print w_text1 w_text2 > w_file
+		}
+
+	}
+	function clean (w_text) {
+		gsub (/_/, "_0_", w_text)
+		gsub (/\//, "_1_", w_text)
+		gsub (/\"/, "_2_", w_text)
+		gsub (/'"\'"'/, "_3_", w_text)
+		gsub (/\(/, "_4_", w_text)
+		gsub (/\)/, "_5_", w_text)
+		gsub (/\|/, "_6_", w_text)
+		gsub (/\?/, "_7_", w_text)
+		gsub (/\*/, "_8_", w_text)
+		gsub (/ /, "_9_", w_text)
+		gsub (/	/, "_10_", w_text)
+		gsub (/&/, "_11_", w_text)
+		gsub (/\[/, "_12_", w_text)
+		gsub (/\]/, "_13_", w_text)
+		gsub (/\</, "_14_", w_text)
+		gsub (/\>/, "_15_", w_text)
+		gsub (/#/, "_16_", w_text)
+		gsub (/=/, "_17_", w_text)
+		gsub (/\\/, "_18_", w_text)
+
+		return w_text
+	}
+
+	function scc_clean (w_text) {
+		gsub (/:/, "..", w_text)
+		return w_text
+	}
+
+	function get_value () {
+		w_text = substr ($0, index ($0, $2))
+		sub ("^\"", "", w_text)
+		sub ("\"$", "", w_text)
+		gsub ("\\\"", "\"", w_text)
+		gsub ("\\\\", "\\", w_text)
+		return w_text
+	}
+
+	function get_qvalue () {
+		w_text = substr ($0, index ($0, "\""))
+		sub ("^\"", "", w_text)
+		sub ("\"$", "", w_text)
+		gsub ("\\\"", "\"", w_text)
+		gsub ("\\\\", "\\", w_text)
+		return w_text
+	}'
+AWK_MEMBER_TEMPLATE='
+	$1 == "MEMBER_LOGFILE" {
+		member = get_value()
+		w_out("logfile " member, filename)
+		memfile = "t" fileprefix clean(member)
+		print "  " parent >> memfile
+		close (memfile)
+	}
+
+	$1 == "MEMBER_MONITOR" {
+		member = get_value()
+		w_out("monitor " member, filename)
+		memfile = "t" fileprefix clean(member)
+		print "  " parent >> memfile
+		close (memfile)
+	}
+
+	$1 == "MEMBER_OPCMSG" {
+		member = get_value()
+		w_out("opcmsg  " member, filename)
+		memfile = "t" fileprefix clean(member)
+		print "  " parent >> memfile
+		close (memfile)
+	}
+
+	$1 == "MEMBER_SNMP" {
+		member = get_value()
+		w_out("snmp    " member, filename)
+		memfile = "t" fileprefix clean(member)
+		print "  " parent >> memfile
+		close (memfile)
+	}
+
+	$1 == "MEMBER_ECS" {
+		member = get_value()
+		w_out("ecs     " member, filename)
+		memfile = "t" fileprefix clean(member)
+		print "  " parent >> memfile
+		close (memfile)
+	}
+
+	$1 == "MEMBER_SCHED" {
+		member = get_value()
+		w_out("sched.  " member, filename)
+		memfile = "t" fileprefix clean(member)
+		print "  " parent >> memfile
+		close (memfile)
+	}
+
+	$1 == "MEMBER_CONSOLE" {
+		member = get_value()
+		w_out("console " member, filename)
+		memfile = "t" fileprefix clean(member)
+		print "  " parent >> memfile
+		close (memfile)
+	}
+
+	$1 == "MEMBER_TEMPLATE_GROUP" { 
+		member = get_value()
+		w_out("group   " member, filename)
+		memfile = "tg" fileprefix clean(member)
+		print "  " parent >> memfile
+		close (memfile)
+	}'
+AWK_TEMPL_OPTS='
+	function clr_opts () {
+		T_DESCRIPTION = ""
+		T_LOGPATH = ""
+		T_EXEFILE = ""
+		T_READFILE = ""
+		T_INTERVAL = ""
+		T_MONPROG = ""
+		T_MIB = ""
+		T_TRESTYPE = ""
+		T_MSGGEN = ""
+		T_CHSET = ""
+		T_SEPARATORS = ""
+		T_NO_LOGFILE_MSG = ""
+		T_ICASE = "yes"
+		T_SCANMODE = ""
+		T_FORWARD = ""
+		T_DEF_NODE = ""
+		T_DEF_SEV = ""
+		T_DEF_APP = ""
+		T_DEF_MSGGRP = ""
+		T_DEF_OBJECT = ""
+		T_DEF_MAPCOLOR = ""
+		T_DEF_MSGKEY = ""
+		T_DEF_SERV_NAME = ""
+		T_SUPPMODE = ""
+		T_MPI_SV = ""
+		T_MPI_AGT = ""
+		DATA_PRINTED = 0
+		MSGNR = 1
+	}
+
+	function print_templ_opts () {
+		w_outf("Scan mode           : ", T_SCANMODE, detailfile)
+		w_outf("", T_FORWARD, detailfile)
+		if (T_LOGPATH != "") {
+			if (T_NO_LOGFILE_MSG == "yes")
+				w_out("Logfile             : " T_LOGPATH ", message on no logfile", detailfile)
+			else
+				w_out("Logfile             : " T_LOGPATH, detailfile)
+		}
+
+		if (length (T_EXEFILE) + length (T_READFILE) > 0) {
+			w_out("File to be executed : " T_EXEFILE, detailfile)
+			w_out("File to be read     : " T_READFILE, detailfile)
+		}
+
+		w_outf("Polling interval    : ", T_INTERVAL, detailfile)
+		if (length (T_SEPARATORS) > 0)
+			w_out("Fieldseparators     : " T_SEPARATORS, detailfile)
+		else
+			w_out("Fieldseparators     : default", detailfile)
+		w_out("Case sensitivity    : " T_ICASE, detailfile)
+		if (length (T_CHSET) > 0)
+			w_out("Character set       : " T_CHSET, detailfile)
+		if ((length (T_SUPPMODE) + length (T_DEF_MSGKEY) + length (T_DEF_NODE) + length (T_DEF_APP) + length (T_DEF_MSGGRP) + length (T_OBJECT) + length (T_DEF_MAPCOLOR) + length (T_DEF_SERV_NAME) + length (T_MPI_SV) + length (T_MPI_AGT) > 0) || !((length (T_DEF_SEV) == 0) || (T_DEF_SEV == "Unknown"))) {
+			w_out("Condition defaults:", detailfile)
+			w_outf("  ", T_SUPPMODE, detailfile)
+			w_outf("  Message key                          : ", T_DEF_MSGKEY, detailfile)
+			if ((length (T_DEF_SEV) > 0) && (T_DEF_SEV != "Unknown")) { w_out("  Set severity to                      : " T_DEF_SEV, detailfile) }
+
+			w_outf("  Set node to                          : ", T_DEF_NODE, detailfile)
+			w_outf("  Set application to                   : ", T_DEF_APP, detailfile)
+			w_outf("  Set message group to                 : ", T_DEF_MSGGRP, detailfile)
+			w_outf("  Set object to                        : ", T_DEF_OBJECT, detailfile)
+			w_outf("  Set map color to                     : ", T_DEF_MAPCOLOR, detailfile)
+			w_outf("  Service name                         : ", T_DEF_SERV_NAME, detailfile)
+			w_outf("  ", T_MPI_AGT, detailfile)
+			w_outf("  ", T_MPI_SV, detailfile)
+		}
+
+		w_out("Conditions:", detailfile)
+	}
+
+	/^        DESCRIPTION/		{ T_DESCRIPTION = get_value() }
+	/^        LOGPATH /		{ T_LOGPATH = get_value() }
+
+	/^        EXEFILE /		{ T_EXEFILE = get_value() }
+	/^        READFILE /		{ T_READFILE = get_value() }
+
+	/^        INTERVAL /		{ T_INTERVAL = get_value() }
+	/^        MONPROG /		{ T_MONPROG = get_value() }
+
+	/^        MIB /			{
+						T_MIB = get_value()
+						gsub (/ * MAXTHRESHOLD/, "", T_MIB)
+						gsub (/ * MINTHRESHOLD/, "", T_MIB)
+						sub (/" NODE /, "\", on node ", T_MIB)
+					}
+
+	/^        EXTERNAL/		{ T_MONPROG = "external" }
+	/MAXTHRESHOLD$/			{ T_TRESTYPE = "Treshold type       : maximum" }
+
+	/MINTHRESHOLD$/			{ T_TRESTYPE = "Treshold type       : minimum" }
+	/^        GEN_BELOW_RESET/	{ T_MSGGEN = "; message generation: with reset" }
+
+	/^        GEN_BELOW_THRESHOLD/	{ T_MSGGEN = "; message generation: without reset" }
+
+	/^        GEN_ALWAYS/		{ T_MSGGEN = ", message generation: continuous" }
+
+	/^        CHSET /		{ T_CHSET = get_value() }
+	/^        SEPARATORS /		{ T_SEPARATORS = substr ($0, index ($0, "\"")) }
+
+	/^        ICASE /		{ T_ICASE = "no" }
+	/^        NO_LOGFILE_MSG/	{ T_NO_LOGFILE_MSG = "yes" }
+
+	/^        FROM_LAST_POS/	{ T_SCANMODE = "scan from last position" }
+	/^        ALWAYS_FROM_BEGIN/	{ T_SCANMODE = "always scan from begin of file" }
+
+	/^        FIRST_FROM_BEGIN/	{ T_SCANMODE = "scan from begin of file first time" }
+
+	/^        CLOSE_AFTER_READ/	{ T_SCANMODE = T_SCANMODE "; close after read" }
+
+	/^        FORWARD_UNMATCHED/	{ T_FORWARD = "Forward unmatched messages" }
+
+	/^        SEVERITY /		{ T_DEF_SEV = get_value() }
+	/^        NODE /		{ T_DEF_NODE = get_qvalue() }
+
+	/^        APPLICATION /		{ T_DEF_APP = get_value() }
+	/^        MSGGRP /		{ T_DEF_MSGGRP = get_value() }
+
+	/^        OBJECT /		{ T_DEF_OBJECT = get_value() }
+	/^        MAP_COLORING /	{ T_DEF_MAPCOLOR = get_value() }
+
+	/^        MSGKEY /		{ T_DEF_MSGKEY = get_value() }
+	/^        SERVICE_NAME /	{ T_DEF_SERV_NAME = get_value() }
+
+	/^        MSGCONDITIONS/	{ MSGTYPE = "+" }
+	/^        SUPPRESSCONDITIONS/	{ MSGTYPE = "-" }
+
+	/^        SUPP_UNM_CONDITIONS/	{ MSGTYPE = "=" }
+	/^        SUPP_DUPL_IDENT/ || /^        SUPP_DUPL_COND/ {
+						if ($1 == "SUPP_DUPL_IDENT")
+							T_SUPPMODE = "Suppress identical input messages    : "
+						else if ($1 == "SUPP_DUPL_IDENT_OUTPUT_MSG")
+							T_SUPPMODE = "Suppress identical output messages   : "
+						else
+							T_SUPPMODE = "Suppress messages matching condition : "
+						getline
+						if ($1 != "COUNTER_THRESHOLD") {
+							INTERVAL = get_qvalue()
+							gsub (/"/, "", INTERVAL)
+							sub (/ RESEND /, ", resend after ", INTERVAL)
+							T_SUPPMODE = T_SUPPMODE "for " INTERVAL " "
+						}
+
+					}
+	/^            COUNTER_THRESHOLD/ {
+						T_SUPPMODE = T_SUPPMODE "counter threshold: " $2
+						if (NF > 2) {
+							INTERVAL = $4
+							gsub (/"/, "", INTERVAL)
+							T_SUPPMODE = T_SUPPMODE ", reset counter after " INTERVAL
+						}
+
+					}
+	/^        MPI_SV_DIVERT_MSG$/	{ T_MPI_SV = "Server MSI                           : divert messages" }
+
+	/^        MPI_SV_COPY_MSG$/	{ T_MPI_SV = "Server MSI                           : copy messages" }
+
+	/^        MPI_AGT_DIVERT_MSG$/	{ T_MPI_AGT = "Agent MSI                            : divert messages" }
+
+	/^        MPI_AGT_COPY_MSG$/	{ T_MPI_AGT = "Agent MSI                            : copy messages" }
+
+	/^        MPI_IMMEDIATE_LOCAL_ACTIONS$/ { T_MPI_SV = T_MPI_SV ", immediate local automatic actions" }
+
+	'
+AWK_NEW_TEMPL='
+	/^LOGFILE "/ || /^OPCMSG "/ || /^MONITOR "/ || /^SNMP "/ || /^CONSOLE "/ {
+		close (detailfile)
+		templname = get_value()
+		detailfile = "td_" clean(templname)
+		SCC_CLASS = BASE_CLASS scc_clean(templname) "::"
+		# w_out(templname, detailfile)
+		printf("%-8s%s\n", tolower($1), templname) >> alltemplates
+		clr_opts()
+	}
+
+	'
+AWK_COND_OPTS='
+        /^                CONDITION/ { OPTSTYPE = "condition" }
+
+	/^                DESCRIPTION / {
+		STORE_SCC_CLASS = SCC_CLASS
+		sub(/^fix/, "var", SCC_CLASS)
+		w_out(sprintf ("%5d   Condition nr %d", MSGNR, MSGNR), detailfile)
+		SCC_CLASS = STORE_SCC_CLASS
+		w_outf(sprintf ("      %s ", MSGTYPE), get_value(), detailfile)
+		MSGNR += 1
+	}
+
+        /^                SET/ { OPTSTYPE = "set" }
+	/^        SEVERITY / { T_DEF_SEV = get_value() }
+
+	/^                        SEVERITY/ {
+		if (OPTSTYPE == "condition")	w_outf("        Check on severity                     : ", get_value(), detailfile)
+		else				w_outf("        Set severity to                       : ", get_value(), detailfile)
+	}
+
+	/^                        APPLICATION/ {
+		if (OPTSTYPE == "condition")	w_outf("        Check on application                  : ", get_value(), detailfile)
+		else				w_outf("        Set application to                    : ", get_value(), detailfile)
+	}
+	/^                        MSGGRP/ {
+		if (OPTSTYPE == "condition")	w_outf("        Check on group                        : ", get_value(), detailfile)
+		else				w_outf("        Set message group to                  : ", get_value(), detailfile)
+	}
+	/^                        OBJECT/ {
+		OBJ = get_value()
+		sub (/" SEPARATORS "/, "\", fieldseparators: \"", OBJ)
+		if (OPTSTYPE == "condition")	w_outf("        Check on object                       : ", OBJ, detailfile)
+		else				w_outf("        Set object to                         : ", OBJ, detailfile)
+	}
+
+	/^                        MSGKEY / {
+						 w_out("        Message key                           : " get_value(), detailfile)
+	}
+
+	/^                        MSGKEYRELATION / {
+						w_outf("        Acknowledge messages with key pattern : ", get_qvalue(), detailfile)
+	}
+
+	/^                        TEXT / {
+		COND_TEXT = get_value()
+		if (OPTSTYPE == "condition") {
+			sub (/" SEPARATORS "/, "\", fieldseparators: \"", COND_TEXT)
+			if ($NF == "ICASE")
+				sub (/ ICASE$/, ", case insensitive check", COND_TEXT)
+			else
+				COND_TEXT = COND_TEXT ", case sensitive check"
+						 w_out("        Check on message                      : " COND_TEXT, detailfile)
+		} else				 w_out("        Set message text to                   : " COND_TEXT, detailfile)
+
+	}
+	/^                        NODE / {
+		if (OPTSTYPE == "condition")	 w_out("        Check on node                         : " get_value(), detailfile)
+		else				 w_out("        Set node to                           : " get_value(), detailfile)
+	}
+
+	/^                SUPP_DUPL_IDENT/ || /^                SUPP_DUPL_COND/ {
+		if ($1 == "SUPP_DUPL_IDENT")
+			SUPPOPTS =                             "Suppress identical input messages     : "
+		else if ($1 == "SUPP_DUPL_IDENT_OUTPUT_MSG")
+			SUPPOPTS =                             "Suppress identical output messages    : "
+		else
+			SUPPOPTS =                             "Suppress messages matching condition  : "
+		getline
+		if ($1 != "COUNTER_THRESHOLD") {
+			INTERVAL = get_qvalue()
+			gsub (/"/, "", INTERVAL)
+			sub (/ RESEND /, ", resend after ", INTERVAL)
+			SUPPOPTS = SUPPOPTS "for " INTERVAL " "
+		}
+
+	}
+	/^                COUNTER_THRESHOLD/ {
+		SUPPOPTS = SUPPOPTS "counter threshold: " $2
+		if (NF > 2) {
+			INTERVAL = $4
+			gsub (/"/, "", INTERVAL)
+			SUPPOPTS = SUPPOPTS ", reset counter after " INTERVAL
+		}
+
+	}
+	/^                CONDITION$/ && length (SUPPOPTS) > 0 {
+						 w_out("        " SUPPOPTS, detailfile) ; SUPPOPTS = ""
+	}
+
+	/^                        MSGTYPE/ {
+						 w_out("        Set message type to                   : " get_value(), detailfile)
+	}
+
+	/^                        MAP_COLORING/ {
+						 w_out("        Set map coloring to                   : " get_value(), detailfile) }
+
+	/^                        SERVERLOGONLY/ {
+						 w_out("        On server log only (put directly in History Log)", detailfile) }
+
+	/^                        AUTOACTION / || /^                        OPACTION / {
+		ACTION = get_value()
+		NODEIND = index (ACTION, "\" ACTIONNODE ")
+		if (NODEIND > 0) {
+			NODE = substr (ACTION, NODEIND + 3)
+			NODE = substr (NODE, index (NODE, "\"") + 1)
+			ACTION = substr (ACTION, 1, NODEIND - 1) ", on node " NODE
+		}
+
+		sub (/"* ANNOTATE ACK$/, ", always annotate, auto acknowledge", ACTION)
+		sub (/"* ANNOTATE$/, ", always annotate", ACTION)
+		sub (/"* ACK$/, ", auto acknowledge", ACTION)
+		if ($1 == "AUTOACTION")		 w_out("        Automatic action                      : " ACTION, detailfile)
+		else				 w_out("        Operator initiated action             : " ACTION, detailfile)
+	}
+
+	/^                        TROUBLETICKET/ {
+		if ($2 == "ACK")		 w_out("        Create trouble ticket, auto acknowledge", detailfile)
+		else				 w_out("        Create trouble ticket", detailfile)
+	}
+
+	/^                        NOTIFICATION/ {
+						 w_out("        Send notification", detailfile)
+	}
+
+	/^                          SEND_MSG_AFTER_LOC_AA/ {
+						 w_out("        Send message with local automatic actions:", detailfile)
+		if (index ($0, "SEND_OK_MSG") > 0) {
+			if (index ($0, "LOGONLY") > 0)
+						 w_out("          If the action completes successfully, as log only message", detailfile)
+			else			 w_out("          If the action completes successfully", detailfile)
+		}
+		if (index ($0, "SEND_FAILED_MSG") > 0)
+						 w_out("          If the action fails", detailfile)
+
+	}
+	/^                        THRESHOLD / {
+		TVALUE = $2
+		sub (/0*$/, "", TVALUE)
+		sub (/\.$/, "", TVALUE)
+		if (NF > 2)
+			TVALUE = TVALUE ", duration: " $4
+		w_out("        Treshold: " TVALUE, detailfile)
+	}
+
+	/^                        RESET / {
+		RVALUE = $2
+		sub (/0*$/, "", RVALUE)
+		sub (/\.$/, "", RVALUE)
+		w_out("        Reset: " RVALUE, detailfile)
+	}
+
+	/^                        \$e / { w_out("        Check on enterprise ID                : " get_value(), detailfile) }
+
+	/^                        \$G / {
+		if ($2 == 0) { w_out("        Check on generic trap                 : (0) cold start", detailfile) }
+
+		if ($2 == 1) { w_out("        Check on generic trap                 : (1) warm start", detailfile) }
+
+		if ($2 == 2) { w_out("        Check on generic trap                 : (2) link down", detailfile) }
+
+		if ($2 == 3) { w_out("        Check on generic trap                 : (3) link up", detailfile) }
+
+		if ($2 == 4) { w_out("        Check on generic trap                 : (4) authentification", detailfile) }
+
+		if ($2 == 5) { w_out("        Check on generic trap                 : (5) EGP neighbor loss", detailfile) }
+
+	}
+	/^                        \$S / { w_out("        Check on specific trap                : " get_value(), detailfile) }
+
+	/^                        \$/ {
+		VARNUM = substr ($1, 2)
+		TESTNUM = VARNUM
+		gsub (/[0123456789]/, "", TESTNUM)
+		if ((VARNUM != TESTNUM) && (TESTNUM == ""))
+			w_out("        Variable match                        : $" VARNUM ": " get_value(), detailfile)
+	}
+
+	'
+
+###############################################################################
+# convert member tags in stream ###############################################
+###############################################################################
+conv_member_tags ()
+{
+	awk -v SPACES=${1} -v CLASS="${2:-}" '
+		BEGIN { SPACESTR = substr ("        ", 1, SPACES) }
+
+		/^console / {
+			print CLASS SPACESTR "(MPE console messages) " substr ($0, 9)
+			next
+		}
+
+		/^ecs     / {
+			print CLASS SPACESTR "(event correlation)    " substr ($0, 9)
+			next
+		}
+
+		/^group   / {
+			print CLASS SPACESTR "(template group)       " substr ($0, 9)
+			next
+		}
+
+		/^logfile / {
+			print CLASS SPACESTR "(logfile encapsulator) " substr ($0, 9)
+			next
+		}
+
+		/^monitor / {
+			print CLASS SPACESTR "(monitor)              " substr ($0, 9)
+			next
+		}
+
+		/^opcmsg  / {
+			print CLASS SPACESTR "(message interface)    " substr ($0, 9)
+			next
+		}
+
+		/^snmp    / {
+			print CLASS SPACESTR "(trap interceptor)     " substr ($0, 9)
+			next
+		}
+
+		/^sched.  / {
+			print CLASS SPACESTR "(scheduled action)     " substr ($0, 9)
+			next
+		}
+
+		{ print CLASS $0 }'
+}
+
+
+###############################################################################
+# Report basic configuration files ############################################
+###############################################################################
+config_files ()
+{
+	if [ -x /opt/OV/bin/ovconfget ]
+	then
+		/opt/OV/bin/ovconfget					|
+		sed -e "s/^/${fixclass}:config files:ovconfget::/"
+	fi
+
+	scc_check_file "${OV_BIN}/OpC/install/opcsvinfo"		"${fixclass}:config files:opcsvinfo::" "#"
+	scc_check_file "${OV_CONF}/OpC/mgmt_sv/opcsginfo"		"${fixclass}:config files:opcsginfo::" "#"
+
+	scc_check_file "${OV_CONF}/ovdbconf"				"${fixclass}:config files:ovdbconf::" "#"
+	scc_check_file "${OV_CONF}/excludeip.conf"			"${fixclass}:config files:excludeip.conf::" "#"
+	scc_check_file "${OV_CONF}/OpC/mgmt_sv/opc.hosts"		"${fixclass}:config files:opc.hosts::" "#"
+	scc_check_file "${OV_CONF}/OpC/mgmt_sv/oracle_dbf.cfg"		"${fixclass}:config files:oracle_dbf.cfg::" "#"
+	scc_check_file "${OV_CONF}/OpC/mgmt_sv/oracle_sizing.cfg"	"${fixclass}:config files:oracle_sizing.cfg::" "nocomment"
+
+	# MLM files
+	scc_check_file "${OV_CONF}/OpC/mgmt_sv/respmgrs/msgforw"	"${fixclass}:config files:msgforw::" "#"
+	scc_check_file "${OV_CONF}/OpC/mgmt_sv/respmgrs/allnodes"	"${fixclass}:config files:allnodes::" "#"
+	scc_check_file "${OV_CONF}/OpC/mgmt_sv/respmgrs/allnodes.bbc"	"${fixclass}:config files:allnodes.bbc::" "#"
+}
+
+
+###############################################################################
+# Create OpC configuration download ###########################################
+###############################################################################
+create_download ()
+{
+	rm -f ${TMP1_FILE}
+
+	if [ ${OPCDWN} = 1 ]
+	then
+		mkdir -p ${OPCDWN_DIR}
+
+		echo "* ;" > ${OPCDWN_DIR}/download.dsf
+		${OV_BIN}/OpC/opccfgdwn -force -silent ${OPCDWN_DIR}/download.dsf ${OPCDWN_DIR} 2>&1	|
+		awk '
+			BEGIN {
+				db_inc_detect = 0
+				opc50_1 = 0
+				print_errors = 0
+			}
+
+			/^Database inconsistency detected \(opc_snmp_variables\)/ {
+				db_inc_detect++
+				print_errors = 1
+				next
+			}
+
+			/\(OpC50-1\)/ {
+				opc50_1++
+				print_errors = 1
+				next
+			}
+
+			{
+				print
+			}
+
+			END {
+				if ( print_errors = 1 ) {
+					if ( db_inc_detect > 0 )
+						print db_inc_detect " times Database inconsistency detected (opc_snmp_variables)."
+					if ( opc50_1 > 0 )
+						print opc50_1 " times The entries in the two tables belong together. But actually there is only an entry in one table. (OpC50-1)"
+				}
+
+			}'										|
+		sed -e "s/^/fix:messages::opccfgdwn/"							|
+		tee ${TMP1_FILE}
+	fi
+
+	ret_val=0
+	if [ -s ${TMP1_FILE} ]
+	then
+		ret_val=1		# Messages are reported in the snapshot
+	fi
+	rm -f ${TMP1_FILE}
+
+	return ${ret_val}
+}
+
+
+###############################################################################
+# Split template groups #######################################################
+###############################################################################
+split_tgroup ()
+{
+	# split template group file
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:template groups:" "${AWK_LIB}"'
+		BEGIN {
+			filename = ""
+			detailfile = ""
+			fileprefix = "motg_"
+		}
+
+		/^TEMPLATE_GROUP / {
+			close (filename)
+			close (detailfile)
+			groupname = get_value()
+			parent = groupname
+			filename = "tgm_" clean(groupname)
+			detailfile = "tgd_" clean(groupname)
+			SCC_CLASS = ""
+			w_out(groupname, detailfile)
+			SCC_CLASS = BASE_CLASS scc_clean(groupname) "::"
+		}
+
+		/^	DESCRIPTION / {
+			w_out("Description: " get_value(), detailfile)
+			w_out("Members:", detailfile)
+		}
+
+		'"${AWK_MEMBER_TEMPLATE}" ${TGROUP}
+
+	# add members to tgd files
+	ls			|
+	grep "^tgm_"		|
+	while read TGM_FILE
+	do
+		TGD_FILE="tgd_${TGM_FILE#tgm_}"
+		
+		sort ${TGM_FILE} |
+		conv_member_tags 2 "$(awk -F:: 'NR == 2 { print $1 "::" }' ${TGD_FILE})" >> ${TGD_FILE}
+
+	done
+}
+
+
+###############################################################################
+# Split logfile templates #####################################################
+###############################################################################
+split_logfile ()
+{
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:templates:" "${AWK_LIB}"'
+		BEGIN {
+			detailfile = ""
+			alltemplates = "all_templates"
+		}'"${AWK_TEMPL_OPTS}${AWK_COND_OPTS}"'
+		(($1 == "MSGCONDITIONS") || ($1 == "SUPPRESSCONDITIONS") || ($1 == "SUPP_UNM_CONDITIONS") || (/^LOGFILE "/ && detailfile != "")) && (DATA_PRINTED == 0) {
+			DATA_PRINTED = 1
+			w_out("Description         : " T_DESCRIPTION, detailfile)
+			w_out("Template type       : logfile encapsulator", detailfile)
+			print_templ_opts()
+		}
+
+	'"${AWK_NEW_TEMPL}" ${LE_TEMPL}
+}
+
+
+###############################################################################
+# Split message templates #####################################################
+###############################################################################
+split_message ()
+{
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:templates:" "${AWK_LIB}"'
+		BEGIN {
+			detailfile = ""
+			alltemplates = "all_templates"
+		}'"${AWK_TEMPL_OPTS}${AWK_COND_OPTS}"'
+		(($1 == "MSGCONDITIONS") || ($1 == "SUPPRESSCONDITIONS") || ($1 == "SUPP_UNM_CONDITIONS") || (/^OPCMSG "/ && detailfile != "")) && (DATA_PRINTED == 0) {
+			DATA_PRINTED = 1
+		       w_outf("Scan mode           : ", T_SCANMODE, detailfile)
+			w_out("Description         : " T_DESCRIPTION, detailfile)
+			w_out("Template type       : message interface (opcmsg)", detailfile)
+			print_templ_opts()
+		}
+
+	'"${AWK_NEW_TEMPL}" ${MI_TEMPL}
+}
+
+
+###############################################################################
+# Split monitor templates #####################################################
+###############################################################################
+split_monitor ()
+{
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:templates:" "${AWK_LIB}"'
+		BEGIN {
+			detailfile = ""
+			alltemplates = "all_templates"
+		}'"${AWK_TEMPL_OPTS}${AWK_COND_OPTS}"'
+		(($1 == "MSGCONDITIONS") || ($1 == "SUPPRESSCONDITIONS") || ($1 == "SUPP_UNM_CONDITIONS") || (/^MONITOR "/ && detailfile != "")) && (DATA_PRINTED == 0) {
+			DATA_PRINTED = 1
+			w_outf("Description         : ", T_DESCRIPTION, detailfile)
+			w_out("Template type       : monitor template", detailfile)
+			w_outf("Monitor program     : ", T_MONPROG, detailfile)
+			w_outf("MIB object          : ", T_MIB, detailfile)
+			w_out(T_TRESTYPE T_MSGGEN, detailfile)
+			print_templ_opts()
+		}
+
+	'"${AWK_NEW_TEMPL}" ${M_TEMPL}
+}
+
+
+###############################################################################
+# Split trap templates ########################################################
+###############################################################################
+split_trap ()
+{
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:templates:" "${AWK_LIB}"'
+		BEGIN {
+			detailfile = ""
+			alltemplates = "all_templates"
+		}'"${AWK_TEMPL_OPTS}${AWK_COND_OPTS}"'
+		(($1 == "MSGCONDITIONS") || ($1 == "SUPPRESSCONDITIONS") || ($1 == "SUPP_UNM_CONDITIONS") || (/^SNMP "/ && detailfile != "")) && (DATA_PRINTED == 0) {
+			DATA_PRINTED = 1
+			w_outf("Description         : ", T_DESCRIPTION, detailfile)
+			w_out("Template type       : trap interceptor", detailfile)
+			print_templ_opts()
+		}
+
+	'"${AWK_NEW_TEMPL}" ${TI_TEMPL}
+}
+
+
+###############################################################################
+# Split console message templates #############################################
+###############################################################################
+split_console ()
+{
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:templates:" "${AWK_LIB}"'
+		BEGIN {
+			detailfile = ""
+			alltemplates = "all_templates"
+		}'"${AWK_TEMPL_OPTS}${AWK_COND_OPTS}"'
+		(($1 == "MSGCONDITIONS") || ($1 == "SUPPRESSCONDITIONS") || ($1 == "SUPP_UNM_CONDITIONS")) && (DATA_PRINTED == 0) {
+			DATA_PRINTED = 1
+			w_outf("Description         : ", T_DESCRIPTION, detailfile)
+			w_out("Template type       : MPE/iX console messages interceptor", detailfile)
+			print_templ_opts()
+		}
+
+	'"${AWK_NEW_TEMPL}" ${CM_TEMPL}
+}
+
+
+###############################################################################
+# Split scheduled action templates ############################################
+###############################################################################
+split_schedule ()
+{
+	cd ${SPLIT_DIR}
+
+	if [ -f ${SA_TEMPL} ]
+	then
+		awk -v BASE_CLASS="${fixclass}:templates:" "${AWK_LIB}"'
+			BEGIN {
+				detailfile = ""
+				alltemplates = "all_templates"
+			}'"${AWK_COND_OPTS}"'
+			/^SCHEDULE "/ {
+				close (detailfile)
+				templname = get_value()
+				detailfile = "td_" clean(templname)
+				SCC_CLASS = BASE_CLASS scc_clean(templname) "::"
+				printf("%-8s%s\n", "sched.", templname) >> alltemplates
+				PRINT_TC=1
+			}
+
+			/^  DESCRIPTION "/ {
+				w_outf("Description         : ", get_value(), detailfile)
+				w_out("Template type       : Scheduled action template", detailfile)
+			}
+
+			/^    MINUTE/ {
+				if (PRINT_TC == 1) { w_out("Time constraints:", detailfile); PRINT_TC = 0 }
+
+				w_out("        Minute           : " get_value(), detailfile)
+			}
+
+			/^    HOUR/ {
+				if (PRINT_TC == 1) { w_out("Time constraints:", detailfile); PRINT_TC = 0 }
+
+				w_out("        Hour             : " get_value(), detailfile)
+			}
+
+			/^    MONTHDAY/ {
+				if (PRINT_TC == 1) { w_out("Time constraints:", detailfile); PRINT_TC = 0 }
+
+				w_out("        Day of the month : " get_value(), detailfile)
+			}
+
+			/^    MONTH/ {
+				if (PRINT_TC == 1) { w_out("Time constraints:", detailfile); PRINT_TC = 0 }
+
+				w_out("        Month            : " get_value(), detailfile)
+			}
+
+			/^    YEAR/ {
+				if (PRINT_TC == 1) { w_out("Time constraints:", detailfile); PRINT_TC = 0 }
+
+				w_out("        Year             : " get_value(), detailfile)
+			}
+
+			/^    WEEKDAY/ {
+				if (PRINT_TC == 1) { w_out("Time constraints:", detailfile); PRINT_TC = 0 }
+
+				w_out("        Day of the week  : " get_value(), detailfile)
+			}
+
+			/^    SCHEDPROG/ { w_out("Command to execute  : " get_value(), detailfile) }
+
+			/^    USER/ { w_out("Execute as user     : " get_value(), detailfile) }
+			/^    SEND_OUTPUT/ { w_out("Send output of Action to annotations", detailfile) }
+
+			/^    BEFORE/ { w_out("Send message before start of action", detailfile) }
+
+			/^    SUCCESS/ { w_out("Send message if action completed successfully", detailfile) }
+
+			/^    FAILURE/ { w_out("Send message if action failed", detailfile) }
+
+		' ${SA_TEMPL}
+	fi
+}
+
+
+###############################################################################
+# Split event correlation templates ###########################################
+###############################################################################
+split_ec ()
+{
+	cd ${SPLIT_DIR}
+
+	if [ -f ${EC_TEMPL} ]
+	then
+		awk -v BASE_CLASS="${fixclass}:templates:" "${AWK_LIB}"'
+			BEGIN {
+				detailfile = ""
+				alltemplates = "all_templates"
+			}
+
+			/^ECS "/ {
+				close (detailfile)
+				templname = get_value()
+				SCC_CLASS = BASE_CLASS scc_clean(templname) "::"
+				detailfile = "td_" clean(templname)
+				printf("%-8s%s\n", "ecs", templname) >> alltemplates
+			}
+
+			/^        DESCRIPTION "/ {
+				w_outf("Description         : ", get_value(), detailfile)
+				w_out("Template type       : Event correlation template", detailfile)
+			}
+
+			/^        CIRCUIT_FILE "/ {
+				w_out("Circuit file        : " get_value(), detailfile)
+			}
+
+		' ${EC_TEMPL}
+	fi
+}
+
+
+###############################################################################
+# Split node groups ###########################################################
+###############################################################################
+split_node_group ()
+{
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:node groups:" "${AWK_LIB}"'
+		BEGIN {
+			filename = ""
+			capture_nodes = 0
+			fileprefix = "atng_"
+		}
+
+		/^NODE_GROUP / {
+			close (filename)
+			close (detailfile)
+			groupname = get_value()
+			parent = groupname
+			filename = "ngm_" clean(groupname)
+			detailfile = "ngd_" clean(groupname)
+			SCC_CLASS = ""
+			w_out(groupname, detailfile)
+			SCC_CLASS = BASE_CLASS scc_clean(groupname) "::"
+		}
+
+		/^ LABEL "/ {
+			w_outf("Label       : ", get_value(), detailfile)
+		}
+
+		/^ DESCRIPTION "/ {
+			w_outf("Description : ", get_value(), detailfile)
+		}
+
+		/^ SUBENTITIES NODE$/ {
+			capture_nodes = 1
+			next
+		}
+
+		/^ \{/ {
+			next
+		}
+
+		/^ \}/ {
+			capture_nodes = 0
+		}
+
+		capture_nodes == 1 {
+			if ($1 == "_OPC_MGMTSV_")
+			{
+				nodename = $1
+			}
+			else
+			{
+				split ($0, nodename_arr, "\"")
+				nodename = nodename_arr[2]
+			}
+			w_out("node    " nodename, filename)
+			memfile = "nmong_" clean(nodename)
+			print "  " parent >> memfile
+			close (memfile)
+		}
+
+	'"${AWK_MEMBER_TEMPLATE}" ${NGROUP}
+
+	# Add node members to ngd_ files
+	# Add template and template group assigments to ngd_ files
+	ls			|
+	grep "^ngm_"		|
+	while read NGM_FILE
+	do
+		NGD_FILE="ngd_${NGM_FILE#ngm_}"
+		CLASS="${fixclass}:node groups:$(awk "${AWK_LIB}"'NR == 1 { print scc_clean($0) }' ${NGD_FILE})::"
+
+		{
+			# Add node members to ngd_ files
+			if [ -n "$(grep -l "^node" ${NGM_FILE})" ]
+			then
+				echo "${CLASS}Nodes in this node group:"
+				sort ${NGM_FILE} |
+				awk -v CLASS="${CLASS}" '/^node/ { print CLASS "  " substr ($0, 9) }'
+			fi
+
+			# Add template and template group assigments to ngd_ files
+			if [ -n "$(grep -v -l "^node" ${NGM_FILE})" ]
+			then
+				echo "${CLASS}Templates and template groups assigned to this node group:"
+				sort ${NGM_FILE} | grep -v "^node" |
+				conv_member_tags 2 "${CLASS}"
+			fi
+		} >> ${NGD_FILE}
+
+	done
+}
+
+
+###############################################################################
+# Split nodes #################################################################
+###############################################################################
+split_nodes ()
+{
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:nodes:" "${AWK_LIB}"'
+		BEGIN {
+			filename = ""
+			NSTARTED = 0
+			NTYPESTR[0] = "not in realm"
+			NTYPESTR[1] = "unmanaged"
+			NTYPESTR[2] = "controlled"
+			NTYPESTR[3] = "monitored"
+			NTYPESTR[4] = "message allowed"
+			CTYPESTR[0] = "Unspecified"
+			CTYPESTR[1] = "NCS"
+			CTYPESTR[2] = "DCE TCP"
+			CTYPESTR[3] = "DCE UDP"
+			CTYPESTR[4] = "Sun RPC TCP"
+			CTYPESTR[5] = "Sun RPC UDP"
+			CTYPESTR[6] = "TCP Socket"
+			CTYPESTR[7] = "UDP Socket"
+			CTYPESTR[8] = "OPC Interface"
+			CTYPESTR[9] = "RPC Local"
+			CTYPESTR[10] = "HTTPS"
+			fileprefix = "atn_"
+		}
+
+		/^ NODE / {
+			close (filename)
+			close (detailfile)
+			if ($(NF - 1) == "_OPC_MGMTSV_")
+			{
+				filename = $(NF - 1)
+			}
+			else
+			{
+				split ($0, filename_arr, "\"")
+				filename = filename_arr[2]
+			}
+			sub ("^\"", "", filename)
+			sub ("\"$", "", filename)
+			parent = filename
+			detailfile = "nd_" clean(filename)
+			SCC_CLASS = ""
+			w_out(filename, detailfile)
+			SCC_CLASS = BASE_CLASS scc_clean(filename) "::"
+			filename = "nm_" clean(filename)
+			if ($3 == "IP")
+				IPADDR = $4
+			else
+				IPADDR = ""
+			NSTARTED = 1
+			COMMTYPE = ""
+		}
+
+		$1 == "LABEL" && NSTARTED == 1 {
+			NLABEL = get_value()
+		}
+
+		/^ MACHINE_TYPE / {
+			MTYPE = $NF
+		}
+
+		/^ NODE_TYPE / {
+			NTYPE = $NF
+			if ( NTYPE <= 4 )
+				NTYPE = NTYPESTR[NTYPE]
+			else
+				NTYPE = "unknown"
+		}
+
+		/^ COMM_TYPE / {
+			CTYPE = $NF
+			if ( CTYPE <= 10 )
+				CTYPE = CTYPESTR[CTYPE]
+			else
+				CTYPE = "unknown"
+		}
+
+		/^ HEARTBEAT_FLAG / {
+			HBFLAG = $NF
+		}
+
+		/^ HEARTBEAT_TYPE / {
+			THBTYPE = $NF % 4
+			if (THBTYPE == 0) { HBTYPE = "none" }
+
+			else if (THBTYPE == 1) { HBTYPE = "RPC" }
+			else if (THBTYPE == 2) { HBTYPE = "Ping" }
+
+			else if (THBTYPE == 3) { HBTYPE = "normal" }
+			THBTYPE = $NF
+			if (THBTYPE > 3) { HBTYPE = HBTYPE ", send from agent" }
+
+		}
+		/^ HEARTBEAT_INTERVAL / {
+			HBIVAL = $NF
+			gsub (/"/, "", HBIVAL)
+		}
+
+		/^ } ;$/ || /^ ;$/ {
+			if (NSTARTED == 1) {
+				if (IPADDR == "") { w_outf("Label              : ", NLABEL, detailfile) }
+				else { w_out("Label              : " NLABEL ", IP address: " IPADDR, detailfile) }
+
+				w_out("Machine type       : " MTYPE ", " NTYPE, detailfile)
+
+				if (NTYPE == "controlled" || NTYPE == "monitored") {
+					if (HBFLAG = "TRUE") { w_out("Heartbeat type     : " HBTYPE ", interval = " HBIVAL, detailfile) }
+					else { w_out("No heartbeat", detailfile) }
+
+					if (CTYPE != "") { w_out("Communication type : " CTYPE, detailfile) }
+				}
+			}
+
+			NSTARTED = 0
+		}
+
+	'"${AWK_MEMBER_TEMPLATE}" ${NODES}
+
+	# Add template and template group assigments to nd_ files
+	ls			|
+	grep "^nm_"		|
+	while read NM_FILE
+	do
+		# Add template and template group assigments to nd_ files
+		ND_FILE="nd_${NM_FILE#nm_}"
+		CLASS="$(awk -F:: 'NR == 2 { print $1 }' ${ND_FILE} 2>/dev/null)::"
+		if [ -s ${NM_FILE} ]
+		then
+			echo "${CLASS}Templates and template groups assigned to this node:"
+			conv_member_tags 2 "${CLASS}" < ${NM_FILE}
+
+		fi >> ${ND_FILE}
+	done
+}
+
+
+###############################################################################
+# Split node hierarchies ######################################################
+###############################################################################
+split_hierarchy ()
+{
+	cd ${SPLIT_DIR}
+
+	if [ -f ${NODEHIER} ]
+	then
+		awk -v BASE_CLASS="${fixclass}:node hierarchies:" "${AWK_LIB}"'
+		BEGIN {
+			filename = ""
+		}
+
+		/^NODE_HIERARCHY/ {
+			NH_NAME = get_value()
+			close (filename)
+			close (detailfile)
+			detailfile = "nhd_" clean(NH_NAME)
+			filename = "nh_" clean(NH_NAME)
+			SCC_CLASS = BASE_CLASS scc_clean(NH_NAME) "::"
+			w_out("bogus line to put class in detailfile, should not appear in output", detailfile)
+		}
+
+		/^  SYMBOL/ { SYMBOL = get_value() }
+		/^  LABEL/ {
+			LABEL = get_value()
+			if (LABEL != NH_NAME)
+			w_outf("Label       : ", LABEL, detailfile)
+		}
+
+		/^  DESCRIPTION/ {
+			w_outf("Description : ", get_value(), detailfile)
+			w_outf("Symbol      : ", SYMBOL, detailfile)
+		}
+
+		/^   LAYOUT_GROUP/ {
+			THING = "group:"
+			OBJECT = get_value()
+		}
+
+		/^   NODE/ {
+			THING = "node :"
+			if (substr ($0, 9) == "_OPC_MGMTSV_")
+				OBJECT = "_OPC_MGMTSV_"
+			else
+				OBJECT = get_qvalue()
+		}
+
+		/^    LAYOUT_ID/ || /^    PARENT_/ { THING = THING get_value() ":" }
+
+		/^    LABEL/ {
+			LABEL = get_value()
+			THING = THING OBJECT
+			if (LABEL != OBJECT && LABEL != "")
+				THING = THING ",	label: " LABEL
+			w_out(THING, filename)
+		}
+
+		' ${NODEHIER}
+	fi
+}
+
+
+###############################################################################
+# Split users (operators, template administrators and profiles) ###############
+###############################################################################
+split_users ()
+{
+	cd ${SPLIT_DIR}
+
+	awk -v BASE_CLASS="${fixclass}:" "${AWK_LIB}"'
+		BEGIN {
+			detailfile = ""
+		}
+
+		/^OPERATOR "/		{ LOGINNAME = get_value() }
+		/^  REALNAME "/		{ REALNAME = get_value() }
+
+		/^  DESCRIPTION "/	{ DESCRIPTION = get_value() }
+		/^  USER_ROLE/		{ fileprefix = "u_uk_" ; atprefix = "uk_" ; SUBCLASS = "unknown type of user:" }
+
+		/^  USER_ROLE 0/	{ fileprefix = "u_op_" ; atprefix = "op_" ; SUBCLASS = "operators:" }
+
+		/^  USER_ROLE 3/	{ fileprefix = "u_ta_" ; atprefix = "ta_" ; SUBCLASS = "template administrators:" }
+
+		/^  USER_ROLE 4/	{ fileprefix = "u_pr_" ; atprefix = "pr_" ; SUBCLASS = "user profiles:" }
+
+		/^  LABEL "/ {
+			close (detailfile)
+			detailfile = fileprefix clean(LOGINNAME)
+			SCC_CLASS = BASE_CLASS SUBCLASS scc_clean(LOGINNAME) "::"
+			# w_out(LOGINNAME, detailfile)
+			w_outf("Label          : ", get_value(), detailfile)
+			w_outf("Real name      : ", REALNAME, detailfile)
+			w_outf("Description    : ", DESCRIPTION, detailfile)
+		}
+
+		/^  NODE_HIERARCHY "/	{ w_outf("Node hierarchy : ", get_value(), detailfile) }
+
+		/^  OP_INIT_ACT_FLAG TRUE/ && fileprefix == "u_op_" {
+			w_out("Allowed actions:", detailfile)
+			w_out("  Perform/stop actions      : allowed", detailfile)
+		}
+
+		/^  OP_INIT_ACT_FLAG FALSE/ && fileprefix == "u_op_" {
+			w_out("Allowed actions:", detailfile)
+			w_out("  Perform/stop actions      : not allowed", detailfile)
+		}
+
+		/^  ACKNOWLEDGE_FLAG TRUE/ && fileprefix == "u_op_"	{ w_out("  (Un-)acknowledge messages : allowed", detailfile) }
+
+		/^  ACKNOWLEDGE_FLAG FALSE/ && fileprefix == "u_op_"	{ w_out("  (Un-)acknowledge messages : not allowed", detailfile) }
+
+		/^  CHANGE_MSG_ATTR TRUE/ && fileprefix == "u_op_"	{ w_out("  Modify message attributes : allowed", detailfile) }
+
+		/^  CHANGE_MSG_ATTR FALSE/ && fileprefix == "u_op_"	{ w_out("  Modify message attributes : not allowed", detailfile) }
+
+		/^  OWN_FLAG TRUE/ && fileprefix == "u_op_"		{ w_out("  Own/disown messages       : allowed", detailfile) }
+
+		/^  OWN_FLAG FALSE/ && fileprefix == "u_op_"		{ w_out("  Own/disown messages       : not allowed", detailfile) }
+
+		/^ RESPONSIBILITY/ { PRINT_RESPONS = "true" }
+		/^  NODE_GROUP/ {
+			tstring = $0
+			gsub (/"/, "", tstring)
+			w_out(tstring, detailfile)
+		}
+
+		/^   MESSAGE_GROUP/ {
+			tstring = $0
+			gsub (/"/, "", tstring)
+			w_out(tstring, detailfile)
+		}
+
+		/^ DESKTOP/		{ PRINT_DESKTOP_HDR = "true" }
+		/^  APPLICATION_REF "/	{
+			if ( PRINT_DESKTOP_HDR == "true" ) {
+				w_out("Assigned applications and application groups:", detailfile)
+				PRINT_DESKTOP_HDR = "false"
+			}
+
+			gv = get_value()
+			w_out("  (application)		" gv, detailfile)
+			gv = "aat" atprefix clean(gv)
+			print "  " LOGINNAME >> gv
+			close(gv)
+		}
+
+		/^  APPLICATION_GROUP_REF "/	{
+			if ( PRINT_DESKTOP_HDR == "true" ) {
+				w_out("Assigned applications and application groups:", detailfile)
+				PRINT_DESKTOP_HDR = "false"
+			}
+
+			gv = get_value()
+			w_out("  (application group)	" gv, detailfile)
+			gv = "agat" atprefix clean(gv)
+			print "  " LOGINNAME >> gv
+			close(gv)
+		}
+
+		/^ PROFILES/	{ PRINT_PROFILE_HDR = "true" }
+		/^  PROFILE "/	{
+			if ( PRINT_PROFILE_HDR == "true" ) {
+				w_out("Assigned profiles:", detailfile)
+				PRINT_PROFILE_HDR = "false"
+			}
+
+			gv = get_value()
+			w_out("  " gv, detailfile)
+			gv = "prop_" clean(gv)
+			print "  " LOGINNAME >> gv
+			close(gv)
+		}
+
+	' ${OPERS}
+}
+
+
+###############################################################################
+# Split applications ##########################################################
+###############################################################################
+split_applications ()
+{
+	cd ${SPLIT_DIR}
+
+	awk "${AWK_LIB}"'
+		BEGIN {
+			appfile = ""
+			grpfile = ""
+			grpmfile = ""
+			targetstr[0] = "Start on              : target node list"
+			targetstr[1] = "Start on              : target node(s) selected by operator"
+			targetstr[2] = "Start on              : management server"
+			targetstr[3] = "Start on              : local client"
+			targetstr[4] = "Start URL on          : local web browser"
+			iappstr[0] = "virtual terminal"
+			iappstr[1] = "physical terminal"
+			iappstr[2] = "broadcast"
+			iappstr[3] = "virtual terminal (PC)"
+			intermstr[0] = "no window (eg X application)"
+			intermstr[1] = "window (input/output)"
+			intermstr[2] = "window (output only)"
+		}
+
+		/^    APPLICATION / {
+			close (appfile)
+			appname = get_value()
+			appfile = "ad_" clean(appname)
+			w_out(appname, appfile)
+			w_out("  (application) " appname, grpmfile)
+
+			if (length (grpname) > 0) {
+				gv = "amoag_" clean(appname)
+				print "  " grpname >> gv
+				close (gv)
+			}
+
+
+			T_SYMBOL = ""
+			T_TARGET = ""
+			T_APPL_CALL = ""
+			T_IAPP = ""
+			D_IN_TERM = 0
+			T_REG_NAME = ""
+			cap_nodes = 0
+			nrnodes = 0
+			T_UNAME["MPE"] = ""
+			T_UNAME["MS"] = ""
+			T_UNAME["NetWare"] = ""
+			T_UNAME["UNIX"] = ""
+		}
+
+		/^     SYMBOL / { T_SYMBOL = get_value() }
+		/^     TARGET / {
+			gv = get_value()
+			T_TARGET = targetstr[gv]
+			if (gv < 3)
+				D_IN_TERM = 1
+		}
+
+		/^     LABEL / { w_outf("Label                 : ", get_value(), appfile) }
+		/^     DESCRIPTION / { w_outf("Description           : ", get_value(), appfile) }
+
+		/^     APPL_CALL / { T_APPL_CALL = get_value() }
+		/^     INTERN_APPL_ACTION / && T_APPL_CALL == "" {
+			T_IAPP = iappstr[$2]
+			if ($3 == "ALLOW_CUSTOMIZE") {
+				if ($4 == "TRUE") T_IAPP = T_IAPP ", allow customize: true"
+				else              T_IAPP = T_IAPP ", allow customize: false"
+			}
+		}
+
+		/^      PARAMETERS / {
+			w_outf("Application call      : ", T_APPL_CALL, appfile)
+			w_outf("Parameters            : ", get_value(), appfile)
+		}
+
+		/^     NODE$/ && length (T_IAPP) == 0 { cap_nodes = 1 }
+		/^      OTHER / && cap_nodes == 1 { nrnodes++ ; T_NODE[nrnodes] = get_value() }
+		/^      IP / && cap_nodes == 1 { nrnodes++ ; T_NODE[nrnodes] = get_qvalue() }
+
+		/^     }$/ {
+			cap_nodes = 0
+		}
+
+		/^      PLTFRM_FAMILY_NAME / {
+			pltfrm = get_value()
+			getline
+			T_UNAME[pltfrm] = get_value()
+		}
+
+		/^     APPLICATION_TYPE / {
+			gv = get_value()
+			if (gv == "CSM_PLATFORM_INTERNAL") {
+				w_out("Application type      : " T_IAPP, appfile)
+				if (length (T_UNAME["MPE"]) + length (T_UNAME["MS"]) + length (T_UNAME["NetWare"]) + length (T_UNAME["UNIX"]) > 0) {
+					w_out("Username per platform:", appfile)
+					w_outf("  MPE: ", T_UNAME["MPE"], appfile)
+					w_outf("  MS: ", T_UNAME["MS"], appfile)
+					w_outf("  NetWare: ", T_UNAME["NetWare"], appfile)
+					w_outf("  UNIX: ", T_UNAME["UNIX"], appfile)
+				}
+
+			} else if (gv == "CSM_PLATFORM_INTEGRATED") {
+				w_out("Application type      : ITO application", appfile)
+				w_outf("Symbol                : ", T_SYMBOL, appfile)
+				w_outf("", T_TARGET, appfile)
+				i = 1	
+				while (i <= nrnodes) {
+					w_outf("  ", T_NODE[i], appfile)
+					i++
+				}
+
+			}
+		}
+
+		/^      START_IN_TERM_FLAG / && D_IN_TERM == 1 { w_out("Presentation          : " intermstr[get_value()], appfile) }
+
+		/^      USER_NAME / { w_outf("User name             : ", get_value(), appfile) }
+		/^      REGISTERED_NAME / { T_REG_NAME = get_value() }
+
+		/^      ACTION_IDENTIFIER/ {
+			gv = get_value()
+			if (length (gv) == 0) {
+				w_out("Application type      : OV service", appfile)
+				w_out("NNM Application name  : " T_REG_NAME, appfile)
+			} else {
+				w_out("Application type      : OV application", appfile)
+				w_out("NNM Application name  : " T_REG_NAME, appfile)
+				w_out("NNM Action identifier : " gv, appfile)
+				w_outf("", T_TARGET, appfile)
+				i = 1
+				while (i <= nrnodes) {
+					w_outf("  ", T_NODE[i], appfile)
+					i++
+				}
+
+			}
+		}
+
+
+		/^  APPLICATION_GROUP / || /^  MEMBER_APPLICATION_GROUP / {
+			close (grpfile)
+			close (grpmfile)
+			if ($2 == "PSEUDO_GROUP") {
+				grpfile = "rm_pseudo_group"
+				grpmfile = "rm_pseudo_group_members"
+			} else {
+				grpname = get_value()
+				grpfile = "agd_" clean(grpname)
+				grpmfile = "agm_" clean(grpname)
+				w_out(grpname, grpfile)
+			}
+
+		}
+		/^   LABEL / { w_outf("Label                 : ", get_value(), grpfile) }
+
+		/^   DESCRIPTION / { w_outf("Description           : ", get_value(), grpfile) }
+		/^   SYMBOL / {
+			w_outf("Symbol                : ", get_value(), grpfile)
+			w_out("Members: ", grpfile)
+		}
+
+		/^    MEMBER_APPLICATION_GROUP / {
+			gv = get_value()
+			w_out("  (group)       " gv, grpmfile)
+			if (length(grpname) > 0) {
+				gv = "agmoag_" clean(gv)
+				print "  " grpname >> gv
+				close (gv)
+			}
+
+		}
+		/^    APPLICATION_REF / {
+			gv = get_value()
+			w_out("  (application) " gv, grpmfile)
+			if (length (grpname) > 0) {
+				gv = "amoag_" clean(gv)
+				print "  " grpname >> gv
+				close (gv)
+			}
+
+		}
+		' ${APPS}
+
+
+	# add members to agd files
+	ls			|
+	grep "^agm_"		|
+	while read AGM_FILE
+	do
+		sort ${AGM_FILE} >> "agd_${AGM_FILE#agm_}"
+	done
+}
+
+
+###############################################################################
+# Split instruction text interfaces ###########################################
+###############################################################################
+split_instruction ()
+{
+	cd ${SPLIT_DIR}
+
+	awk "${AWK_LIB}"'
+		BEGIN {
+			filename = ""
+			intermstr[2] = "no window (eg X application)"
+			intermstr[0] = "window (output only)"
+		}
+
+		/^INSTRUCTION_INTERFACE / {
+			close (filename)
+			interface = get_value()
+			filename = "ii_" clean(interface)
+			w_out(interface, filename)
+
+			T_NODE = ""
+		}
+
+		/^ DESCRIPTION /	{ w_outf("Description     : ", get_value(), filename) }
+		/^ INSTR_INTERF_CALL /	{ w_outf("Interface call  : ", get_value(), filename) }
+
+		/^ NODE /		{ T_NODE = $NF ; sub("^\"", "", T_NODE) ; sub ("\"$", "", T_NODE) }
+
+		/^ START_ON_MGMT_SV 1/	{ w_out("Start on         : management server", filename) }
+
+		/^ START_ON_MGMT_SV 0/	{ w_out("Start on         : " T_NODE, filename) }
+		/^ USER_NAME /		{ w_out("Execute as user  : " get_value(), filename) }
+
+		/^ OUTPUT_MODE /	{ w_out("Presentation     : " intermstr[get_value()], filename) }
+
+		/^ RESOLVE_FOR_TTNS 0/	{ w_out("Instruction text : ignore for trouble tickets", filename) }
+
+		/^ RESOLVE_FOR_TTNS 1/	{ w_out("Instruction text : resolve for trouble tickets", filename) }
+
+		' ${INSTR_INTERF}
+}
+
+
+###############################################################################
+# Remove template group nesting ###############################################
+###############################################################################
+remove_template_group_nesting ()
+{
+	cd ${SPLIT_DIR}
+
+	# Set all template group names in member files to filenames
+	ls					|
+	grep -e "^tgm_" -e "^ngm_" -e "^nm_"	|
+	while read MEMBER_FILE
+	do
+		awk "${AWK_LIB}"'
+			/^group / {
+				print "group   tgm_" clean(substr ($0, 9))
+				next
+			}
+
+			{
+				print
+			}
+
+			' ${MEMBER_FILE} > ${TMP1_FILE}
+		mv -f ${TMP1_FILE} ${MEMBER_FILE}
+
+	done
+
+	# Search for empty template groups
+	ls					|
+	grep "^tgd_"				|
+	while read TGD_FILE
+	do
+		touch "tgm_${TGD_FILE#tgd_}"
+	done
+
+	# Remove nesting
+	while [ $(ls | grep -c "^tgm_") -gt 0 ]
+	do
+		# When all tgm-files contain the keyword group, none of them will be processed
+		# and the loop will continue forever.
+		# Use this signal-file to indicate that at least one file has been processed.
+		touch ${TMP2_FILE}
+
+		ls		|
+		grep "^tgm_"	|
+		while read TGM_FILE
+		do
+			if [ $(grep -c '^group   ' ${TGM_FILE}) -eq 0 ]
+			then
+				rm -f ${TMP2_FILE}		# Signal processing of a tgm-file.
+
+				# Get detail and done file name and template group name
+				TGD_FILE="tgd_${TGM_FILE#tgm_}"
+				DONE_FILE="done_${TGM_FILE#tgm_}"
+				TG_NAME="$(head -n 1 ${TGD_FILE})"
+
+				# Place template group name behind member templates
+				awk -v TG_NAME="${TG_NAME}" '{ print $0 "	in \"" TG_NAME "\"" }' ${TGM_FILE} > ${TMP1_FILE}
+
+				mv -f ${TMP1_FILE} ${TGM_FILE}
+
+				# Scan all other member files for the current template group
+				ls					|
+				grep -e "^tgm_"				|
+				xargs grep -l "^group   ${TGM_FILE}\$"	|
+				while read MEMBER_FILE
+				do
+					sed "
+						/^group   ${TGM_FILE}\$/ {
+							r ${TGM_FILE}
+
+							d
+						} " ${MEMBER_FILE} > ${TMP1_FILE}
+
+					mv -f ${TMP1_FILE} ${MEMBER_FILE}
+				done
+
+				# Rename template group members file
+				mv ${TGM_FILE} ${DONE_FILE}
+			fi
+		done
+		if [ -f ${TMP2_FILE} ]
+		then
+			echo "fix:messages::cannot remove nesting from template group-files"
+			exit 0
+		fi
+	done
+
+	# Rename template group members file
+	ls		|
+	grep "^done_"	|
+	while read DONE_FILE
+	do
+		TGM_FILE="tgm_${DONE_FILE#done_}"
+		TGD_FILE="tgd_${TGM_FILE#tgm_}"
+		TG_NAME="$(head -n 1 ${TGD_FILE})"
+
+		mv ${DONE_FILE} ${TGM_FILE}
+
+
+		ls					|
+		grep -e "^ngm_" -e "^nm_"		|
+		xargs grep -l "^group   ${TGM_FILE}\$"	|
+		while read MEMBER_FILE
+		do
+			sed "
+				/^group   ${TGM_FILE}\$/ {
+					r ${TGM_FILE}
+
+					d
+				} " ${MEMBER_FILE} > ${TMP1_FILE}
+
+			mv -f ${TMP1_FILE} ${MEMBER_FILE}
+		done
+	done
+
+	# Sort member files
+	ls		|
+	grep -e "^nm_"	|
+	while read MEMBER_FILE
+	do
+		sort ${MEMBER_FILE} > ${TMP1_FILE}
+
+		mv -f ${TMP1_FILE} ${MEMBER_FILE}
+	done
+}
+
+
+###############################################################################
+# Remove application group nesting ############################################
+###############################################################################
+remove_application_group_nesting ()
+{
+	cd ${SPLIT_DIR}
+
+	# Set all application group names in member files to filenames
+	ls		|
+	grep -e "^agm_"	|
+	while read MEMBER_FILE
+	do
+		awk "${AWK_LIB}"'
+			/^  \(group\) / {
+				print "  (group)       agm_" clean(substr ($0, 17))
+				next
+			}
+
+			{
+				print
+			}
+
+			' ${MEMBER_FILE} > ${TMP1_FILE}
+		mv -f ${TMP1_FILE} ${MEMBER_FILE}
+
+	done
+
+	# Search for empty template groups
+	ls		|
+	grep "^agd_"	|
+	while read AGD_FILE
+	do
+		touch "agm_${AGD_FILE#agd_}"
+	done
+
+	# Remove nesting
+	while [ $(ls | grep -c "^agm_") -gt 0 ]
+	do
+		ls		|
+		grep "^agm_"	|
+		while read AGM_FILE
+		do
+			if [ -z "$(grep -l '^  (group)' ${AGM_FILE})" ]
+			then
+				# Get detail and done file name and template group name
+				AGD_FILE="agd_${AGM_FILE#agm_}"
+				DONE_FILE="done_${AGM_FILE#agm_}"
+				AG_NAME="$(head -n 1 ${AGD_FILE})"
+
+				# Place template group name behind member templates
+				awk -v AG_NAME="${AG_NAME}" '{ print $0 "	by application group " AG_NAME }' ${AGM_FILE} > ${TMP1_FILE}
+
+				mv -f ${TMP1_FILE} ${AGM_FILE}
+
+				# Scan all other member files for the current template group
+				ls						|
+				grep -e "^agm_"					|
+				xargs grep -l "^  (group)       ${AGM_FILE}\$"	|
+				while read MEMBER_FILE
+				do
+					sed "
+						/^  (group)       ${AGM_FILE}\$/ {
+							r ${AGM_FILE}
+
+							d
+						} " ${MEMBER_FILE} > ${TMP1_FILE}
+
+					mv -f ${TMP1_FILE} ${MEMBER_FILE}
+				done
+
+				# Rename template group members file
+				mv ${AGM_FILE} ${DONE_FILE}
+
+			fi
+		done
+	done
+
+	# Rename template group members file
+	ls		|
+	grep "^done_"	|
+	while read DONE_FILE
+	do
+		AGM_FILE="agm_${DONE_FILE#done_}"
+		mv ${DONE_FILE} ${AGM_FILE}
+
+	done
+}
+
+
+###############################################################################
+# Add node group member to node group detail and node detail files ############
+###############################################################################
+add_ngm_to_nm ()
+{
+	cd ${SPLIT_DIR}
+
+	# Add ngm files to ngd and nd files
+	ls		|
+	grep "^ngm_"	|
+	while read NGM_FILE
+	do
+		if [ -n "$(grep -l -v "^node " ${NGM_FILE})" ]
+		then
+			NGD_FILE="ngd_${NGM_FILE#ngm_}"
+			NG_NAME="$(head -n 1 ${NGD_FILE})"
+			awk "${AWK_LIB}"'/^node/ { print "nm_" clean($NF) }' ${NGM_FILE} | \
+			while read NM_FILE
+			do
+				{
+					echo "  Active templates by node group ${NG_NAME}:"
+					grep -v "^node " ${NGM_FILE}
+
+				} >> ${NM_FILE}
+			done
+		fi
+	done
+}
+
+
+###############################################################################
+# Create taon from nm #########################################################
+###############################################################################
+create_taon_from_nm ()
+{
+	cd ${SPLIT_DIR}
+
+	ls		|
+	grep "^nm_"	|
+	while read NM_FILE
+	do
+		ND_FILE="nd_${NM_FILE#nm_}"
+		N_NAME="$(head -n 1 ${ND_FILE} 2>/dev/null)"
+		awk -v N_NAME="${N_NAME}" "${AWK_LIB}"'
+			/^console/ || /^ecs/ || /^logfile/ || /^monitor/ || /^opcmsg/ || /^snmp/ || /^sched/ {
+				TEMPLATE = substr ($0, 9)
+				I_TGROUP = index (TEMPLATE, "	in")
+				if (I_TGROUP > 0)
+					TEMPLATE = substr (TEMPLATE, 1, I_TGROUP - 1)
+				print "taon_" clean(TEMPLATE) " " N_NAME
+			}
+
+			' ${NM_FILE}
+	done | sort -u | awk '
+		BEGIN { filename = "" }
+
+		filename != $1 {
+			if (filename != "")
+				close (filename)
+			filename = $1
+		}
+
+		{ print "  " substr ($0, length ($1) + 2) > filename }
+	'
+}
+
+
+###############################################################################
+# Replace machine type number with description ################################
+###############################################################################
+repl_mtype ()
+{
+	cd ${SPLIT_DIR}
+
+	export ORACLE_SID="$(awk '/^ORACLE_SID / { print $2 }' /etc/opt/OV/share/conf/ovdbconf)"
+	export ORACLE_HOME="$(awk '/^ORACLE_HOME / { print $2 }' /etc/opt/OV/share/conf/ovdbconf)"
+	export ORACLE_USER="$(awk '/^DBA_USER / { print $2 }' /etc/opt/OV/share/conf/ovdbconf)"
+
+	scc_oracle_query "select machine_type, machine_type_str from opc_op.opc_net_machine;"	|
+	sed -e '1,/^---/d'									|
+	while read MNR MTYPE
+	do
+		ls						|
+		grep "^nd_*"					|
+		xargs grep -l "Machine type       : ${MNR},"	|
+		while read SFILE
+		do
+			sed -e "s/Machine type       : ${MNR},/Machine type       : $(echo "${MTYPE}" | sed -e 's/\//\\\//g');/" ${SFILE} > ${TMP1_FILE}
+
+			mv -f ${TMP1_FILE} ${SFILE}
+		done
+	done
+}
+
+
+###############################################################################
+# Build responsibility matrix #################################################
+###############################################################################
+resp_matrix ()
+{
+	cd ${SPLIT_DIR}
+
+
+	ls				|
+	grep -e "^u_op_" -e "^u_pr_"	|
+	while read UFILE
+	do
+		{
+			awk -F:: '
+				substr($2, 1, 12) == "  NODE_GROUP" { print "a " substr ($2, 14) }
+				substr($2, 1, 16) == "   MESSAGE_GROUP" { print "b " substr ($2, 18) }' ${UFILE} | sort -u
+			awk -F:: 'substr($2, 1, 12) == "  NODE_GROUP" || substr($2, 1, 16) == "   MESSAGE_GROUP" { print $2 }' ${UFILE}
+
+		} | awk '
+			BEGIN {
+				NGNr = 0
+				MGNr = 0
+				NGlength = 0
+				MGlength = 0
+			}
+
+			/^a/ {
+				NGNr++
+				NG2Nr[substr ($0, 3)] = NGNr
+				NGStr[NGNr] = substr ($0, 3)
+				if (length ($0) > NGlength)
+					NGlength = length ($0)
+				next
+			}
+
+			/^b/ {
+				MGNr++
+				Nr2MG[MGNr] = substr ($0, 3)
+				MGStr[substr ($0, 3)] = sprintf("%" NGNr "s", " ")
+				gsub (" ", "N", MGStr[substr ($0, 3)])
+				if (length ($0) > MGlength)
+					MGlength = length ($0)
+				next
+			}
+
+			/^  NODE_GROUP/ {
+				GNr = NG2Nr[substr ($0, 14)]
+			}
+
+			/^   MESSAGE_GROUP/ {
+				t = MGStr[substr ($0, 18)]
+				t = substr (t, 1, GNr - 1) "Y" substr (t, GNr + 1)
+				MGStr[substr ($0, 18)] = t
+			}
+
+			END {
+				if (NGNr == 0)
+					exit
+				NGlength -= 2
+				MGlength -= 2
+
+				for (i = 1; i <= NGNr; i++) {
+					x = sprintf("%" NGlength "s", NGStr[i])
+					NGStr[i] = x
+				}
+
+				for (j = 1; j <= NGlength; j++) {
+					printf ("%" MGlength "s", " ")
+					for (i = 1; i <= NGNr; i++)
+						printf (" | " substr(NGStr[i], j, 1))
+					printf ("\n")
+				}
+
+				printf ("%s", substr ("---------------------------------------------------------------", 1, MGlength))
+				for (i = 1; i <= NGNr; i++)
+					printf ("-+--")
+				printf ("\n")
+				for (i = 1; i <= MGNr; i++) {
+			 		MGroup = Nr2MG[i]
+					printf ("%" MGlength "s", MGroup)
+					for (j = 1; j <= NGNr; j++)
+						if (substr (MGStr[MGroup], j, 1) == "Y")
+							printf (" | Y")
+						else
+							printf (" |  ")
+					printf ("\n")
+				}
+
+			}' > ${TMP1_FILE}
+
+		if [ $(wc -l < ${TMP1_FILE}) -gt 1 ]
+		then
+			{
+				class="$(awk -F:: 'NR == 1 { print $1 }' ${UFILE} | sed -e 's/^fix/var/')"
+				grep -v -e "::  NODE_GROUP" -e "::   MESSAGE_GROUP" ${UFILE}
+
+				echo "${class}::Responsibility matrix:"
+				awk -v CLASS="${class}::  " '{ print CLASS $0 }' ${TMP1_FILE}
+
+				class="$(awk -F:: 'NR == 1 { print $1 }' ${UFILE})"
+				echo "${class}::Responsibility overview (node group / message group):"
+				awk -F:: -v CLASS="${class}::  " '
+					substr($2, 1, 12) == "  NODE_GROUP" { printf (CLASS substr ($2, 14) " / ") }
+					substr($2, 1, 16) == "   MESSAGE_GROUP" { print substr ($2, 18) }' ${UFILE} | sort
+
+			} > ${TMP2_FILE}
+			mv -f ${TMP2_FILE} ${UFILE}
+		fi
+	done
+}
+
+
+###############################################################################
+# Report data file set ########################################################
+###############################################################################
+report_data_file ()
+{
+	[ -f "${1}${DFILE}" ] && {
+		echo "${2}::${3}"
+		awk -v CLASS="${2}" '{ print CLASS "::" $0 }' "${1}${DFILE}"
+
+		return 0
+	}
+
+	return 1
+}
+
+###############################################################################
+# Report template data ########################################################
+###############################################################################
+report_template ()
+{
+	cd ${SPLIT_DIR}
+
+	ls | grep -e "^td_" | cut -d_ -f2- |
+	while read DFILE
+	do
+		t_fixclass="$(awk -F:: 'NR == 1 { print $1 }' "td_${DFILE}")"
+		t_varclass="$(echo "${t_fixclass}" | sed -e 's/fix/var/')"
+		cat "td_${DFILE}"
+		report_data_file tmotg_ "${t_fixclass}" "Template is member of template groups:"
+		report_data_file tatn_  "${t_fixclass}" "Template is assigned to nodes:"
+		report_data_file tatng_ "${t_fixclass}" "Template is assigned to nodes groups:"
+		report_data_file taon_  "${t_varclass}" "Template is active on nodes:"
+		if [ $? -ne 0 ]
+		then
+			echo "${t_varclass}::Template is not active on any node"
+		fi
+	done
+}
+
+
+###############################################################################
+# Report template group data ##################################################
+###############################################################################
+report_tgroup ()
+{
+	cd ${SPLIT_DIR}
+
+	ls | grep -e "^tgd_" | cut -d_ -f2- |
+	while read DFILE
+	do
+		tg_fixclass="$(awk -F:: 'NR == 2 { print $1 }' "tgd_${DFILE}")"
+		tg_varclass="$(echo "${tg_fixclass}" | sed -e 's/fix/var/')"
+		awk 'NR > 1 { print }' "tgd_${DFILE}"
+		report_data_file tgmotg_ "${tg_fixclass}" "Template group is member of template groups:"
+		if [ $? -ne 0 ]
+		then
+			echo "${tg_varclass}::Template group is not member of any template group"
+		fi
+		report_data_file tgatn_  "${tg_fixclass}" "Template group is assigned to nodes:"
+		report_data_file tgatng_ "${tg_fixclass}" "Template group is assigned to nodes groups:"
+		[ -f "tgm_${DFILE}" ] && {
+			echo "${tg_varclass}::Active templates by this template group:"
+			conv_member_tags 2 "${tg_varclass}::" < "tgm_${DFILE}"
+		}
+
+	done
+}
+
+
+###############################################################################
+###############################################################################
+report_tusage ()
+{
+	{
+		echo "${fixclass}:template usage::Used templates:"
+		ls | grep "^nm_" |
+		xargs sed -e 's/	in \".*//' |
+		sort |
+		awk -v CLASS="${fixclass}:template usage::  " '
+			BEGIN {
+				tname = ""
+			}
+			{
+				if (tname == $0)
+					tcount += 1
+				else {
+					if (tname != "")
+						print CLASS tname "	(" tcount ")"
+					tname = $0
+					tcount = 1
+				}
+			}
+			END {
+				if (tname != "")
+					print CLASS tname "	(" tcount ")"
+			}'
+
+		echo "${fixclass}:template usage::"
+		echo "${fixclass}:template usage::Unused templates:"
+		ls | grep -e "^nm_" -e "^all_templates" |
+		xargs sed -e 's/	in \".*//' |
+		sort |
+		awk -v CLASS="${fixclass}:template usage::  " '
+			BEGIN {
+				tname = ""
+			}
+			{
+				if (tname == $0)
+					tcount += 1
+				else {
+					if (tname != "" && tcount == 1)
+						print CLASS tname
+					tname = $0
+					tcount = 1
+				}
+			}
+			END {
+				if (tname != "" && tcount = 1)
+					print CLASS tname
+			}'
+	} | sed	-e 's/::  console /::  (MPE console messages) /' \
+		-e 's/::  ecs     /::  (event correlation)    /' \
+		-e 's/::  logfile /::  (logfile encapsulator) /' \
+		-e 's/::  monitor /::  (monitor)              /' \
+		-e 's/::  opcmsg  /::  (message interface)    /' \
+		-e 's/::  snmp    /::  (trap interceptor)     /' \
+		-e 's/::  sched.  /::  (scheduled action)     /'
+}
+
+
+###############################################################################
+# Report message groups #######################################################
+###############################################################################
+report_msggrps ()
+{
+	awk '
+		/^MESSAGE_GROUP/ || /^	SYMBOL/ || /^	DESCRIPTION/ { printf ("%s:::", substr ($0, index ($0, "\""))) }
+
+		/^	LABEL/ { printf ("%s\n", substr ($0, index ($0, "\""))) }
+		' ${MSGGRPS} 		|
+	sort 				|
+	awk -v class="${fixclass}:message groups::" -F ::: '
+		{
+			gsub ("\"", "")
+			IF (NR > 1)
+				print class
+			print class "Message group : " $1
+			if ($4 != "")
+				print class "  Label       : " $4
+			if ($2 != "")
+				print class "  Symbol      : " $2
+			if ($3 != "")
+				print class "  Description : " $3
+
+		}'
+}
+
+
+###############################################################################
+# Report node data ############################################################
+###############################################################################
+report_nodes ()
+{
+	cd ${SPLIT_DIR}
+
+	ls | grep -e "^nd_" | cut -d_ -f2- |
+	while read DFILE
+	do
+		n_fixclass="$(awk -F:: 'NR == 2 { print $1 }' "nd_${DFILE}")"
+		n_varclass="$(echo "${n_fixclass}" | sed -e 's/fix/var/')"
+		awk 'NR > 1 { print }' "nd_${DFILE}"
+		echo "${n_fixclass}::Node is member of node groups:"
+		if [ -f "nmong_${DFILE}" ]
+		then
+			sort "nmong_${DFILE}" | awk -v CLASS="${n_fixclass}" '{ print CLASS "::" $0 }'
+		else
+			NNAME="$(awk 'NR == 1 { print }' "nd_${DFILE}")"
+			echo "${msgclass}:nodes:	Node ${NNAME} does not belong to any node group, messages will not be displayed in any message browser"
+		fi
+		[ -f "nm_${DFILE}" ] && {
+			echo "${n_varclass}::Active templates on this node:"
+			conv_member_tags 4 "${n_varclass}::" < "nm_${DFILE}"
+		}
+
+	done
+}
+
+
+###############################################################################
+# Report node group data ######################################################
+###############################################################################
+report_ngroups ()
+{
+	cd ${SPLIT_DIR}
+
+	ls | grep -e "^ngd_" | cut -d_ -f2- |
+	while read DFILE
+	do
+		ng_varclass="${varclass}:node groups:$(awk "${AWK_LIB}"'NR == 1 { print scc_clean($0) }' "ngd_${DFILE}")::"
+		awk 'NR > 1 { print }' "ngd_${DFILE}"
+		[ -f ngm_${DFILE} -a -n "$(grep -l -v "^node " ngm_${DFILE})" ] && {
+			echo "${ng_varclass}Active templates via this node group:"
+			grep -v "^node" ngm_${DFILE} | conv_member_tags 2 "${ng_varclass}"
+		}
+
+	done
+}
+
+
+###############################################################################
+# Get node hierarchy group contents ###########################################
+###############################################################################
+get_nh_group ()
+{
+	awk -v PARENT=$2 -F: '$1 == "group" && $3 == PARENT { print }' $1 | while read GROUPLINE
+	do
+		printf "%$(( $3 * 2))sLayout group: %s\n" " " "$(echo "${GROUPLINE}" | cut -d: -f4-)"
+		get_nh_group $1 "$(echo "${GROUPLINE}" | cut -d: -f2)" $(( $3 + 1 ))
+	done
+	awk -v PARENT=$2 -F: '$1 == "node " && $3 == PARENT { print }' $1 | while read GROUPLINE
+	do
+		printf "%$(( $3 * 2))sNode: %s\n" " " "$(echo "${GROUPLINE}" | cut -d: -f4-)"
+	done
+}
+
+
+###############################################################################
+# Report node hierarchy data ##################################################
+###############################################################################
+report_nhiers ()
+{
+	cd ${SPLIT_DIR}
+
+	ls			|
+	grep "^nh_"		|
+	cut -d_ -f2-		|
+	while read DFILE
+	do
+		t_fixclass="$(awk -F:: 'NR == 1 { print $1 }' nhd_${DFILE} 2>/dev/null)::"
+		awk 'NR > 1 { print }' nhd_${DFILE}
+
+		echo "${t_fixclass}Node hierarchy contents:"
+		get_nh_group nh_${DFILE} "000000000000000000000000000000000000" 1 |
+		awk -v CLASS="${t_fixclass}" '{ print CLASS $0 }'
+	done
+}
+
+
+###############################################################################
+# Report distribution data ####################################################
+###############################################################################
+report_ndist ()
+{
+	BLANK=0
+	export ORACLE_SID="$(awk '/^ORACLE_SID / { print $2 }' /etc/opt/OV/share/conf/ovdbconf)"
+	export ORACLE_HOME="$(awk '/^ORACLE_HOME / { print $2 }' /etc/opt/OV/share/conf/ovdbconf)"
+	export ORACLE_USER="$(awk '/^DBA_USER / { print $2 }' /etc/opt/OV/share/conf/ovdbconf)"
+	scc_oracle_query "select n.node_name from opc_nodes o, opc_node_names n where o.node_id = n.node_id and o.sw_dist_req_flag != 0 order by n.node_name;" > ${TMP1_FILE}
+
+	if [ $(wc -l < ${TMP1_FILE}) -gt 2 ]
+	then
+		BLANK=1
+		echo "${fixclass}:node software and configuration::nodes needing agent upgrade:"
+		sed -e "1,2d" -e "s/^/${fixclass}:node software and configuration::  /" ${TMP1_FILE}
+
+	fi
+	scc_oracle_query "select n.node_name from opc_node_config c, opc_node_names n where c.node_id = n.node_id and c.status_flag != 0 group by n.node_name order by n.node_name;" > ${TMP1_FILE}
+
+	if [ $(wc -l < ${TMP1_FILE}) -gt 2 ]
+	then
+		[ ${BLANK} = 1 ] && echo "${fixclass}:node software and configuration::"
+		echo "${fixclass}:node software and configuration::nodes needing configuration distribution:"
+		sed -e "1,2d" -e "s/^/${fixclass}:node software and configuration::  /" ${TMP1_FILE}
+
+	fi
+}
+
+
+###############################################################################
+# Report application data #####################################################
+###############################################################################
+report_apps ()
+{
+	cd ${SPLIT_DIR}
+
+	ls | grep -e "^ad_" | cut -d_ -f2- |
+	while read DFILE
+	do
+		t_fixclass="${fixclass}:applications:$(awk "${AWK_LIB}"'NR == 1 { print scc_clean($0) }' "ad_${DFILE}")"
+		awk -v CLASS="${t_fixclass}::" 'NR > 1 { print CLASS $0 }' "ad_${DFILE}"
+		report_data_file amoag_ "${t_fixclass}" "Application is member of application groups:"
+		report_data_file aatop_ "${t_fixclass}" "Application is assigned to operator:"
+		report_data_file aatpr_ "${t_fixclass}" "Application is assigned to user profile:"
+	done
+}
+
+
+###############################################################################
+# Report application group data ###############################################
+###############################################################################
+report_agroups ()
+{
+	cd ${SPLIT_DIR}
+
+	ls | grep -e "^agd_" | cut -d_ -f2- |
+	while read DFILE
+	do
+		t_fixclass="${fixclass}:application groups:$(awk "${AWK_LIB}"'NR == 1 { print scc_clean($0) }' "agd_${DFILE}")"
+		awk -v CLASS="${t_fixclass}::" 'NR > 1 { print CLASS $0 }' "agd_${DFILE}"
+		report_data_file agmoag_ "${t_fixclass}" "Application group is member of application groups:"
+		report_data_file agatop_ "${t_fixclass}" "Application group is assigned to operator:"
+		report_data_file agatpr_ "${t_fixclass}" "Application group is assigned to user profile:"
+	done
+}
+
+
+###############################################################################
+# Report user profile data ####################################################
+###############################################################################
+report_profiles ()
+{
+	cd ${SPLIT_DIR}
+
+	ls | grep -e "^u_pr_" | cut -d_ -f3- |
+	while read DFILE
+	do
+		t_fixclass="$(head -n 1 u_pr_${DFILE} | sed -e 's/^.../fix/' -e 's/::.*//')"
+		cat u_pr_${DFILE}
+		report_data_file prop_ "${t_fixclass}" "Profile is assigned to user (recursion ignored):"
+		if [ $? -eq 1 ]
+		then
+			echo "${t_fixclass}::Profile is not assigned to users (recursion ignored)"
+		fi
+	done
+}
+
+
+###############################################################################
+# Report customer script data #################################################
+###############################################################################
+report_cust_scripts ()
+{
+	cd ${OV_CUST}
+
+	for VENDOR in $(ls -l | awk '/^d/ { print $NF }')
+	do
+		cd ${OV_CUST}/${VENDOR}
+
+		for MODEL in $(ls -l | awk '/^d/ { print $NF }')
+		do
+			cd ${OV_CUST}/${VENDOR}/${MODEL}
+
+			for OS in $(ls -l | awk '/^d/ { print $NF }')
+			do
+				cd ${OV_CUST}/${VENDOR}/${MODEL}/${OS}
+
+				find . -type f | sed -e 's/^..//' | sort | while read CUSTFILE
+				do
+					if [ "$(echo ${CUSTFILE} | awk -F. '{ print $NF}')" = Z ]
+					then
+						zcat ${CUSTFILE} > ${TMP1_FILE}
+
+						printf "$(echo "${CUSTFILE}" | sed -e 's/.Z$//');\t"
+						printf "$(file ${TMP1_FILE} | sed -e 's/.*:	//'); cksum: \t"
+						scc_checksum < ${TMP1_FILE}
+
+					else
+						printf "${CUSTFILE};\t"
+						printf "$(file ${CUSTFILE} | sed -e 's/.*:	//'); cksum: \t"
+						scc_checksum < ${CUSTFILE}
+
+					fi
+				done |
+				sed -e "s/^/${fixclass}:customer agent files:${VENDOR}\/${MODEL}\/${OS}::/"
+			done
+		done
+	done
+}
+
+
+###############################################################################
+# Report database maintenance #################################################
+###############################################################################
+report_db_maint ()
+{
+	awk "${AWK_LIB}"'
+		/^ MAX_NUM_ACTIVE / { MAX_NUM_ACTIVE = $NF }
+
+		/^ MAX_NUM_HIST / { MAX_NUM_HIST = $NF }
+		/^ MAX_NUM_AUDIT / { MAX_NUM_AUDIT = $NF }
+
+		/^ SEND_MSG_ACT_FLAG / { SEND_MSG_ACT_FLAG = $NF }
+		/^ SEND_MSG_HIST_FLAG / { SEND_MSG_HIST_FLAG = $NF }
+
+		/^ SEND_MSG_AUD_FLAG / { SEND_MSG_AUD_FLAG = $NF }
+		/^ DOWNLOAD_HIST_FLAG / { DOWNLOAD_HIST_FLAG = $NF }
+
+		/^ HIST_OLDER / { HIST_OLDER = $NF }
+		/^ HIST_AT_TIME / { HIST_AT_TIME = get_value() }
+
+		/^ HIST_NOTIFIC_FLAG / { HIST_NOTIFIC_FLAG = $NF }
+		/^ DOWNLOAD_AUD_FLAG / { DOWNLOAD_AUD_FLAG = $NF }
+
+		/^ AUDIT_OLDER / { AUDIT_OLDER = $NF }
+		/^ AUDIT_AT_TIME / { AUDIT_AT_TIME = get_value() }
+
+		/^ AUDIT_NOTIFIC_FLAG / { AUDIT_NOTIFIC_FLAG = $NF }
+		/^ HIST_INTO_FILE / { HIST_INTO_FILE = get_value() }
+
+		/^ AUDIT_INTO_FILE / { AUDIT_INTO_FILE = get_value() }
+		END {
+			if (SEND_MSG_ACT_FLAG = "TRUE" )
+				print "Send message for more then " MAX_NUM_ACTIVE " active and pending messages"
+			if (SEND_MSG_HIST_FLAG = "TRUE" )
+				print "Send message for more then " MAX_NUM_HIST " history messages"
+			if (SEND_MSG_AUD_FLAG = "TRUE" )
+				print "Send message for more then " MAX_NUM_AUDIT " audit records"
+			if (DOWNLOAD_HIST_FLAG = "TRUE" )
+				print "Download history messages older then " HIST_OLDER " seconds to " HIST_INTO_FILE " at " HIST_AT_TIME
+			if (DOWNLOAD_AUD_FLAG = "TRUE" )
+				print "Download audit records older then " HIST_OLDER " seconds to " AUDIT_INTO_FILE " at " AUDIT_AT_TIME
+		}' ${DBMAINT} | sed -e "s/^/${fixclass}:database maintenance::/"
+}
+
+
+###############################################################################
+# Report server configuration #################################################
+###############################################################################
+report_server_config ()
+{
+	awk "${AWK_LIB}"'
+		BEGIN {
+			audit[0] = "no audit"
+			audit[1] = "operator audit"
+			audit[2] = "administrator audit"
+			MSI = 0
+			DUP = 0
+		}
+
+		/^ PARALLEL_DISTRIB / { PD = "Maximum number of parallel distributions : " get_value() }
+
+		/^ AUDIT_LEVEL / { AL = "Auditing level                           : " audit[get_value()] }
+		/^ MESSAGE_IF_ENABLE 1/ { MSI = 1 }
+
+		/^ MSG_IF_ALLOW_AA 1/ { MSI_AA = 1 }
+		/^ MSG_IF_ALLOW_OA 1/ { MSI_OA = 1 }
+
+		/^ MSG_DUPL_COUNTING 1/ { DUP = 1 }
+		/^ ADD_COUNT_ANNOTATIONS 1/ { DUP_CNT = 1 }
+
+		/^ OUTPUT_ALL_TO_MSI 1/ { MSI_SVR = "divert messages" }
+		/^ OUTPUT_ALL_TO_MSI 2/ { MSI_SVR = "copy messages" }
+
+		/^ PORT_RANGE / { PR = get_value() }
+		END {
+			print PD
+			print AL
+			if (DUP == 1) {
+				print "Suppress and count duplicate messages"
+				if (DUP_CNT == 1) print "  Add duplicates as annotations"
+			}
+
+			if (MSI == 1) {
+				print "Message stream interface enabled"
+				if (length (MSI_SVR) > 0) print "  Send all messages to server MSI: " MSI_SVR
+				if (MSI_AA == 1) print "  Allow externally defined automatic actions"
+				if (MSI_OA == 1) print "  Allow externally defined operator initiated actions"
+			}
+
+			if (length (PR) > 0) print "Allowed port range: " PRF
+		}' ${SVRCFG} | sed -e "s/^/${fixclass}:server configuration::/"
+}
+
+
+###############################################################################
+# Report SAPSPI ###############################################################
+###############################################################################
+report_sap_spi ()
+{
+	# Provided by Jacco Dunweg
+	# First check whether OV SmartPlugin for SAP is installed.
+	SAPSPI_DIR=/var/opt/OV/share/conf/sapspi
+	if [ ! -d ${SAPSPI_DIR} ]
+	then
+		# It seems OV sapspi is not installed, no further actions needed.
+		return 0
+	fi
+
+	# Get SAP spi global files
+	cd ${SAPSPI_DIR}/global
+	for ConfigFile in *.cfg
+	do
+		scc_check_file "${SAPSPI_DIR}/global/${ConfigFile}" "${fixclass}:sap spi:global:${ConfigFile}::" "#"
+	done
+
+	# Get SAP spi local files
+	cd ${SAPSPI_DIR}/local
+	for f in */*.cfg
+	do
+		file="${SAPSPI_DIR}/local/${f}"
+		class="${f%/*}:${f#*/}"
+		scc_check_file "${file}" "${fixclass}:sap spi:local:${class}::" "#"
+	done
+
+	return 0
+}
+
+###############################################################################
+# Main ########################################################################
+###############################################################################
+
+clear_split
+
+{
+	config_files
+	create_download
+	if [ $? -ne 0 ]		# Download failed: no download files and nothing to extract.
+	then
+		exit 0
+	fi
+}
+
+{
+	split_tgroup
+	split_logfile
+	split_message
+	split_monitor
+	split_trap
+	split_console
+	split_schedule
+	split_ec
+
+	split_node_group
+	split_nodes
+	split_hierarchy
+
+	split_users
+	split_applications
+	split_instruction
+
+	remove_template_group_nesting
+	remove_application_group_nesting
+
+	add_ngm_to_nm
+	create_taon_from_nm
+
+	repl_mtype
+
+	resp_matrix
+}
+
+
+{
+	report_template
+	report_tgroup
+	report_tusage
+	report_msggrps
+	report_nodes
+	report_ngroups
+	report_nhiers
+	report_ndist
+	report_apps
+	report_agroups
+	report_profiles
+	ls | grep "^u_op" | xargs cat
+	ls | grep "^u_ta" | xargs cat
+}
+
+
+{
+	report_cust_scripts
+}
+
+
+{
+	report_db_maint
+
+	[ -n "$(grep -l "^ STATUS_FLAG 1" ${TROUBLET})" ] && \
+	awk "${AWK_LIB}"'/^ TT_CALL / { print "Call for trouble ticket: " get_value() }' ${TROUBLET} |
+	sed -e "s/^/${fixclass}:trouble ticket interface::/"
+
+	report_server_config
+
+	scc_check_file /etc/opt/omni/cell/CellServers "${fixclass}:managed Data Protector servers::" "#"
+	report_sap_spi
+}
+
+
+{
+	remove_tmp_dirs
+}
+
+
+exit 0

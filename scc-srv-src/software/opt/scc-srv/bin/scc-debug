@@ -1,0 +1,130 @@
+#!/bin/sh
+
+# Shell script to collect configuration data of the webinterface of scc-srv for debugging
+# Copyright (C) 2010-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-debug 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_WWW=${SCC_DATA}/www
+export SCC_TMP=/tmp
+
+export SHELL=/bin/sh
+export LANG=C
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};		export PATH
+
+umask 077
+
+SYNTAX="Syntax error, use: ${ProgName} <dir>"
+
+if [ $# -ne 1 ]
+then
+	echo "${SYNTAX}" >&2
+	exit 1
+fi
+
+if [ ! -d "${1}" ]
+then
+	echo "${ProgName}: directory ${1} not found" >&2
+	exit 2
+fi
+
+if [ ! -d "${1}"/All ]
+then
+	echo "${ProgName}: realm ${1}/All not found" >&2
+	exit 2
+fi
+
+for dir in	"${SCC_DATA}"			\
+		"${SCC_DATA}"/transfer/cp	\
+		"${SCC_DATA}"/transfer/mail	\
+		"${SCC_WWW}"			\
+		"${SCC_WWW}"/All		\
+		"${1}"				\
+		"${1}"/All
+do
+	echo "========================="
+	echo "Directory: ${dir}"
+	ls -ld "${dir}"
+done
+
+echo "========================="
+echo "scc-data for transfer: cp"
+ls -la "${SCC_DATA}"/transfer/cp
+
+echo "========================="
+echo "scc-data for transfer: mail"
+ls -la "${SCC_DATA}"/transfer/mail
+
+for file in	/etc/httpd/conf.d/scc.conf		\
+		/etc/apache2/conf.d/scc.conf		\
+		"${SCC_CONF}"/setup.conf			\
+		"${SCC_CONF}"/scc.conf			\
+		"${SCC_DATA}"/transfer/mail_user_group	\
+		"${SCC_WWW}"/index.html			\
+		"${SCC_WWW}"/All/index.html
+do
+	echo "========================="
+	echo "File: ${file}"
+	if [ -f "${file}" ]
+	then
+		cat "${file}"
+	else
+		echo "does not exist"
+	fi
+done
+
+for log_file in /var/opt/scc-srv/data/log/scc.cgi.log		\
+		/var/opt/scc-srv/data/log/scc-transfer.log
+do
+	echo "========================="
+	echo "File: ${log_file}"
+	if [ -f "${log_file}" ]
+	then
+		tail -n 200 "${log_file}"
+	else
+		echo "does not exist (no actions are logged)"
+	fi
+done
+
+echo "========================="
+echo "selinux context of scc-srv directories"
+ls -d /var/opt/scc-srv/data/www/ /var/opt/scc-srv/data/www/* /var/opt/scc-srv/data/www/*/* 2>/dev/null	|
+sort									|
+while read dir
+do
+	if [ -d ${dir} ]
+	then
+		ls -Zd ${dir} 2>/dev/null
+	fi
+done		|
+sort -k 5
+
+exit 0

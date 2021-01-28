@@ -1,0 +1,47 @@
+<!DOCTYPE HTML>
+<HTML lang="en">
+	<HEAD>
+		<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+		<LINK HREF="../custom/style.css" REL="stylesheet" TYPE="text/css">
+		<LINK HREF="../custom/favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+		<TITLE>Searching in snapshots and loogbooks</TITLE>
+	</HEAD>
+	<BODY>
+		<P style="text-align:center"><A HREF="scc-srv/scc-srv-5.html"><IMG SRC="../custom/scc-logo.png" ALT=scc-logo></A></P>
+		<P class="header">Searching in snapshots</P>
+		<P>
+This summary contains the result of searching in the snapshots of a realm.
+This page shows whether a match was found on all/some/none of the systems.
+The data is not sorted.
+		</P>
+		<P class="header">Searching in logbooks</P>
+		<P>
+This summary contains the result of searching in logbook(s) of a realm.
+This page shows whether a match was found on all/some/none of the systems.
+The most recent changes are shown first. 
+		</P>
+		<P class="header">Searching in SMT-data</P>
+		<P>
+This summary contains the result of searching in the SMT-data of a realm.
+This page shows whether a match was found on all/some/none of the systems.
+The data is sorted on software-name.
+The SMT-data is determined by <A HREF="scc-srv/scc-smt.html">scc-smt</A>, 
+that uses the file <SPAN CLASS="filename">custom/scc-smt-select</SPAN> to determine what installed 
+software should be marked as System Management Tool.
+		</P>
+		<P class="header">Searching in Rules-data</P>
+		<P>
+This summary contains the result of searching in the messages of a realm.
+The messages are determined by <A HREF="scc-srv/scc-rules.html">scc-rules</A>, 
+that uses the optional file<SPAN CLASS="filename">custom/scc-rules.conf</SPAN>.
+The order of the data is determined by the rules in the configuration file.
+		</P>
+		<P class="header">Amount of results</P>
+		<P>
+When searching all systems, the matched data is limited to 10 lines per system.
+When only one system is searched, the matched data is limited to 1000 lines.
+To get all resulting data, switch to the command-line and use grep on the corresponding files.
+Except when none or all of the systems matched, a brief summary of the name, model and OS is shown shown for the non-matching systems.
+		</P>
+	</BODY>
+</HTML>

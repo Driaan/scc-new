@@ -1,0 +1,900 @@
+#!/bin/sh
+
+# Shell script to transfer configuration data for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-transfer 6217 2019-03-22 18:46:12Z siemkorteweg $
+ 
+ 
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_TMP=/tmp
+
+export SCC_LOG=${SCC_DATA}/log
+export SCC_SRC=${SCC_DATA}/transfer
+export SCC_ERROR=${SCC_DATA}/transfer/error
+export SCC_DEST=${SCC_DATA}/www/All
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+export LANG=C
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};		export PATH
+
+umask 077
+
+export TMP1_FILE=${SCC_TMP}/scc_transfer1_$$
+export TMP2_FILE=${SCC_TMP}/scc_transfer2_$$
+export TMP3_FILE=${SCC_TMP}/scc_transfer3_$$
+export EXIT_FILE=${SCC_TMP}/scc_exit_$$
+
+trap 'rm -f ${TMP1_FILE} ${TMP2_FILE} ${TMP3_FILE} ${EXIT_FILE}' 0
+trap "exit 2" 1 2 3 15
+
+mkdir -p ${SCC_ERROR}
+
+scc_srv_path="$(sed -n -e 's/^SCC_PATH=//p' ${SCC_CONF}/scc.conf 2>/dev/null)"
+if [ "${scc_srv_path}" ]
+then
+	PATH="${PATH}:${scc_srv_path}"
+fi
+
+scc_web_path="$(sed -n -e 's/^SCC_WEB_PATH=//p' ${SCC_CONF}/scc.conf 2>/dev/null)"
+if [ -z "${scc_web_path}" ]
+then
+	scc_web_path="/"
+fi
+
+scc_save_prev_instance="$(sed -n -e 's/^SCC_SAVE_PREV_INSTANCE=//p' ${SCC_CONF}/scc.conf 2>/dev/null)"
+
+# Add the (likely) directory of the client to path to use scc-log2html.
+client_dir="$(echo "${SCC_BIN}" | sed -e 's/-srv//')"
+if [ -d "${client_dir}" ]
+then
+	PATH="${PATH}:${client_dir}"
+fi
+
+if [ -d /usr/xpg4/bin ]
+then
+	PATH=/usr/xpg4/bin:${PATH}
+fi
+
+# Name of the file from the client part of scc.
+TRANSFER=scc-transfer-data
+
+scc_msg()
+{
+	if [ $# -ne 2 ]
+	then
+		echo "Syntax error, use ${ProgName}: scc_msg <sev> <msg>" >&2
+		exit 2
+	fi
+
+	now=""
+	if [ -f ${logfile} ]
+	then
+		now=$(date '+%Y-%m-%d %H:%M:%S')
+	fi
+
+	case "${1}" in
+	INFO)	if [ -f ${logfile} ]
+		then
+			echo "INFO	${now}	${2}" >> ${logfile}
+		fi
+		return 0;;
+	WARN)	echo "${2}" >&2
+		if [ -f ${logfile} ]
+		then
+			echo "WARN	${now}	${2}" >> ${logfile}
+		fi
+		return 0;;
+	ERROR)	echo "${2}" >&2
+		if [ -f ${logfile} ]
+		then
+			echo "ERROR	${now}	${2}" >> ${logfile}
+		fi
+		exit 1;;
+	SYNTAX)	echo "${2}" >&2
+		exit 2;;
+	*)	echo "${ProgName}: scc_msg: unknown severity: ${1}" >&2
+		exit 2
+	esac
+
+	return 0
+}
+
+# Synopsis:
+#	unpack SCC data from transfer format into snapshot and logbook (data and html).
+#
+# Syntax:
+#	scc_new_unpack <file>
+#
+# Requires:
+#	openssl (for encrypted data), uncompress counterpart of compression program of client
+#
+# Writes (in current directory):
+#	scc.<host>.cur, scc.<host>.log, scc.<host>.html and scc.<host>,log.html
+#
+# Upon failure, a message is issued and the program exits (exit status 1).
+#
+# Steps from transfer format:
+#	- untar files recipe and scc_client_data from specified input file
+#	- determine hostname, uncompression and (optional) encryption from file recipe
+#	- optional decrypt scc_client_data
+#	- uncompress scc_client_data
+#	- untar scc_client_data into the 4 scc data files
+#	- optional remove CR-LF line termination
+#
+scc_new_unpack()
+{
+	client_data="${1}"
+	if [ ! -f "${client_data}" ]
+	then
+		scc_msg ERROR "${ProgName}: cannot access client data: ${client_data}"
+	fi
+
+	contents=$(tar tf "${client_data}" 2>/dev/null | sed -e 's@\./@@g' | sort | tr "\012" " ")
+	if [ "${contents}" != "recipe scc_client_data " ]
+	then
+		scc_msg WARN "${ProgName}: unexpected data in ${client_data}:[${contents}]"
+		rm -f "${client_data}"
+		return 1
+	fi
+
+	tar xf "${client_data}" 2>/dev/null
+	rm -f "${client_data}"
+
+	encrypted="$(grep passphrase recipe)"
+	if [ "${encrypted}" ]
+	then
+		if [ ! -x "$(which openssl 2>/dev/null)" ]
+		then
+			scc_msg ERROR "${ProgName}: missing opensll (required for decryption)" >&2
+		fi
+
+		sed -e '1,/passphrase/d' recipe >encrypted_passphrase
+
+		# - decrypt the pass phrase used by the client
+		openssl	rsautl				\
+			-in encrypted_passphrase	\
+			-out passphrase			\
+			-inkey "${private_key_file}"	\
+			-decrypt
+		rm -f encrypted_passphrase
+
+		# - decrypt the scc-data using the decrypted passphrase
+		openssl	des3				\
+			-in scc_client_data		\
+			-out scc_client_data_plain	\
+			-pass file:passphrase		\
+			-d
+		mv -f scc_client_data_plain scc_client_data
+		rm -f passphrase
+	fi
+
+	# Remove LF for Windows systems: do this after retrieving the encrypted passphrase with binary data.
+	tr -d "\015" <recipe >${TMP1_FILE}
+	mv ${TMP1_FILE} recipe
+
+	compression="$(sed -n -e 's/^compression://p' recipe)"
+	case "${compression}" in
+	gzip)		uncompress=gunzip;;
+	bzip2)		uncompress=bunzip2;;
+	cat)		uncompress=cat;;
+	compress)	uncompress=uncompress;;
+	*)		rm -f recipe scc_client_data
+			scc_msg ERROR "${ProgName}: unknown compression: ${compression}";;
+	esac
+	uncompress_exe="$(which ${uncompress} 2>/dev/null)"
+	if [ ! -x "${uncompress_exe}" ]
+	then
+		rm -f recipe scc_client_data
+		scc_msg ERROR "${ProgName}: unable to uncompress for ${compression}"
+	fi
+
+	${uncompress_exe} <scc_client_data >scc_client.tar
+	rm -f scc_client_data
+
+	client="$(sed -n -e 's/^host://p' recipe)"
+	contents=$(tar tf scc_client.tar 2>/dev/null | sed -e 's@\./@@g' | sort | tr "\012" " ")
+	expected="scc.${client}.cur scc.${client}.html scc.${client}.log scc.${client}.log.html "
+	if [ "${contents}" != "${expected}" ]
+	then
+		rm -f recipe scc_client.tar
+		scc_msg ERROR "${ProgName}: unexpected data from host: ${client}:${contents}, expected:${expected}." >&2
+	fi
+
+	tar xf scc_client.tar 2>/dev/null
+	rm -f scc_client.tar recipe
+
+	# Files from a windows system have CR/LF termination of lines.
+	# Check the first line of the snapshot (should end with a digit) to determine whether lines are terminated with CR/LF.
+	cr_lf=$(head -n 1 scc.${client}.cur | sed -e 's/.*[0-9]//' | wc -c)
+	if [ ${cr_lf} -eq 2 ]
+	then
+		for f in ${contents}
+		do
+			tr -d "\015\0" <${f} >${TMP1_FILE}
+			mv ${TMP1_FILE} ${f}
+		done
+	fi
+
+	scc_data_to_site ${client}
+
+	return 0
+}
+
+# Syntax: scc_untar <host> <tar_file>
+scc_untar()
+{
+	# The working directory is the subdirectory mail/cp in transfer.
+	scc_host="${1}"
+	tar_file="${2}"
+
+	contents=$(tar tf "${tar_file}" 2>/dev/null | sed -e 's@\./@@g' | sort | tr "\012" " ")
+
+	expected="scc.${scc_host}.cur scc.${scc_host}.html scc.${scc_host}.log scc.${scc_host}.log.html "
+
+	if [ "${contents}" != "${expected}" ]
+	then
+		if [ "${contents}" != "recipe scc_client_data " ]
+		then
+			mv "${tar_file}" ${SCC_ERROR}/scc_host.tar
+			scc_msg WARN "${ProgName}: unexpected data from host: ${scc_host}:${contents}, expected:${expected}."
+			return 1
+		fi
+	fi
+
+	tar xf "${tar_file}" 2>/dev/null
+	rm -f "${tar_file}"
+
+	# Files from a windows system have CR/LF termination of lines.
+	# Check the first line of the snapshot to check for CR/LF.
+	# The data on this line ends with a digit.
+	cr_lf=$(head -n 1 scc.${scc_host}.cur | sed -e 's/.*[0-9]//' | wc -c)
+	if [ ${cr_lf} -eq 2 ]
+	then
+		for f in ${contents}
+		do
+			tr -d "\015" <${f} >${TMP1_FILE}
+			mv ${TMP1_FILE} ${f}
+		done
+	fi
+
+	return 0
+}
+
+# Syntax: scc_data_to_site <host>
+scc_data_to_site()
+{
+	scc_host="${1}"
+
+	if [ ! -f scc.${scc_host}.cur -o ! -f scc.${scc_host}.html -o ! -f scc.${scc_host}.log -o ! -f scc.${scc_host}.log.html ]
+	then
+		scc_msg WARN "${ProgName}: missing at least one of the scc files of host ${scc_host}"
+		rm -f scc.${scc_host}.cur scc.${scc_host}.log scc.${scc_host}.html scc.${scc_host}.log.html
+		return 0
+	fi
+
+	contents="scc.${scc_host}.cur scc.${scc_host}.html scc.${scc_host}.log scc.${scc_host}.log.html"
+
+	# Check whether:
+	# - scc.<host>.cur is non-empty and scc.<host>.log is empty
+	# This means that the remote system cannot compare the snapshot for <host>.
+	# Typically this happens when a snapshot of a system is split into several parts and
+	# the parts possibly migrate to other hosts (for example in a cluster).
+	# Another possibility is that a system does not provide diff. In that case,
+	# no logfile is produced and scc-srv should compare.
+	server_compare=""
+	if [ -s scc.${scc_host}.cur -a ! -s scc.${scc_host}.log	 ]
+	then
+		server_compare="yes"
+
+		remark="$(head -n 20 scc.${scc_host}.cur | sed -n -e "s/^var:general::remark://p")"
+
+		# Compare the versions in scc.${scc_host}.cur and ${SCC_DEST}/scc.${scc_host}.cur
+		remote_version="$(head -n 20 scc.${scc_host}.cur | grep "fix:general::layout-version")"
+		server_version=""
+		if [ -f ${SCC_DEST}/scc.${scc_host}.cur ]
+		then
+			server_version="$(head -n 20 ${SCC_DEST}/scc.${scc_host}.cur | grep "fix:general::layout-version")"
+		fi
+
+		restart=""
+		if [ "${remote_version}" != "${server_version}" ]
+		then
+			restart="yes"
+			if [ -z "${remark}" ]
+			then
+				remark="install of SCC release ${remote_version##*:}"
+			fi
+		else
+			# Check wether the client indicates a restart (with identical versions).
+			restart="$(head -n 20 scc.${scc_host}.cur | grep "^var:general::restart:true$")"
+		fi
+
+		if [ "${restart}" ]
+		then
+			# Remove the snapshot that was already present in the destination directory to simulate a restart.
+			rm -f "${SCC_DEST}/scc.${scc_host}.cur"
+		fi
+
+		org_path="${PATH}"
+		scc_path="$(echo ${SCC_BIN} | sed -e 's/-srv//')"
+		PATH="${PATH}:${scc_path}:/opt/scc/bin"
+		which scc-cmp >/dev/null 2>/dev/null
+		if [ $? -eq 1 ]
+		then
+			scc_msg WARN "${ProgName}: cannot access scc-cmp in $PATH"
+			rm -f scc.${scc_host}.cur scc.${scc_host}.log scc.${scc_host}.html scc.${scc_host}.log.html
+			return 0;	# Do not overwrite existing snapshot.
+		fi
+
+		# Copy the existing logfile from the destination (realm) to our directory to add any changes.
+		# Note that setting compare to use context diff for the scc-srv host, also sets this for clients without diff.
+		rm -f scc.${scc_host}.log
+		touch ${SCC_DEST}/scc.${scc_host}.log
+		cp ${SCC_DEST}/scc.${scc_host}.log scc.${scc_host}.log
+		scc-cmp "${SCC_DEST}/scc.${scc_host}.cur" scc.${scc_host}.cur "" "" >>scc.${scc_host}.log
+
+		which scc-log2html >/dev/null 2>/dev/null
+		if [ $? -eq 1 ]
+		then
+			scc_msg WARN "${ProgName}: cannot access scc-log2html in $PATH"
+		else
+			scc-log2html ${scc_host} <scc.${scc_host}.log >scc.${scc_host}.log.html
+		fi
+
+		PATH=${org_path}
+	fi
+
+	for s in html log.html
+	do
+		sed	-e "s@^<LINK HREF=\"style.css@<LINK HREF=\"custom/style.css@"								\
+			-e "s@<HEAD>@<HEAD><LINK HREF=\"${scc_web_path}/All/custom/favicon.ico\" REL=\"shortcut icon\" TYPE=\"image/x-icon\">@"	\
+				<scc.${scc_host}.${s}												\
+				>${TMP1_FILE}
+		mv ${TMP1_FILE} scc.${scc_host}.${s}
+	done
+
+	# Check whether the FQDN is used when sending the files. In that case we
+	# have to update the URL's to the logbook/snapshot.
+	if [ "${scc_host}" != "${scc_host%%.*}" ]
+	then
+		for s in html log.html
+		do
+			sed	-e "s/HREF=scc\.${scc_host%%.*}.html/HREF=scc.${scc_host}.html/g"		\
+				-e "s/HREF=\"scc\.${scc_host%%.*}.html/HREF=\"scc.${scc_host}.html/g"		\
+				-e "s/HREF=scc\.${scc_host%%.*}.log.html/HREF=scc.${scc_host}.log.html/g"	\
+				-e "s/HREF=\"scc\.${scc_host%%.*}.log.html/HREF=\"scc.${scc_host}.log.html/g"	\
+					<scc.${scc_host}.${s} >${TMP1_FILE}
+			mv ${TMP1_FILE} scc.${scc_host}.${s}
+		done
+	fi
+
+	# When the snapshot exists, use its permissions and user/group. Otherwise, use
+	# the permissions and user/group of the target directory.
+	if [ -f "${SCC_DEST}"/scc.${scc_host}.cur ]
+	then
+		example="${SCC_DEST}"/scc.${scc_host}.cur
+	else
+		example="${SCC_DEST}"
+	fi
+	# We are only interested in the read-permissions of the directory.
+	set dummy $(ls -ld "${example}" )
+	case "${2}" in
+	?r??r??r??*)	new_mode=0444; umask 333;;
+	?r??r??-??*)	new_mode=0440; umask 337;;
+	?r??-??-??*)	new_mode=0400; umask 377;;
+	?r??-??r??*)	new_mode=0404; umask 373;;
+	*)		new_mode=0400; umask 077;;
+	esac
+	new_owner_group="${4}:${5}"
+
+	# Untarred files get the owner/group/permissions from the source file. Override these settings.
+	chmod ${new_mode} ${contents}
+	chown "${new_owner_group}" ${contents}
+
+	if [ "${scc_save_prev_instance}" != "no" ]
+	then
+		# The new log file must contain the date-time of the current snapshot on the server. 
+		# When this is not the case, the new log file may be an old restore,
+		# or the data arrives in the wrong order (when the mail connection was down for some time).
+		# Do not check with empty (test)files and with log-files from -m option.
+		cur_log_cnt=0
+		if [ -f "${SCC_DEST}"/scc.${scc_host}.log ]
+		then
+			cur_log_cnt="$(wc -l <"${SCC_DEST}"/scc.${scc_host}.log)"
+		fi
+		if [	-s "${SCC_DEST}"/scc.${scc_host}.cur -a	\
+			-s scc.${scc_host}.cur -a		\
+			-s scc.${scc_host}.log -a		\
+			-z "${server_compare}" -a		\
+			${cur_log_cnt} -ne 1 ]
+		then
+			# The first lines of a snapshot contain the date and time.
+			# Combine the two lines to get the timestamp.
+			snap_stamp=$(head -n 10 "${SCC_DEST}"/scc.${scc_host}.cur		|
+					sed -n	-e 's/.*::date://p'		\
+						-e 's/.*::start time://p'			|
+					tr "\012" ":")
+			grep -l "^${snap_stamp}" scc.${scc_host}.log >/dev/null 2>/dev/null
+			if [ $? -ne 0 ]
+			then
+				# The run-date of the snapshot on the server does not appear in the
+				# data that we are processing. It is possible that the data arrives in
+				# the wrong order due to problems in the mail-transfer.
+				# Check whether the run-date of the new data appears in the
+				# data that is already in the realm.
+				marker_new_log="$(tail -n 1 scc.${scc_host}.log)"
+				grep -l "^${marker_new_log}$" "${SCC_DEST}/scc.${scc_host}.log" >/dev/null 2>/dev/null
+				if [ $? -ne 0 ]
+				then
+					snap_date=${snap_stamp%:*}
+					mv "${SCC_DEST}/scc.${scc_host}.cur" "${SCC_DEST}/scc.${scc_host}.cur.${snap_date}"
+					mv "${SCC_DEST}/scc.${scc_host}.log" "${SCC_DEST}/scc.${scc_host}.log.${snap_date}"
+					echo "${ProgName}: saved snapshot and log file for ${scc_host} at ${snap_date}"
+				fi
+			fi
+		fi
+	fi
+
+	if [ ! -s scc.${scc_host}.cur -a ! -s scc.${scc_host}.log ]
+	then
+		scc_msg WARN "${ProgName}: received empty snapshot and log file from ${scc_host}"
+		rm -f scc.${scc_host}.cur scc.${scc_host}.log
+		return 0;	# Do not overwrite existing snapshot.
+	fi
+
+	# Also remove the csv file with the statistics of the previous logbook as they are no longer valid.
+	( cd "${SCC_DEST}"; rm -f ${contents} scc.${scc_host}.csv )
+	mv ${contents} "${SCC_DEST}"
+
+        # The mv command does not set the correct selinux security context.
+	if [ -x /usr/sbin/semanage -a -x /sbin/restorecon ]
+	then
+		# Restorecon only works when semanage has been used,
+		# which will cause a problem when semanage is installed after installation of scc-srv.
+		( cd "${SCC_DEST}"; /sbin/restorecon ${contents} )
+	elif [ -x /usr/bin/chcon ]
+	then
+		( cd "${SCC_DEST}"; /usr/bin/chcon --reference="${SCC_DEST}" ${contents} 2>/dev/null )
+	fi
+
+	scc_msg INFO "${ProgName}: received data from ${scc_host}"
+
+	return 0
+}
+
+SYNTAX="Syntax error, use: ${ProgName} [ -m|--minimal ] [ -u|--unpacked <host> ] [ -e|--encrypted ] [ -l|--log <log> ] [ -s|--source <src_dir> ] [ <dest_dir> ]"
+
+MISSING_OPT_ARG="${ProgName}: Syntax error, missing argument for option:"
+logfile=${SCC_LOG}/scc-transfer.log
+decrypt_content=0
+minimal=""
+unpacked_host=""
+while [ $# -gt 0 ]
+do
+	case "${1}" in
+	-m|--minimal)	minimal="yes"
+			shift 1;;
+
+	-u|--unpacked)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			unpacked_host="${2}"
+			shift 2;;
+
+	-e|--encrypted)	decrypt_content=1
+			shift 1;;
+
+	-l|--log)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			logfile=$2
+			touch ${logfile}	# when log file is specified, make sure that it exist to start logging
+			shift 2;;
+
+	-s|--source)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			SCC_SRC="${2}"
+			shift 2;;
+
+	-*)		scc_msg SYNTAX "${SYNTAX}";;
+
+	*)		break;;
+	esac
+done
+
+if [ ! -d "${SCC_SRC}" ]
+then
+	scc_msg ERROR "${ProgName}: missing source-directory: ${SCC_SRC}"
+fi
+
+if [ $# -gt 1 ]
+then
+	scc_msg SYNTAX "${SYNTAX}"
+fi
+if [ $# -eq 1 ]
+then
+	SCC_DEST="${1}"
+fi
+
+if [ ! -d "${SCC_DEST}" ]
+then
+	scc_msg ERROR "${ProgName}: missing destination-directory: ${SCC_DEST}"
+fi
+
+if [ "${minimal}" -a -z "${unpacked_host}" ]
+then
+	scc_msg ERROR "${ProgName}: -m option requires -u option"
+fi
+
+# Successfull, but nothing transferred.
+echo "0" >${EXIT_FILE}
+
+which gunzip 2>/dev/null >/dev/null
+gunzip_absent=$?
+which uncompress 2>/dev/null >/dev/null
+uncompress_absent=$?
+which openssl 2>/dev/null >/dev/null
+openssl_absent=$?
+which uudecode 2>/dev/null >/dev/null
+uudecode_absent=$?
+
+# When this option is configured, the file has to exist. Even when data is emailed without encryption.
+export private_key_file="$(sed -n 's/^SCC_PRIV_HOST_KEY=//p' ${SCC_CONF}/scc.conf)"
+if [ "${private_key_file}" -a ! -s "${private_key_file}" ]
+then
+	scc_msg ERROR "${ProgName}: key-file ${private_key_file} not found"
+fi
+
+cd "${SCC_SRC}"
+
+if [ "${unpacked_host}" ]
+then
+	if [ "${minimal}" ]
+	then
+		# Do not overwite existing data with minimal data.
+		if [	-f ${SCC_DEST}/scc.${unpacked_host}.cur		-o	\
+			-f ${SCC_DEST}/scc.${unpacked_host}.log		-o	\
+			-f ${SCC_DEST}/scc.${unpacked_host}.html	-o	\
+			-f ${SCC_DEST}/scc.${unpacked_host}.log.html ]
+		then
+			exit 0
+		fi
+
+		h_n="${unpacked_host%%.*}"
+		d_n="${unpacked_host#*.}"
+		if [ "${h_n}" = "${d_n}" ]
+		then
+			d_n=""
+		fi
+
+		now_date="$(date '+%Y-%m-%d')"
+		now_time="$(date '+%H.%M.%S')"
+		{
+			echo "fix:general::hostname:${h_n}"
+			echo "fix:general::domain:${d_n}"
+			echo "var:general::date:${now_date}"
+			echo "var:general::start time:${now_time}"
+		} >scc.${h_n}.cur
+		echo "${now_date}:${now_time}:result::(re)start"	>  scc.${h_n}.log
+
+		for file in scc.${h_n}.html scc.${h_n}.log.html
+		do
+			cat >${file} <<-EndOfTxt
+				<!DOCTYPE HTML>
+				<html> <head> <title>empty placeholder</title> </head> <body> <p>placeholder</p> </body> </html>
+			EndOfTxt
+		done
+
+		scc_data_to_site "${h_n}"
+
+		rm -f scc.${h_n}.cur scc.${h_n}.log scc.${h_n}.html scc.${h_n}.log.html
+	else
+		scc_data_to_site "${unpacked_host}"
+	fi
+	exit 3
+fi
+
+# Check the directories "cp" and "mail". Check scc (for rcp/scp) and scc-receive-mail (for mail/smtp)
+# to find out how the files are placed in these directories.
+if [ ! -d "cp" -a ! -d "mail" ]
+then
+	scc_msg ERROR "${ProgName}: missing directories cp and mail in ${SCC_SRC}"
+fi
+if [ -d "cp" ]
+then
+	cd cp
+	find . -type d			|
+	while read dir
+	do
+		cd ${SCC_SRC}/cp/"${dir}"
+		ls -tr				|
+		grep '.signal$'			|
+		while read f
+		do
+			# Check the code in scc on the client
+			if [ ! -f ${f} -o ! -s ${f} ]
+			then
+				continue		# nothing there or transfer in progress
+			fi
+			rm -f ${f}
+
+			# For server-side compares (no diff or split-file) multiple runs might have to be processed.
+			# The format of the name of these files is: scc.<host>@<date>.signal and scc.<host>@<date>.<suffix>.
+			# The names of the files in the tar archive do not contain the "@<date>" part.
+			host="${f%.signal}"
+			host="${host#scc.}"
+
+			ls -tr scc.${host}.* 2>/dev/null	|
+			while read data
+			do
+				case "${data}" in
+				scc.${host}.data)	scc_new_unpack scc.${host}.data
+							if [ $? -eq 0 ]
+							then
+								echo "3" >${EXIT_FILE}
+							fi;;
+				scc.${host}.tar*)	# old package format
+							if [ -f scc.${host}.tar.Z ]
+							then
+								if [ ${uncompress_absent} -eq 1 ]
+								then
+									if [ ${gunzip_absent} -eq 1 ]
+									then
+										scc_msg ERROR "${ProgName}: uncompress not found"
+									else
+										# gunzip can also handle compressed files.
+										gunzip scc.${host}.tar.Z
+									fi
+								else
+									uncompress scc.${host}.tar.Z
+								fi
+							elif [ -f scc.${host}.tar.gz ]
+							then
+								if [ ${gunzip_absent} -eq 1 ]
+								then
+									scc_msg ERROR "${ProgName}: gunzip not found"
+								else
+									gunzip scc.${host}.tar.gz
+								fi
+							elif [ ! -f scc.${host}.tar ]
+							then
+								scc_msg WARN "${ProgName}: missing data for host: ${host%@*}"
+							fi
+
+							if [ -f scc.${host}.tar ]
+							then
+								scc_untar "${host%@*}" "scc.${host}.tar"
+								if [ $? -eq 0 ]
+								then
+									scc_data_to_site "${host%@*}"
+									echo "3" >${EXIT_FILE}
+								fi
+							fi;;
+				esac
+			done	# while read data
+		done	# while read signal
+	done	# process all sub-directories in transfer/cp
+fi
+
+cd "${SCC_SRC}"
+if [ -d "mail" ]
+then
+	cd "mail"
+
+	# When scc-transfer was not activated for some time, several snapshots from a host
+	# can be present. To end up with the most recent version, we start to process the 
+	# files with the oldest.
+	ls -tr			|
+	grep "^done_"		|
+	while read f
+	do
+		if [ ! -f "${f}" -o -s "${f}" ]
+		then
+			continue		# nothing there or transfer in progress
+		fi
+
+		if [ ${uudecode_absent} -eq 1 ]
+		then
+			scc_msg ERROR "${ProgName}: uudecode not found"
+		fi
+
+		id="${f#done_}"
+		if [ ! -f "file_${id}" ]
+		then
+			scc_msg WARN "${ProgName}: missing data for id: ${id}"
+			rm -f ${f}
+			continue
+		fi
+
+		sender="$(awk '/^From/ { print $2 }' "file_${id}" | head -n 1)"
+
+		passphrase_file="passphrase"				# This should be the same filename as used in scc!
+
+		# Extract and decode the data from the data-file.
+		# Make sure we only decode "our" own file.
+		sed -n -e '/^begin [0-7][0-7]* '"${TRANSFER}"'/,$p' "file_${id}" >${TMP2_FILE}
+		if [ -s ${TMP2_FILE} ]
+		then
+			# uuencoded file identifies filename of extracted data.
+			uudecode <${TMP2_FILE} 2>/dev/null
+		else
+			# crude attempt to get base64 encoded data from the file:
+			grep "^[a-zA-Z0-9+/][a-zA-Z0-9+/]*$" ${TMP2_FILE}	|
+			base64 -i -d >${TMP3_FILE} 2>/dev/null
+
+			# When the file is empty, neither uuencode nor base64 were used to transfer data via email
+			# or base64 is not installed.
+			if [ -s ${TMP3_FILE} ]
+			then
+				tar xf ${TMP3_FILE} ${passphrase_file} 2>/dev/null
+				if [ -s ${passphrase_file} ]		# encrypted?
+				then
+					mv ${TMP3_FILE} ${TRANSFER}.e.tar
+				else
+					mv ${TMP3_FILE} ${TRANSFER}
+				fi
+				rm -f ${passphrase_file}
+			fi
+			rm -f ${TMP2_FILE} ${TMP3_FILE}
+		fi
+		rm -f file_${id} done_${id}
+
+		# Data from a pipe gets mode 000 from uuencode on some systems.
+		chmod u+r ${TRANSFER}* 2>/dev/null
+
+		# Check whether the data has been encrypted
+		if [ -f ${TRANSFER}*.e.tar ]
+		then
+			if [ ${openssl_absent} -eq 1 ]
+			then
+				scc_msg ERROR "${ProgName}: openssl not found"
+			fi
+
+			transfer=$(basename ${TRANSFER}*.e.tar .e.tar)
+
+			# Check the corresponding code in scc on the client
+			# - check the contents of the tar-archive
+			# - untar to receive ${passphrase_file}.e and ${TRANSFER}${suffix}.e
+			contents=$(tar tf "${transfer}.e.tar" 2>/dev/null | sed -e 's@\./@@g' | sort | tr "\012" " ")
+			case "${contents}" in
+			${passphrase_file}.e?${TRANSFER}*.e?)
+				:		# OK
+				;;
+			*)
+				mv ${transfer}.e.tar ${SCC_ERROR}/scc-transfer.e.tar
+				scc_msg WARN "${ProgName}: unexpected data from ${sender}:${contents}, expected:${passphrase_file}.e ${TRANSFER}*.e"
+				continue
+				;;
+			esac
+			tar xf ${transfer}.e.tar 2>/dev/null
+			rm -f ${transfer}.e.tar
+
+			# - decrypt the pass phrase used by the client
+			openssl	rsautl				\
+				-in ${passphrase_file}.e	\
+				-out ${passphrase_file}		\
+				-inkey "${private_key_file}"	\
+				-decrypt
+			rm -f ${passphrase_file}.e
+
+			# Determine the suffix of the SCC-data.
+			suffix=$(echo ${TRANSFER}*.e)
+			suffix=${suffix##${TRANSFER}}
+			suffix=${suffix%.e}
+
+			# - decrypt the scc-data using the decrypted passphrase
+			openssl	des3				\
+				-in ${TRANSFER}${suffix}.e	\
+				-out ${TRANSFER}${suffix}	\
+				-pass file:${passphrase_file}	\
+				-d
+			rm -f ${TRANSFER}${suffix}.e ${passphrase_file}
+		else
+			if [ ${decrypt_content} -eq 1 ]
+			then
+				scc_msg WARN "${ProgName}: non-encrypted mail transfer from ${sender}"
+				rm -f ${TRANSFER}* 2>/dev/null
+				continue
+			fi
+		fi
+
+		# Accept only ${TRANSFER}.gz, ${TRANSFER}.Z or ${TRANSFER}
+		if [ -f ${TRANSFER}.gz ]
+		then
+			if [ ${gunzip_absent} -eq 1 ]
+			then
+				scc_msg ERROR "${ProgName}: gunzip not found"
+			else
+				gunzip ${TRANSFER}.gz
+			fi
+		elif [ -f ${TRANSFER}.Z ]
+		then
+			if [ ${uncompress_absent} -eq 1 ]
+			then
+				# gunzip can also handle compressed files.
+				if [ ${gunzip_absent} -eq 1 ]
+				then
+					scc_msg ERROR "${ProgName}: uncompress not found"
+				else
+					gunzip ${TRANSFER}.Z
+				fi
+			else
+				uncompress ${TRANSFER}.Z
+			fi
+		elif [ ! -f ${TRANSFER} ]
+		then
+			scc_msg WARN "${ProgName}: missing ${TRANSFER} in email: file_${id} from ${sender}"
+		else
+			# The client could not find compress or gzip and sent the plain tar-file.
+			# Or base64 was used to transfer data and the extension of the file name is unknown.
+			# Another (ancient) possibility is a release 1.2.10 scc-transfer on the client,
+			# This version sent the compressed tar-file without suffix by email. Try to 
+			# gunzip/uncompress the file.
+			gunzip <${TRANSFER} >${TRANSFER}.tmp 2>/dev/null
+			if [ $? -ne 0 ]
+			then
+				rm -f ${TRANSFER}.tmp
+			else
+				uncompress <${TRANSFER} >${TRANSFER}.tmp 2>/dev/null
+				if [ $? -ne 0 ]
+				then
+					rm -f ${TRANSFER}.tmp
+				fi
+			fi
+			if [ -f ${TRANSFER}.tmp ]
+			then
+				# The file contained a compressed archive. Proceed with the tar file.
+				mv -f ${TRANSFER}.tmp ${TRANSFER}
+			else
+				# assume an uncompressed tar archive and leave that to function untar.
+				:
+			fi
+		fi
+
+		if [ -f ${TRANSFER} ]
+		then
+			if [ "$(tar tf ${TRANSFER} 2>/dev/null | grep recipe)" ]
+			then
+				scc_new_unpack ${TRANSFER}
+			else
+				host=$(tar tf ${TRANSFER} 2>/dev/null | head -n 1 | sed -e 's/^scc\.//' -e 's/\.cur$//')
+				scc_untar "${host}" ${TRANSFER}
+				if [ $? -eq 0 ]
+				then
+					scc_data_to_site "${host}"
+					echo "3" >${EXIT_FILE}
+				fi
+			fi
+		fi
+	done
+fi
+
+exit "$(cat ${EXIT_FILE})"

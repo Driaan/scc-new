@@ -1,0 +1,110 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-debug</TITLE></HEAD><BODY>
+<H1>scc-debug(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-debug - collect configuration and logging data of the web-interface
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-srv	1.19.44
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-debug &lt;dir&gt;
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program collects configuration and optional logging data for analysis
+	when the web-interface does not work correctly. The data is produced on 
+	stdout and can be used to remotely assist in the analysis of problems.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	None.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;dir&gt;           The top-directory of scc-srv data from in the web hierarchy.
+	                For example /var/www/html/applications/scc or /srv/www/htdocs/applications/scc.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-debug &lt;dir&gt;
+	A syntax error has been detected.
+
+	scc-debug: directory &#39;&lt;dir&gt;&#39; not found
+	The specified directory is not found.
+
+	scc-debug: realm &#39;&lt;dir&gt;&#39;/All not found
+	The specified directory does not contain the realm All. Use the correct directory
+	or link the scc-srv data file hierarchy and the webserver hierarchy.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	/var/opt/scc-srv/data/transfer - base-directory for transferred data
+	/var/opt/scc-srv/data/www - base-directory for separate realms
+	/var/opt/scc-srv/data/log/scc.cgi.log - log file for CGI-script
+	/var/opt/scc-srv/data/log/scc-transfer.log - default log file
+
+	Argument: &lt;dir&gt; top directory of scc-srv in the web-hierarchy
+	/var/opt/scc-srv/conf/scc.conf - configuration file, records
+	        the settings of the -d option
+	/var/opt/scc-srv/data/transfer/mail_user_group - record -m option for upgrade of
+	        scc-srv
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-update is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2010-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+	<A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+	<A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+	<A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6217 $
+
+</PRE>
+</BODY></HTML>

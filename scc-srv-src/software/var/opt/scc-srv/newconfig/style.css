@@ -1,0 +1,120 @@
+/*
+ * Default style sheet for scc-srv.
+ *
+ * By default, this file is a symbolic link to <doc_root>/<scc_web_path>/custom/style.css
+ * Edit this last file to customize all realms in one step. To customize a specific realm,
+ * remove the link and create a specific style.css.
+ *
+ * SCC-release:	1.19.44
+ * ID:		$Id: style.css 6182 2018-05-27 15:26:42Z siemkorteweg $
+ */
+
+/*
+ * The following tag is used to indicate the sort column in the summary page.
+ */
+.sort	{
+	color: white;
+}
+
+/*
+ * The following tag is used to highlight warnings.
+ */
+.warning	{
+	color: red;
+}
+
+/*
+ * The following tag is used to indicate filenames.
+ */
+.filename	{
+	font-style: italic;
+}
+
+/*
+ * The following tag is used for a monotype font in displaying results in tables.
+ */
+.mono   {
+	font-family: monospace, monospace;
+}
+
+/*
+ * The following tag is used to format the headers of the scc-srv pages.
+ */
+P.header {
+	font-weight: bold;
+	font-size: 110%;
+}
+
+/*
+ * The following tag is used to specify the color of variable data in the snapshot.
+ * In previous versions of scc the variable SCC_VAR_COLOR was used for this purpose.
+ */
+.scc_var {
+	color: purple;
+}
+
+/*
+ * The following tags are used to specify the colors of the lines with the changed entries in log file.
+ */
+.new {
+	color: blue;
+}
+
+.old {
+	color: red;
+}
+
+.ctx {
+	color: black;		/* default color */
+}
+
+/*
+ * The following tags are used to specify the colors used for the output when comparing systems.
+ * Used to be hard-coded in previous versions of scc-srv.
+ */
+.scc_sys_a {
+	color: red;
+}
+.scc_sys_b {
+	color: blue;
+}
+
+table.SCC {
+	border-spacing: 0px;
+	background: #FFC0C0;
+	border: 0.1em solid black; 
+}
+table.SCC th {
+	text-align: left;
+	font-weight: normal;
+	padding: 0.1em 0.5em;
+}
+table.SCC td {
+	border: 0px solid black;
+	padding: 0.1em 0.5em;
+}
+/* Table heading: full red	*/
+table.SCC thead th {
+	text-align: center;
+	font-weight: bold;
+	background-color: red;
+	border-bottom: 1px solid black;
+	color: white;
+}
+
+/* Even rows, not emphasised (default background color of table)	*/
+
+/* Even rows, emphasised	*/
+table.SCC tr.Even_Emp {
+	background: #FFA0A0;
+} 
+
+/* Odd rows, not emphasised	*/
+table.SCC tr.Odd {
+	background: #FF8080;
+} 
+
+/* Odd rows, emphasised	*/
+table.SCC tr.Odd_Emp {
+	background: #FF6060;
+} 

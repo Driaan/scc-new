@@ -1,0 +1,518 @@
+#!/bin/sh
+
+# Shell script pull scc-data from clients.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-pull 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_WWW=${SCC_DATA}/www
+export SCC_TMP=/tmp
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+export LANG=C
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};		export PATH
+
+if [ -d /usr/xpg4/bin ]
+then
+	PATH=/usr/xpg4/bin:${PATH}
+fi
+
+export CLIENT_FILE=${SCC_TMP}/scc_pull_$$
+export NOTIFY_FILE=${SCC_TMP}/scc_notify_$$
+hostname >${NOTIFY_FILE}
+trap 'rm -f ${CLIENT_FILE} ${NOTIFY_FILE}' 0
+
+log_file="${SCC_DATA}/log/scc-pull.log"
+
+pull_log()
+{
+	if [ -w ${log_file} ]
+	then
+		# record current process id in case scc-pull runs multiple sessions in parallel
+		echo "$(date '+%Y-%m-%d %H:%M:%S') [$$] $*" >>${log_file}
+	fi
+}
+
+pull_log "start scc-pull"
+
+timeout="$(which timeout 2>/dev/null)"
+if [ -x "${timeout}" ]
+then
+	timeout="${timeout} 60"		# background run and file transfer
+	timeout_run="${timeout} 600"	# synchronous run
+fi
+
+# On some systems remsh does not exist, use rsh instead.
+which remsh >/dev/null 2>/dev/null
+if [ $? -eq 1 ]
+then
+	alias remsh="$(which rsh 2>/dev/null)"
+fi
+alias ovdeploy=/opt/OV/bin/ovdeploy
+
+SYNTAX="Syntax error, use: ${ProgName} [ -B <bin> ]
+	[ -c <remark> ]
+	[ -d <delay> ]
+	[ -D <data> ]
+	[ -e <module> ]
+	[ -f ]
+	[ -I <ident> ]
+	[ -k ]
+	[ -m <max> ]
+	[ -n ]
+	[ -N ]
+	[ -o <option> ]
+	[ -p <prog> ]
+	[ -P <port> ]
+	[ -s <dest> ]
+	[ -U ]
+	[ -u <user> ]
+	[ -R <realm> | -F <file> | -L <list> ]+"
+
+client_bin_dir="$(echo ${SCC_BIN} | sed -e 's/scc-srv/scc/')"
+client_data_dir="$(echo ${SCC_DATA}/transfer | sed -e 's/scc-srv/scc/')"
+
+ssh_config=""
+if [ -r ${SCC_CONF}/scc.conf ]
+then
+	ssh_config="$(sed -n 's/^SCC_SSH_CONFIG=//p' ${SCC_CONF}/scc.conf)"
+	if [ -r "${ssh_config}" ]
+	then
+		ssh_config=" -F ${ssh_config} "
+	fi
+fi
+
+delay=600
+do_run=1
+client_options=" -p pull "
+
+dest=${SCC_DATA}/transfer/cp
+port=22
+
+MISSING_OPT_ARG="${ProgName}: Syntax error, missing argument for option:"
+exact_match=0
+prog="ssh"
+# Remote activation of scc is alway done by root.
+# The following user transfers the files from the clients to the server.
+# This feature has been suggested by Sven Weise.
+remote_user="root"
+user="$(id | sed -e 's/).*//' -e 's/.*(//')"
+if [ "${user}" != "root" ]
+then
+	remote_user="${user}"
+fi
+keep=0
+ssh_options="-q -o ConnectTimeout=30 "
+if ! tty -s 2>/dev/null
+then
+	ssh_options="${ssh_options} -o BatchMode=yes "
+fi
+upstream=0
+notify=0
+>${CLIENT_FILE}
+while [ $# -ge 1 ]
+do
+	case "${1}" in
+	-F)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		if [ "${2}" != "-" -a ! -f "${2}" ]
+		then
+			echo "${ProgName}: cannot find file ${2}" >&2
+			exit 2
+		fi
+		sed	-e "/^#/d"		\
+			-e "/^[ 	]*$/d"	\
+				< "${2}"	\
+				>>${CLIENT_FILE}
+		shift 2
+		;;
+
+	-R)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		if [ ! -d "${SCC_WWW}/${2}" ]
+		then
+			echo "${ProgName}: cannot find realm ${2}" >&2
+			exit 2
+		fi
+		ls "${SCC_WWW}/${2}"			|
+		sed -n	-e 's@scc.@@'		\
+			-e 's@\.cur$@@p'	\
+				>>${CLIENT_FILE}
+		shift 2
+		;;
+
+	-L)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		echo "${2}"		|
+		tr "," "\012" >>${CLIENT_FILE}
+		shift 2
+		;;
+
+	-B)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		client_bin_dir="${2}"
+		shift 2
+		;;
+
+	-D)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		client_data_dir="${2}"
+		shift 2
+		;;
+
+	-d)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		delay="${2}"
+		case "${2}" in
+		[0-9]*)	delay=${2}
+			;;
+		*)	echo "${ProgName}: non-numeric delay: ${2}" >&2
+			exit 2;;
+		esac
+		shift 2
+		;;
+
+	-f)	client_options="${client_options} ${1}"
+		shift 1
+		;;
+
+	-I)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		if [ ! -f "${2}" ]
+		then
+			echo "${ProgName}: cannot find file ${2}" >&2
+			exit 2
+		fi
+		ssh_options="${ssh_options} -i ${2} "
+		shift 2
+		;;
+
+	-k)	keep=1
+		shift 1
+		;;
+
+	-n)	do_run=0
+		shift 1
+		;;
+
+	-N)	notify=1
+		shift 1
+		;;
+
+	-o)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		case "${2}" in
+		no_hosts)	ssh_options="${ssh_options} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+				;;
+		hostname)	exact_match=1
+				;;
+		ssh_opt)	[ -z "${3:-}" ] && echo "${MISSING_OPT_ARG}: ${2}" >&2 && exit 1
+				if [ ! -f "${3}" ]
+				then
+					echo "${ProgName}: cannot find file ${3}" >&2
+					exit 2
+				fi
+				ssh_config=" -F ${3} "
+				;;
+		*)		echo "${ProgName}: unknown value for -o option: ${2}" >&2
+				exit 1;;
+		esac
+		shift 2;;
+
+	-p)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		case "${2}" in
+		ssh|rsh)	prog="${2}";;
+		ovdeploy)	if [ ! -x /opt/OV/bin/ovdeploy ]
+				then
+					echo "${ProgName}: cannot find ovdeploy" >&2
+					exit 2
+				fi
+				prog=ovdeploy
+				;;
+		*)		echo "${ProgName}: unsupported method: ${2}" >&2
+				exit 2
+				;;
+		esac
+		shift 2
+		;;
+
+	-P)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		port="${2}"
+		shift 2
+		;;
+
+	-s)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		if [ ! -d "${2}" ]
+		then
+			echo "${ProgName}: cannot find directory ${2}" >&2
+			exit 2
+		fi
+		dest="${2}"
+		shift 2
+		;;
+
+	-m|-e|-c)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		client_options="${client_options} ${1} \"${2}\""
+		shift 2
+		;;
+
+	-u)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+		client_options="${client_options} ${1} \"${2}\""
+		remote_user=${2}
+		shift 2
+		;;
+
+	-U)	upstream=1
+		shift 1
+		;;
+
+	*)	echo "${SYNTAX}" >&2
+		exit 1;;
+	esac
+done
+
+if [ ! -s ${CLIENT_FILE} ]
+then
+	echo "${ProgName}: no systems specified via -R, -L and -S options" >&2
+	pull_log "end scc-pull, no systems specified"
+	exit 2
+fi
+
+if [ -d "${dest}" -a ! -w "${dest}" ]
+then
+	echo "${ProgName}: unable to copy files to destination ${dest}" >&2
+	exit 2
+fi
+
+ssh_options="${ssh_options} ${ssh_config} "
+
+if [ ${delay} -gt 0 ]
+then
+	client_options="${client_options} -d $(( delay / 2 ))"
+fi
+
+if [ ${do_run} -eq 1 ]
+then
+	SCC="${client_bin_dir}/scc"
+	client_cmd="${SCC} ${client_options} </dev/null >\"${client_data_dir}/scc-pull.log\" 2>&1"
+	sort -u ${CLIENT_FILE}				|
+	while read client
+	do
+		pull_log "system ${client} start run"
+		case "${prog}" in
+		ovdeploy)	if [ ${delay} -gt 0 ]
+			then
+				${timeout} ovdeploy -ovrg server -cmd nohup -par "${client_cmd} &" -host ${client}
+			else
+				${timeout_run} ovdeploy -ovrg server -cmd "${SCC}" -par "${client_options}" -host ${client}
+			fi
+			;;
+
+		rsh)	if [ ${delay} -gt 0 ]
+			then
+				${timeout} remsh -n ${client} "nohup ${client_cmd} &" >/dev/null 2>&1
+			else
+				${timeout_run} remsh -n ${client} "${client_cmd}" >/dev/null 2>&1
+			fi
+			;;
+
+		ssh)	if [ ${delay} -gt 0 ]
+			then
+				${timeout} ssh -n -p ${port} ${ssh_options} ${client} "nohup ${client_cmd} &" >/dev/null 2>&1
+			else
+				${timeout_run} ssh -n -p ${port} ${ssh_options} ${client} "${client_cmd}" >/dev/null 2>&1
+			fi
+			;;
+
+		esac
+	done
+
+	if [ ${delay} -gt 0 ]
+	then
+		pull_log "start delay [${delay}]"
+		sleep ${delay}
+		pull_log "end delay [${delay}]"
+	fi
+fi
+
+# Make certain that we have an empty temporary sub-directory.
+export tmp_pull_dest=${dest}/scc-pull-$$
+rm -rf ${tmp_pull_dest}
+mkdir -p ${tmp_pull_dest}
+cd ${tmp_pull_dest}
+
+# We cannot use a variable to indicate errors from within the loop, as the commands in the
+# loop are executed by a sub-shell. Therefore we use a file to indicate errors.
+exit_status=0
+export MISSING_DATA=missing_data				# Not (yet) present in the emptied directory.
+sort -u ${CLIENT_FILE}				|
+while read client
+do
+	pull_log "system ${client} start data retrieval"
+	signal='scc.*.signal'
+	if [ ${exact_match} -eq 1 ]
+	then
+		signal="scc.${client}.signal"
+	fi
+	case "${prog}" in
+	ovdeploy)	${timeout} ovdeploy -ovrg server -download -dir "${client_data_dir}" -targetdir ${tmp_pull_dest} -host ${client} >/dev/null
+		if [ $? -ne 0 ]
+		then
+			echo "${ProgName}: missing data for ${client}" >&2
+			touch ${MISSING_DATA}				# Signal missing data from client
+			continue
+		fi
+		# In contrast with the other methods, we downloaded not only the signal file(s), but also the data files.
+		# Now we move them to the proper directory or remove them when the remote client was still running.
+		for f in *.signal
+		do
+			host=${f%.signal}
+			host=${host#scc.}
+			if [ -s "${f}" ]
+			then
+				if [ ${exact_match} -eq 0 -o ${client} = ${host} ]
+				then
+					>${dest}/scc.${host}.signal
+					if [ -f scc.${host}.data ]
+					then
+						mv scc.${host}.data ${dest}
+					else
+						mv scc.${host}.tar* ${dest}
+					fi
+					echo "done" >${dest}/scc.${host}.signal
+					if [ ${keep} -eq 0 ]
+					then
+						${timeout} ovdeploy -ovrg server -cmd rm -par "-f ${client_data_dir}/scc.${host}.*" -host ${client}
+					fi
+				fi
+			else
+				echo "${ProgName}: missing data for ${host}" >&2
+				touch ${MISSING_DATA}				# Signal missing data from host
+			fi
+			rm -f scc.${host}.signal scc.${host}.tar* scc.${host}.data
+		done
+		;;
+
+	rsh)	${timeout} rcp ${remote_user}@${client}:${client_data_dir}/${signal} . 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			echo "${ProgName}: missing data for ${client}" >&2
+			touch ${MISSING_DATA}				# Signal missing data from client
+			continue
+		fi
+		for f in *.signal
+		do
+			host=${f%.signal}
+			host=${host#scc.}
+			if [ -s "${f}" ]
+			then
+				>${dest}/scc.${host}.signal
+				${timeout} rcp "${remote_user}@${client}:${client_data_dir}/scc.${host}.*" ${dest}
+				if [ -f ${dest}/scc.${host}.data -a -f ${dest}/scc.${host}.tar* ]
+				then
+					rm -f ${dest}/scc.${host}.tar*		# new_pack has precedence
+				fi
+				echo "done" >${dest}/scc.${host}.signal
+				if [ ${keep} -eq 0 ]
+				then
+					${timeout} remsh "${client}" -l ${remote_user} "rm -f ${client_data_dir}/scc.${host}.*" </dev/null
+				fi
+				if [ ${notify} -eq 1 ]
+				then
+					${timeout} rcp ${NOTIFY_FILE} "${remote_user}@${client}:${client_data_dir}/pull_srv" 2>/dev/null
+				fi
+			else
+				echo "${ProgName}: missing data for ${host}" >&2
+				touch ${MISSING_DATA}				# Signal missing data from host
+			fi
+			rm -f "${f}"
+		done
+		;;
+
+	ssh)	${timeout} scp -P ${port} ${ssh_options} ${remote_user}@${client}:${client_data_dir}/${signal} . 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			echo "${ProgName}: missing data for ${client}" >&2
+			touch ${MISSING_DATA}				# Signal missing data from client
+			continue
+		fi
+		for f in *.signal
+		do
+			# Each client can send data for several (virtual) hosts (using the -v option or a split-file).
+			host=${f%.signal}
+			host=${host#scc.}
+			if [ -s "${f}" ]
+			then
+				>${dest}/scc.${host}.signal
+				${timeout} scp -P ${port} ${ssh_options} "${remote_user}@${client}:${client_data_dir}/scc.${host}.*" ${dest} 2>/dev/null
+				if [ -f ${dest}/scc.${host}.data -a -f ${dest}/scc.${host}.tar* ]
+				then
+					rm -f ${dest}/scc.${host}.tar*		# new_pack has precedence
+				fi
+				echo "done" >${dest}/scc.${host}.signal
+				if [ ${keep} -eq 0 ]
+				then
+					${timeout} ssh -n -p ${port} ${ssh_options} "${remote_user}@${client}" "rm -f ${client_data_dir}/scc.${host}.*"
+				fi
+				if [ ${notify} -eq 1 ]
+				then
+					${timeout} scp -P ${port} ${ssh_options} ${NOTIFY_FILE} "${remote_user}@${client}:${client_data_dir}/pull_srv" 2>/dev/null
+				fi
+			else
+				echo "${ProgName}: missing data for ${host}" >&2
+				touch ${MISSING_DATA}				# Signal missing data from host
+			fi
+			rm -f "${f}"
+		done
+		;;
+
+	esac
+	pull_log "system ${client} end data retrieval"
+done
+if [ -f ${MISSING_DATA} ]
+then
+	exit_status=3			# Indicate runtime-error.
+fi
+
+# All files have been moved from ${tmp_pull_dest} to ${dest}; get out of the way and remove temporary directory.
+cd /tmp
+rm -rf ${tmp_pull_dest}
+
+if [ ${upstream} -eq 0 ]
+then
+	if [ "${user}" = "root" ]
+	then
+		pull_log "start scc-update"
+		scc-update
+		pull_log "end scc-update"
+	fi
+fi
+
+pull_log "end scc-pull, exit [$exit_status}]"
+
+exit ${exit_status}

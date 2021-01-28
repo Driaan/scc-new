@@ -1,0 +1,658 @@
+#!/bin/sh
+
+# Shell script to collect and send configuration data for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc 6271 2019-10-27 10:15:53Z siemkorteweg $
+ 
+ 
+set -u
+
+ProgName=${0##*/};			export ProgName
+
+export SCC_BIN=/opt/scc/bin
+export SCC_DATA=${SCC_DATA:-/var/opt/scc/data}
+export SCC_TMP=/tmp
+export SCC_CONF=/etc/opt/scc/conf
+
+case "${SCC_DATA}" in
+/*)	;;
+*)	echo "${ProgName}: alternative SCC_DATA (${SCC_DATA}) should be an absolute path" >&2
+	exit 2;;
+esac
+
+# Perform the security settings before calling any program.
+PATH=${SCC_BIN}:/sbin:/usr/sbin:/usr/bin:/bin;	export PATH
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+
+umask 066
+[ ! -d ${SCC_DATA} ] && mkdir -p ${SCC_DATA} 2>/dev/null
+[ ! -d ${SCC_DATA}/transfer ] && mkdir -p ${SCC_DATA}/transfer 2>/dev/null
+[ ! -d ${SCC_TMP} ] && mkdir -p ${SCC_TMP} 2>/dev/null
+umask 077
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+[ -r ${SCC_CONF}/scc-localize ] && . ${SCC_CONF}/scc-localize
+
+# Some systems do not provide nice.
+n_exe="$(which nice 2>/dev/null)"
+if [ ! -x "${n_exe}" ]
+then
+	alias nice=""
+fi
+
+# The default directory on scc-srv to send data to, determine according to our installation.
+default_srv_dir="$(echo "${SCC_DATA}" | sed -e 's/scc/scc-srv/')/transfer/cp"
+
+random="$(get_RANDOM)"
+test_dir="${SCC_TMP}/scc-d-$$_${random}"
+TMP_FILE="${SCC_TMP}/scc-f-$$_${random}"
+
+CMD_LINE="${ProgName} [ -a|--alternate <alt> ]
+			[ -c|--comment <remark> ]
+			[ -d|--delay <delay> ]
+			[ -e|--extra <mod> ]
+			[ -S|--selection <mod> ]
+			[ -f|--fqdn ]
+			[ -h|--help ]
+			[ -F|--from <from> ]
+			[ -i|--smtp <smtp> ]
+			[ -I|--ident <ident> ]
+			[ -k|--key <key> ]
+			[ -l|--label <label> ]
+			[ -m|--max_age <max> ]
+			[ -n|--norun ]
+ 			[ -o|--option no_hosts ]
+			[ -p|--prog <prog> ]
+			[ -P|--port <port> ]
+			[ -r|--restart ]
+			[ -s|--destination <dest> ]
+			[ -t|--test ]
+			[ -u|--user <user> ]
+			[ -v|--virtual <host> ]
+			[ -V|--version ]"
+
+SYNTAX_ERROR="Syntax error, use: ${CMD_LINE}"
+
+MISSING_OPT_ARG="${ProgName}: Syntax error, missing argument for option:"
+empty_files=0
+prog=pull
+max_interval=0
+alternate_dir=""
+export SCC_KEY_FILE=""
+label=""
+max_months=0				# 0 means: no limit.
+dest=""
+user_modules=""
+select_modules=""
+remark=""
+fqdn=""
+do_run=1
+port_default=""
+port=""
+restart=""
+smtp_server=""
+ssh_identity=""
+strict_host_checking=""
+user=""
+virtual_host=""
+virtual_host_opt=""
+smtp_from=""
+while [ $# -gt 0 ]
+do
+	case "${1}" in
+	-a|--alternate)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			alternate_dir="${2}"
+			if [ ! -d "${alternate_dir}" ]
+			then
+				echo "${ProgName}: cannot access ${alternate_dir}" >&2
+				exit 2
+			fi
+			do_run=0
+			shift 2;;
+
+	-c|--comment)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			remark="$(echo "${2}" | tr -d "\012")"	# be sure that the remark is single-line
+			shift 2;;
+
+	-d|--delay)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			case "${2}" in
+			[0-9]*)	max_interval=${2};;
+			*)	echo "${ProgName}: non-numeric interval: ${2}" >&2
+				exit 1;;
+			esac
+			shift 2;;
+
+	-e|--extra)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			scc_check_option_single "-e" "${user_modules}"
+			user_modules="${2}";			# Pass on to scc-log
+			shift 2;;
+
+	-S|--selection)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			scc_check_option_single "-S" "${select_modules}"
+			select_modules="${2}";			# Pass on to scc-log
+			shift 2;;
+
+	-F|--from)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			smtp_from="${2}"
+			case "${smtp_from}" in
+			\<**\>)		;;				# valid form: <adress>
+			\<*|*\>)	echo "${ProgName}: wrong format of mail-address: ${smtp_from}" >&2
+					exit 1;;
+			*@*)		smtp_from="<${smtp_from}>"	# non-rfc compliant; add < and >
+			esac
+			shift 2;;
+
+	-i|--smtp)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			smtp_server="${2}"
+			prog=smtp;		# No need for -p smtp with -i option
+			port_default=25
+			shift 2;;
+
+	-I|--ident)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			if [ ! -f "${2}" ]
+			then
+				echo "${ProgName}: cannot access identity-file ${2}" >&2
+				exit 1
+			fi
+			ssh_identity="-i ${2}"		# -i option for scp.
+			prog=scp
+			port_default=22
+			shift 2;;
+
+	-k|--key)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			if [ ! -f "${2}" ]
+			then
+				echo "${ProgName}: cannot access key-file ${2}" >&2
+				exit 1
+			fi
+			SCC_KEY_FILE="${2}"
+			shift 2;;
+
+	-l|--label)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			label="${2}"
+			shift 2;;
+
+	-m|--max_age)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			case "${2}" in
+			[0-9]*)	max_months=${2};;
+			*)	echo "${ProgName}: non-numeric argument for -m option: ${2}" >&2
+				exit 1
+			esac
+			shift 2;;
+
+	-o|--option)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			case "${2}" in
+			no_hosts)	strict_host_checking="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+					prog="scp"
+					port_default=22
+					;;
+			*)		echo "${ProgName}: unknown value for -o option: ${2}" >&2
+					exit 1;;
+			esac
+			shift 2;;
+
+	-p|--prog)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			port_default=25
+			case "${2}" in
+			cp|ftp|pull|mail|rcp)	prog="${2}";;
+			scp)			port_default=22
+						prog="${2}";;
+			smtp)			port_default=25
+						prog="${2}";;
+			*)			echo "${ProgName}: unknown transfer-method: ${2}" >&2
+						exit 1;;
+			esac
+			shift 2;;
+
+	-P|--port)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			port="${2}"
+			shift 2;;
+
+	-s|--dest)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			dest="${2}"
+			shift 2;;
+
+	-u|--user)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			user="${2}"
+			id -u ${user} >/dev/null 2>/dev/null
+			if [ $? -ne 0 ]
+			then
+				echo "${ProgName}: unknown user: ${user}" >&2
+				exit 2
+			fi
+			shift 2;;
+
+	-v|--virtual)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			virtual_host_opt=" -v ${2}";	# Pass on to scc-log
+			virtual_host="${2}"
+			shift 2;;
+
+	-f|--fqdn)	fqdn="-f"			# Pass on to scc-log
+			shift 1;;
+
+	-h|--help)	echo "${CMD_LINE}"
+			scc_documentation
+			exit 0;;
+
+	-n|--norun)	do_run=0
+			shift 1;;
+
+	-r|--restart)	restart="-r"
+			shift 1;;
+
+	-t|--test)	empty_files=1
+			shift 1;;
+
+	-V|--version)	echo "1.26.73"
+			exit 0;;
+
+	*)		echo "${SYNTAX_ERROR}" >&2
+			exit 1;;
+	esac
+done
+
+if [ ${empty_files} -eq 1 -a "${alternate_dir}" ]
+then
+	echo "${ProgName}: cannot use -t option combined with -a option" >&2
+	exit 2
+fi
+
+if [ -z "${virtual_host}" -a "${select_modules}" ]
+then
+	echo "${ProgName}: cannot use -S option without -v option" >&2
+	exit 1
+fi
+
+if [ "${virtual_host}" -a -z "${select_modules}" -a -z "${user_modules}" ]
+then
+	echo "${ProgName}: use -e and/or -S option with -v option" >&2
+	exit 1
+fi
+
+if [ -z "${port}" -a ! -z "${port_default}" ]
+then
+	port=${port_default}
+fi
+
+hostname_exe="$(which hostname 2>/dev/null)"
+if [ -x "${hostname_exe}" ]
+then
+	full_name=$(hostname 2>/dev/null)
+else
+	full_name=${HOSTNAME:-}
+fi
+if [ -z "${full_name}" ]
+then
+	full_name="empty"			# same value as in scc-log and scc-collect.
+fi
+our_name=${full_name%%.*}			# Erase domain.
+if [ -n "${virtual_host}" ]
+then
+	our_name="${virtual_host}"
+fi
+
+case "${prog}" in
+mail|smtp)	which uuencode 2>/dev/null >/dev/null
+		if [ $? -ne 0 ]
+		then
+			echo "${ProgName}: uuencode not found" >&2
+			exit 2
+		fi
+		which mail 2>/dev/null >/dev/null
+		if [ $? -ne 0 ]
+		then
+			echo "${ProgName}: mail not found" >&2
+			exit 2
+		fi
+		;;
+esac
+
+if [ "${user}" ]
+then
+	if [ "$(id -u)" -ne 0 ]
+	then
+		echo "${ProgName}: non-root users cannot use the -u option" >&2
+		exit 2
+	fi
+	# This feature has been suggested by Sven Weise.
+	# The files should be retrieved by a non-root user.
+	chmod o+x ${SCC_DATA}/.. ${SCC_DATA}
+	chown "${user}" ${SCC_DATA}/transfer
+fi
+
+mail_dest=""
+if [ -z "${dest}" ]
+then
+	case "${prog}" in
+	cp)	dest="${default_srv_dir}";;
+	pull)	dest="${SCC_DATA}/transfer";;				# Use default directory
+	*)	echo "${ProgName}: missing destination for method ${prog}" >&2
+		exit 2;;
+	esac
+else
+	case "${prog}" in
+	ftp|rcp|scp)	if [ "${dest%:*}" = "${dest}" ]
+			then
+				# Without the separator ':', the directory is not specified, use the default directory:
+				dest="${dest}:${default_srv_dir}"
+			fi ;;
+	pull)	dest="${SCC_DATA}/transfer";;				# Override specified directory
+	mail)	mail_dest="${dest}";;
+	smtp)	# Determine the sender of the mail
+		if [ -z "${smtp_from}" ]
+		then
+			sender="<root@${full_name}>"
+		else
+			sender="${smtp_from}"
+		fi
+
+		# Determine the destination
+		if [ -z "${smtp_server}" ]
+		then
+			# Split the email-address into host and account
+			mail_dest=${dest%%@*}
+			smtp_server=${dest##*@}
+		else
+			mail_dest=${dest}
+		fi
+		;;
+	esac
+
+	if [ -n "${mail_dest}" ]
+	then
+		# Check the format of the mail-destination.
+		case "${mail_dest}" in
+		\<*\>)		;;					# valid form: <adress>
+		\<*|*\>)	echo "${ProgName}: wrong format of mail-address: ${mail_dest}" >&2
+				exit 1;;
+		*)		mail_dest="<${mail_dest}>"	# non-rfc compliant; add < and >
+		esac
+	fi
+fi
+
+if [ "${dest}" ]
+then
+	case "${prog}" in
+	cp)	if [ ! -d "${dest}" ]
+		then
+			echo "${ProgName}: cannot access target directory: ${dest}" >&2
+			exit 2
+		fi
+		;;
+	scp)	which scp 2>/dev/null >/dev/null
+		if [ $? -ne 0 ]
+		then
+			echo "${ProgName}: scp not found" >&2
+			exit 2
+		fi
+		;;
+	esac
+fi
+
+MAIL_NAME=scc-transfer-data
+PASSPHRASE_FILE="passphrase"
+
+trap 'rm -rf ${TMP_FILE} ${test_dir} 2>/dev/null' 0
+trap "exit 2" 1 2 3 15
+
+if [ ${max_interval} -gt 1 ]
+then
+	random="$(get_RANDOM)"
+	sleep $(( random % max_interval ))
+fi
+
+if [ ${empty_files} -gt 0 ]
+then
+	# Create the empty test-files.
+	mkdir ${test_dir}
+	cd ${test_dir}
+
+	transfer_name="${SCC_HOST_ALIAS:-}"
+	if [ -z "${transfer_name}" ]
+	then
+		transfer_name="${our_name}"
+	fi
+	for s in cur log log.html html
+	do
+		touch scc.${transfer_name}.${s}
+	done
+	scc_pack ${transfer_name}
+	# temporary directory and files are removed at the exit of the script.
+	cd ${SCC_DATA}/transfer
+else
+	if [ ${do_run} -eq 1 ]
+	then
+		if [ -z "${alternate_dir}" ]
+		then
+			# Produce new, real SCC-data
+			nice ${SCC_BIN}/scc-log -c "${remark}" -e "${user_modules}" -S "${select_modules}" ${fqdn} -l "${label}" -m "${max_months}" ${restart} ${virtual_host_opt}
+			if [ $? -ne 0 ]
+			then
+				exit 1
+			fi
+		fi
+	else
+		if [ -z "$(ls ${SCC_DATA}/transfer/*signal 2>/dev/null )" ]
+		then
+			cd ${SCC_DATA}
+			if [ "${SCC_HOST_ALIAS:-}" -a "${SCC_HOST_ALIAS:-}" != "${our_name}" ]
+			then
+				for suffix in cur html log log.html
+				do
+					rm -f scc.${SCC_HOST_ALIAS}.${suffix}
+					ln -s scc.${our_name}.${suffix} scc.${SCC_HOST_ALIAS}.${suffix}
+				done
+				scc_pack ${SCC_HOST_ALIAS}
+				rm -f scc.${SCC_HOST_ALIAS}.*
+			else
+				scc_pack ${our_name}
+			fi
+		fi
+	fi
+
+	cd ${SCC_DATA}/transfer
+fi
+
+# Only send the files when we have a destination.
+if [ -z "${dest}" ]
+then
+	exit 0
+fi
+
+if [ "${alternate_dir}" ]
+then
+	cd "${alternate_dir}"
+
+	# Check all snapshots.
+	for f in scc.*.cur
+	do
+		host="${f%.cur}"
+		scc_pack ${host#scc.}		# Ignore SCC_HOST_ALIAS from scc-localize
+
+		# Remove symbolic links, they need to be recreated 
+		# when collecting the data in the alternate directory.
+		for s in cur html log log.html
+		do
+			if [ -h scc.${host}.${s} ]
+			then
+				rm -f scc.${host}.${s}
+			fi
+		done
+		
+	done
+fi
+
+# Transfer all files present in the current directory
+rm -f ${TMP_FILE}
+ls -tr					|
+sed	-n			\
+	-e '/.signal$/d'	\
+	-e '/^scc./p'			|
+while read REMOTE_NAME
+do
+	REMOTE_SIGNAL=${REMOTE_NAME%.data}.signal
+
+	if [ ! -f ${REMOTE_NAME} -o ! -f ${REMOTE_SIGNAL} ]
+	then
+		# When either of the data or the signal file is missing, we got a rogue filename starting with scc.
+		continue
+	fi
+
+	case "${prog}" in
+	mail)	uuencode ${MAIL_NAME} <${REMOTE_NAME}	|
+		mail "${mail_dest}"
+		;;
+	smtp)	transfer_exe="$(which nc 2>/dev/null)"
+		transfer_opt="-v"
+		if [ ! -x "${transfer_exe}" ]
+		then
+			transfer_exe="$(which telnet 2>/dev/null)"
+			transfer_opt=""
+		fi
+		if [ ! -x "${transfer_exe}" ]
+		then
+			echo "${ProgName}: cannot find nc and telnet to transfer data" >&2
+			exit 2
+		fi
+		# Use smtp to transfer the data. 
+		# Use sleep to avoid that our commands are sent too fast to the SMTP-server.
+		(
+			sleep 5
+			echo "helo ${our_name}"
+			sleep 5
+			echo "mail from: ${sender}"
+			sleep 5
+			echo "rcpt to: ${mail_dest}"
+			sleep 5
+			echo "data"
+			sleep 5
+			echo "subject: SCC snapshot in ${REMOTE_NAME}"
+			sleep 5
+			echo "to: ${mail_dest}"
+			echo ""
+			sleep 5
+			uuencode ${MAIL_NAME} <${REMOTE_NAME}
+			echo "."
+			sleep 5
+			echo "quit"
+			sleep 5
+		)	|
+		"${transfer_exe}" ${transfer_opt} ${smtp_server} ${port} >${SCC_DATA}/smtp.log 2>&1
+		# Inspect the file to find out about errors. No parsing of the logfile (yet).
+		# Luc Capronnier suggests looking for values below 400 in the response.
+		rm -f ${REMOTE_NAME} ${MAIL_NAME}
+		;;
+
+	rcp)	# Produce an empty signal-file to indicate that transfer is in progress.
+		>${REMOTE_SIGNAL}
+		rcp ${REMOTE_SIGNAL} ${dest}
+
+		# Transfer the packed files followed by the non-empty signal file to indicate completion of transfer.
+		echo "done" >${REMOTE_SIGNAL}
+		rcp ${REMOTE_NAME} ${REMOTE_SIGNAL} ${dest}
+		;;
+
+	pull)	# scc-log put the data and signal file in the correct place with correct ownership.
+		;;
+
+	scp)	# Produce an empty signal-file to indicate that transfer is in progress.
+		>${REMOTE_SIGNAL}
+		port_scp="-P ${port}"
+		quiet="-q"
+		connect_timeout="-o ConnectTimeout=30"
+		scp ${connect_timeout} ${quiet} ${port_scp} ${ssh_identity} ${strict_host_checking} ${REMOTE_SIGNAL} ${dest} >/dev/null 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			# Some dropbear implementations of scp complain about the -q option and do
+			# not show the progress without the -q option.
+			# Do not use the -q option when a dropbear implementation results in an error.
+			exe="$(ls -l "$(which scp 2>/dev/null)" | sed -e 's@.*/@@')"
+			if [ "${exe}" = "dropbear" ]
+			then
+				quiet=""
+			else
+				connect_timeout=""	# ignore, might be an unknown option for this scp
+			fi
+			scp ${connect_timeout} ${quiet} ${port_scp} ${ssh_identity} ${strict_host_checking} ${REMOTE_SIGNAL} ${dest} >/dev/null 2>/dev/null
+		fi
+
+		# Transfer the packed files followed by the non-empty signal file to indicate completion of transfer.
+		echo "done" >${REMOTE_SIGNAL}
+		scp ${connect_timeout} ${quiet} ${port_scp} ${ssh_identity} ${strict_host_checking} ${REMOTE_NAME} ${REMOTE_SIGNAL} ${dest} >/dev/null 2>/dev/null
+		;;
+
+	cp)	# Produce an empty signal-file to indicate that transfer is in progress.
+		>${dest}/${REMOTE_SIGNAL}
+
+		# Move the packed files to the destination
+		mv -f ${REMOTE_NAME} ${dest}
+
+		# Replace the empty signal-file to indicate that transfer is complete.
+		echo "done" >>${dest}/${REMOTE_SIGNAL}
+		;;
+
+	ftp)	# ${dest} is <host>:<dir>
+		host=${dest%:*}
+		dir=${dest#*:}
+
+		# Produce an empty signal-file to indicate that transfer is in progress.
+		>${REMOTE_SIGNAL}
+		ftp ${host} <<-_X_
+			cd ${dir}
+			bin
+			put ${REMOTE_SIGNAL}
+		_X_
+
+		# Transfer the packed files followed by the non-empty signal file to indicate completion of transfer.
+		echo "done" >${REMOTE_SIGNAL}
+		ftp ${host} <<-_X_
+			cd ${dir}
+			bin
+			put ${REMOTE_NAME}
+			put ${REMOTE_SIGNAL}
+		_X_
+		;;
+	esac
+
+	if [ "${prog}" != "pull" ]
+	then
+		rm -f ${REMOTE_SIGNAL} ${REMOTE_NAME}
+	fi
+
+	touch ${TMP_FILE}
+done
+
+if [ ! -f ${TMP_FILE} ]
+then
+	echo "${ProgName}: no data to transfer via ${prog}, run scc without -n option" >&2
+	exit 2
+fi
+
+exit 0

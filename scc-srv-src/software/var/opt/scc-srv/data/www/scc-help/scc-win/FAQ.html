@@ -1,0 +1,97 @@
+<!DOCTYPE HTML>
+<HTML lang="en">
+	<HEAD>
+		<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+		<META NAME="description"	CONTENT="Frequently asked questions concerning System Configuration Collector.">
+		<META NAME="keywords"		CONTENT="SCC, System Configuration Collector, system configuration, configuration, configuration collector, logbook, FAQ">
+
+		<STYLE TYPE="text/css">
+.filename	{
+	font-style: italic;
+}
+
+.emphasis	{
+	font-weight: bold;
+}
+
+.question	{
+	font-style: italic;
+	font-weight: bold;
+}
+
+P.header	{
+	font-weight: bold;
+	font-size: 110%;
+}
+		</STYLE>
+		<LINK HREF="favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+		<TITLE>scc-win FAQ</TITLE>
+	</HEAD>
+	<BODY>
+<TABLE style="margin: 0px auto; width:80%;">
+<TR><TD style="text-align:left;">
+		<H1>System Configuration Collector Windows client FAQ</H1>
+<P>
+<SPAN class="question">For which version of scc-win is this FAQ?</SPAN>
+<BR>
+Release: 1.10.38
+<BR>
+Copyright (C) 2014-2018 QNH, 2019 Siem Korteweg.
+<BR>
+<BR>
+
+<SPAN class="question">What to do when I find a bug?</SPAN>
+<BR>
+Check the SVN repository at <A HREF="https://sourceforge.net/p/sysconfcollect/code/HEAD/tree/scc-win/trunk/">sourceforge</A>
+to find out whether the bug already has been fixed in the latest code.
+When that is not the case, please refer to the <A HREF="http://sysconfcollect.sourceforge.net/support.html">support</A> page of the website.
+<BR>
+<BR>
+
+<SPAN class="question">How is data collected?</SPAN>
+<BR>
+Scriptomatic from Microsoft is used to produce the perl-code to retrieve all data from a WMI class.
+Then the data is inspected to determine which data is fixed and which data is variable. 
+Together with a classification (network, boot, ...) this is added to the snapshot.
+<BR>
+<BR>
+
+<SPAN class="question">Why does SCC needs to run as administrator?</SPAN>
+<BR>
+Being member of the local administrator group results in insufficient permissions for collection certain data.
+Therefore SCC need to "run as" administrator.
+<BR>
+<BR>
+
+<SPAN class="question">How are snapshots compared?</SPAN>
+<BR>
+To compare two snapshots (current and previous run), all data whose classification start with 'fix' is extracted into two temporary files.
+These two files are compared by means of diff and the output is processed to indicate to which snapshot (old or new) each reported line belongs.
+The differences are added to the logbook.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the data from a module appear twice in the snapshot?</SPAN>
+<BR>
+This happens when you are modifying a module and kept a copy of the original module by appending some string to its name.
+The name of this file is considered a valid module name by scc-collect and it will execute the module, resulting in data from the original and modified module.
+To keep a copy of an original module, you better prefix the name with some string.
+<BR>
+<BR>
+
+<SPAN class="question">Why do I get the message: The Unsupported function alarm function is unimplemented at C:\Program Files\SCC\bin\scc-log.pl?</SPAN>
+<BR>
+This message appears when an incomplete version of perl was used to run SCC.
+Make sure you use an up-to-date version of perl from ActiveState.
+<BR>
+<BR>
+
+<SPAN class="question">The program hangs, how do I know what it is doing?</SPAN>
+<BR>
+Restart the program from the command line and add the --trace option. This will indicate each query that is executed.
+</P>
+
+</TD></TR>
+</TABLE>
+</BODY>
+</HTML>

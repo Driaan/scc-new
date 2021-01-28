@@ -1,0 +1,89 @@
+.TH scc-plugin 1 "SCC" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-plugin - template for a user or system module
+
+.SH  RELEASE
+.nf
+
+	scc	1.26.73
+
+.SH  SYNOPSIS
+.nf
+
+	scc-plugin
+
+.SH  DESCRIPTION
+.nf
+
+	This program can be used as a starting point to write new modules
+	for SCC. To extend the collection of data by scc-collect, copy this
+	script to the directory /opt/scc/bin/scc_modules and name it
+	scc_9999_[us]_NAME, where 9999 is a four-digit number specifying the
+	order in which scc-collect executes the modules. Refer to the manual
+	page of scc-collect for more details concerning modules.
+
+	A user module (_u_) is not run by default, it requires the -e option
+	of scc. A system module (_s_) is run by default, also during
+	pre- and post-install. A user module is meant for long running commands.
+	Module scc_0700_u_hp_ovou_srv is an example that can take 15 to 30 minutes.
+
+	Data should be produced on stdout. Refer to scc(4) for a description
+	of the layout of the data in a snapshot.
+
+.SH  ARGUMENTS
+.nf
+
+	Use the -a option of scc-collect to provide this module with
+	arguments. Another possibility to add dynamic behavior to this script
+	is by using the file /etc/opt/scc/conf/scc-localize.
+
+.SH  DIAGNOSTICS
+.nf
+
+	Any errors detected by this program should be produced on stdout
+	in the following format:
+
+		fix:messages::<message>
+
+.SH  EXAMPLE
+.nf
+
+	The following code records the DNS-data of our domain:
+
+		sed -e "s/^/fix:network:DNS mycom.com::/" /var/named/db.mycom
+
+	Copy scc-plugin to scc_modules/scc_0500_u_dns and add this code at 
+	the end of the new script and run:
+
+		scc -e dns
+
+.SH  COPYRIGHT
+.nf
+
+	scc-plugin is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH,
+	2019 Siem Korteweg.
+
+.SH  FILES
+.nf
+
+	/opt/scc/bin/scc_modules - directory for modules
+	/var/opt/scc/data - directory for data files
+
+.SH  SEE ALSO
+.nf
+
+	scc(1), scc-cmp(1), scc-collect(1), scc-log(1), scc-log2html(1),
+	scc-plugin(1), scc-snap2html(1), scc(4), scc(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6297 $
+

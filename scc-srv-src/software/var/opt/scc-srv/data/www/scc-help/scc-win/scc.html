@@ -1,0 +1,189 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc.pl 1 "SCC-WIN" </TITLE>
+</HEAD><BODY>
+<H1>scc.pl(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc - collect and send snapshot-files to server
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-win	1.10.38
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc [ --file &lt;file&gt; ] [ --list &lt;list&gt; ] [ --netview ] 
+		[ --missing ] [ --min_age &lt;days&gt; ]
+		[ --delay &lt;delay&gt; ] [ --extra &lt;mod&gt; ] [ --fqdn ] [ --norun ]
+		[ --from &lt;mail&gt; ] [ --dest &lt;dest&gt; ]
+	        [ --encrypt &lt;key&gt; ]
+	        [ --passwd &lt;pw&gt; ] [ --pki &lt;file&gt; ] [ --prog &lt;prog&gt; ]
+		[ --smtp &lt;smtp&gt; ] [ --trace ] [ --report &lt;file&gt; ]
+		[ --timeout &lt;duration&gt; ]
+		[ --comment &lt;remark&gt; ] [ --help ] [ --version ]
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	Run the program scc-log and optionally send the resulting files 
+	to the destination. 
+
+	The security setup of the server receiving the files is very
+	important. Refer to the documentation of scc-srv for the setup
+	of the server.
+
+	The collection of scc-data from the system is done by means of
+	modules. Two kinds of modules exist, user and system modules. 
+	The system modules are installed and run by scc. To extend the
+	reach of the snapshots, user modules can be added to collect
+	additional data. Refer to <A HREF="scc-collect.html">scc-collect(1)</A> for more details. To
+	run all user modules, use the following command-line:
+
+		scc --extra "*"
+
+	When the --delay option is used, there is a pause of the indicated 
+	number of seconds after each collection. This avoids flooding the 
+	receiving system and eases the collecting system.
+
+	Use the --missing option to process repeatedly a number of systems
+	until the data of all systems has been collected.
+
+	The transferred files are tarred, compressed and uuencoded when
+	sent via email. 
+
+	Refer to the manual page of <A HREF="scc-log.html">scc-log(1)</A> for troubleshooting
+	when scc seems to "hang".
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	--comment &lt;remark&gt;      Comment for entry in logbook.
+	--delay &lt;delay&gt;         Delay in seconds between collections in each run.
+	--encrypt &lt;file&gt;        Use public key in &lt;file&gt; in bin directory of scc to encrypt data. 
+	                        Refer to the documentation of scc-srv for details.
+	--extra &lt;mod&gt;           Execute additional user modules.
+	--fqdn                  Determine for each host the fqdn and use this in the filenames.
+	--file &lt;file&gt;           Collect data from all systems in &lt;file&gt;. Each line of
+	                        this file contains the name of a system. Empty lines
+	                        and comment lines (#) are ignored.
+	--from &lt;mail&gt;           Sender for email. By default &lt;postmaster@domain&gt; is used, where
+	                        domain is determined by DNS.
+	--help                  Show the syntax of the program.
+	--list &lt;list&gt;           Collect data from all systes in &lt;list&gt;. This is a
+	                        comma-separated list of system names.
+	--missing               Collecting data from all systems in a domain can be 
+	                        difficult as laptops and desktops can be powered off.
+	                        Use this option to collect data from those systems that
+	  	                not yet have been collected. Use other options to specify
+	                        which systems to check.
+	--min_age &lt;days&gt;        Minimal age of the local snapshot before collecting data again.
+	--netview               Collect data from all systems resulting from the
+	                        command: net view. When the --norun option is also used,
+	                        all present data is transferred to scc-srv.
+	--norun                 Do not collect new data, send current data for systems specified
+	                        by the --list or --file options or all present data when the --netview
+	                        option is used.
+	--passwd &lt;pw&gt;           Use &lt;pw&gt; for scp or ftp (optional).
+	--pki &lt;file&gt;            Private key file used by pscp. Located in bin-directory of scc.
+	--prog &lt;prog&gt;           Use &lt;prog&gt; to transfer SCC-data, default value is
+	                        mail. Other values are:
+	                        cp      copy files to fileserver.
+	                        ftp     use ftp; requires (optional) --passwd option
+	                        mail    send by mail, requires --smtp option and 
+	                                optional --from. Refer to data/blat_log.txt for logging.
+	                        scp     SSH-copy to scc-srv; requires --passwd or --pki
+	                                Refer to <A HREF="scc-win-5.html">scc-win(5)</A> for the setup of the communication.
+	                        pull    local transfer to data\transfer;
+	                                transfer is done later by scc-srv.
+	                                Implies --delay 0 and ignores --send option.
+	--dest &lt;dest&gt;           Destination to send the files to:
+	                        cp      directory on fileserver: \server\share
+	                        ftp     destination: &lt;user&gt;@myserver.com:&lt;dir&gt;
+	                        mail    destination: &lt;alias&gt;
+	                                specify the server by means of the --smtp option
+	                        scp     destination: &lt;user&gt;@myserver.com:&lt;dir&gt;
+	--report &lt;file&gt;         Log summary of result in &lt;file&gt; in bin-directory of scc.
+	--smtp &lt;smtp&gt;           Use &lt;smtp&gt; as server for transfer by email.
+	--trace                 Trace progress of scripts on stdout.
+	--timeout &lt;duration&gt;    Maximum allowed number of seconds for processing each system.
+	--version               Print version info and stop.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	None.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 syntax error
+		2 runtime error
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	The names of the files that are sent to the scc-server, must be
+	known in the server-software also: scc-transfer-data.gz.
+	Refer to the manual page of scc-srv for the setup of the scc-server.
+
+	When the --fqdn option is used, nslookup is called to determine the fqdn.
+
+	This program assumes it is called from the bin directory of the SCC software.
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2006-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	- data - folder for data files
+		scc.&lt;hostname&gt;.cur - current SCC-snapshot
+		scc.&lt;hostname&gt;.html - current SCC-snapshot in HTML-format
+		scc.&lt;hostname&gt;.log - logbook for changes in SCC-snapshots
+		scc.&lt;hostname&gt;.log.html - logbook in HTML-format
+	        blat_log.txt - log file for email transfer
+	When the --fqdn option is used, the DNS-domain is added to &lt;hostname&gt; in
+	the filenames.
+	When cp, scp or ftp is used, the file scc.&lt;hostname&gt;.signal is used to
+	indicate the completed transfer of the scc-data on the server.
+	- data/transfer - directory for pull
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-win-4.html">scc-win(4)</A>, <A HREF="scc-win-5.html">scc-win(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6241 $
+
+</PRE>
+</BODY></HTML>

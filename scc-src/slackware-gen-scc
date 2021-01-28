@@ -1,0 +1,106 @@
+#!/bin/sh
+
+# Generate Slackware package to install scc by means of installpkg.
+# Copyright (C) 2006-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: slackware-gen-scc 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# It uses the following programs:
+#
+#	tar
+#	gzip
+#
+# After using this program, the directory contains one file:
+#
+#	scc-1.26.73-noarch-1.tgz
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+VERSION=${1:-1.26.73}
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+mkdir -p software/install
+mv install/postinstall software/install/doinst.sh
+chmod 500 software/install/doinst.sh
+
+{
+	# 11 lines for proper formatting.
+	echo "scc: System Configuration Collector"
+	echo "scc:"
+	echo "scc: SCC collects configuration data from Unix/Linux/*BSD systems."
+	echo "scc: Changes in the configuration are detected and added to a logbook."
+	echo "scc:"
+	echo "scc: Homepage: https://sourceforge.net/projects/sysconfcollect"
+	echo "scc:"
+	echo "scc:"
+	echo "scc:"
+	echo "scc:"
+	echo "scc:"
+} >software/install/slack-desc
+
+cd software
+# Slackware installpkg forces the ownership and permissions from our
+# directories and files upon the directories and files that are already
+# present on the system. Avoid that directories like /opt and /var/opt
+# are not accessible for ordinary users.
+chown -R root:root .
+chmod 755 opt 2>/dev/null
+chmod 755 var var/opt 2>/dev/null
+
+# The installpkg command checks for a single entry starting with './'.
+# First add only the current directory and then add the subdirectories.
+tar cf ../scc.tar --no-recursion .
+mv ../scc.tar .
+tar rf ./scc.tar install etc/opt/scc opt/scc var/opt/scc
+gzip -9c <./scc.tar >../scc-${VERSION}-noarch-1.tgz
+cd ..
+
+rm -rf software  install $(cat file_list)
+
+exit 0

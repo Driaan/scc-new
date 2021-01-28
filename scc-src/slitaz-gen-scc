@@ -1,0 +1,128 @@
+#!/bin/sh
+
+# Production of scc for slitaz.
+# Copyright (C) 2009-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: slitaz-gen-scc 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# After using this program, the directory contains one file:
+#
+#	scc-1.26.73.tazpkg
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+
+my_md5()
+{
+	exe="$(which md5sum 2>/dev/null)"
+	if [ -x "${exe}" ]
+	then
+		"${exe}" "${1}" | awk '{ print $1 }'
+	else
+		exe="$(which md5 2>/dev/null)"
+		if [ -x "${exe}" ]
+		then
+			"${exe}" "${1}" | awk '{ print $4 }'
+		fi
+	fi
+}
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+VERSION=${1:-1.26.73}
+
+mv software fs
+
+# Slitaz does not provice man, get rid of the manual pages.
+rm -rf fs/opt/scc/man
+
+find fs					|
+sort					|
+cpio -c -o >fs.cpio 2>/dev/null
+UNPACKED_SIZE="$(ls -l fs.cpio | awk '{ printf( "%d\n", $5 / 1024 ) }')"
+gzip fs.cpio
+PACKED_SIZE="$(ls -l fs.cpio.gz | awk '{ printf( "%d\n", $5 / 1024 ) }')"
+
+cat >receipt <<_X_
+# SliTaz package receipt.
+
+PACKED_SIZE="${PACKED_SIZE}K"
+UNPACKED_SIZE="${UNPACKED_SIZE}K"
+PACKAGE="scc"
+VERSION="${VERSION}"
+CATEGORY="utilities"
+SHORT_DESC="System Configuration Collector"
+MAINTAINER="siemkorteweg@users.sourceforge.net"
+WEB_SITE="https://sourceforge.net/projects/sysconfcollect"
+WGET_URL="https://sourceforge.net/projects/sysconfcollect/files/scc/scc-${VERSION}.src.tar.gz"
+
+_X_
+
+cat >>receipt << "_X_"
+pre_install()
+{
+	[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --preinstall
+}
+post_install()
+{
+	[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --postinstall
+}
+_X_
+
+find fs -type f			|
+sort				|
+while read file
+do
+	echo "$(my_md5 ${file}) ${file}"		|
+	sed -e 's/ fs/ /'
+done >md5sum
+
+find fs -type f			|
+sort				|
+sed -e 's@^fs@@' >files.list
+
+{
+	echo "fs.cpio.gz"
+	echo "receipt"
+	echo "files.list"
+	echo "md5sum"
+}	|
+cpio -c -o >scc-${VERSION}.tazpkg 2>/dev/null
+
+rm -rf fs install $(cat file_list) fs.cpio* receipt files.list md5sum
+
+exit 0

@@ -1,0 +1,248 @@
+#!/bin/sh
+
+# Shell script to collect data concerning installed SAP R/3 software
+# and SAP R/3 Oracle databases.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0610_s_oracle_sapr3 6216 2019-03-21 20:47:50Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# SAP/R3 module:
+# Contributed by ABB AT with the following remark:
+# The usage of our modifications to SCC is on your own risk. ABB gives no 
+# warranty and is not responsible for problems caused by our modifications.
+
+# Adopted from a first version by Paul te Vaanholt.
+# Extended and corrected by Gerhard Koller ATABB/ISSSC  22062006
+
+ORATAB="${ORATAB:-}"
+if [ -z "${ORATAB}" ]
+then
+	if [ -f /etc/oratab ]
+	then
+		ORATAB=/etc/oratab
+	elif [ -f /var/opt/oracle/oratab ]
+	then
+		ORATAB=/var/opt/oracle/oratab
+	fi
+fi
+
+# Determine the Oracle SID's and then check whether they are used for SAP.
+scc_oracle_sids						|
+while read ORACLE_USER ORACLE_SID ORACLE_HOME
+do
+	export ORACLE_HOME ORACLE_SID ORACLE_USER
+
+	# Determine whether this SID is used for SAP.
+	grep -q " .*d[w].sap${ORACLE_SID}_" ${PROC_FILE}
+	if [ $? -eq 1 ]
+	then
+		continue                # No SAP for this SID
+	fi
+
+	class="fix:software:SAP:${ORACLE_SID}"
+	if [ -d /usr/sap/${ORACLE_SID}/SYS/profile ]
+	then
+		(
+			cd /usr/sap/${ORACLE_SID}/SYS/profile
+
+			scc_check_file DEFAULT.PFL "${class}:DEFAULT.PFL::" "#"
+			for f in START_*_$(hostname) ${ORACLE_SID}_*_$(hostname)
+			do
+				scc_check_file "${f}" "${class}:${f%_*}::" "#"
+			done
+		)
+	fi
+
+	if [ -d /usr/sap/${ORACLE_SID} -a -f ${ORACLE_HOME}/dbs/init${ORACLE_SID}.sap ]
+	then
+		scc_check_file "${ORACLE_HOME}/dbs/init${ORACLE_SID}.sap" "${class}:init${ORACLE_SID}.sap::" "#"
+
+		# Remove comments between "/*" and "*/"; cannot use scc_check_file.
+                sed	-e "s@/\*.*\*/@@g"				\
+			-e '/^[ 	]*$/d'				\
+			-e "s/^/${class}:init${ORACLE_SID}.dba::/"	\
+				<${ORACLE_HOME}/dbs/init${ORACLE_SID}.dba
+        fi
+
+	if [ -d /oracle/${ORACLE_SID}/sapcheck ]
+	then
+		(
+			# Assume that sapcheck is run periodically.
+			cd /oracle/${ORACLE_SID}/sapcheck
+			file="$(ls -t | grep "chk$" | head -1)"
+			scc_check_file "${file}" "var:software:SAP:${ORACLE_SID}:sapcheck::" "#"
+		)
+	fi
+
+	# Kernel Version
+	class="fix:software:SAP:${ORACLE_SID}:disp+work::"
+	if [ -d /sapmnt/${ORACLE_SID}/exe ]
+	then
+		(
+			cd /sapmnt/${ORACLE_SID}/exe
+			./disp+work -v 2>/dev/null		|
+			sed	-e '/^#/d'	\
+				-e "s/^/${class}/"
+		)
+	fi
+
+	#################################################################
+	# Oracle and SAP R/3 backup scripts and configurations
+	# The paths of the scripts are for a specific setup and not applicable for
+	# every site. Extensions and improvements are welcome.
+	class="fix:software:SAP:${ORACLE_SID}:SAP_Backup"
+
+	while read BACKUP_TYPE SCRIPT_PATH
+	do
+		scc_check_file "${SCRIPT_PATH}" "${class}:${BACKUP_TYPE}:${SCRIPT_PATH}::" "#"
+	done <<-_EOF_
+		Backup_SAP_Offline  /usr/local/bin/backup_filesystems_offline_${ORACLE_SID}.sh
+		Backup_SAP_Archive  /usr/local/bin/br_archive_${ORACLE_SID}.sh
+		Backup_SAP_Archive  ${ORACLE_HOME}/dbs/init${ORACLE_SID}.brarchive.diskpool
+		Backup_SAP_Online   /usr/local/bin/br_backup_queue_${ORACLE_SID}.sh
+		Backup_SAP_Online   /usr/local/bin/br_backup_queue_${ORACLE_SID}.sh
+		Backup_SAP_Online   ${ORACLE_HOME}/dbs/init${ORACLE_SID}.sap_backup.lto
+_EOF_
+
+	if [ "${ORACLE_USER}" = "_" ]			# Oracle user could not be determined.
+	then
+		continue
+	fi
+
+	#################################################################
+	# Oracle checks for SAP R/3 
+	# Added by Alexander "fua" Fuchs ATABB/ISSSC
+	#################################################################
+	# SAP Oracle user
+	query="\
+		select 
+			USERNAME
+		from
+			ALL_USERS
+		where 
+			USERNAME LIKE '%SAP%'
+		order by
+			USERNAME;"
+
+	SAP_USER="$(scc_oracle_query "${query}" | sed -e "1,2d" | head -1)"
+	if [ -z "${SAP_USER}" ]
+	then
+		continue		# Skip this SID when there is no SAP user.
+	fi
+	echo "fix:software:SAP:${ORACLE_SID}:SAP_USER::${SAP_USER}"
+
+	#################################################################
+	# installed SAP - Patches
+	class="fix:software:SAP:${ORACLE_SID}:SAP_Patches::"
+
+	query="\
+		select
+			PATCH,
+			SHORT_TEXT,
+			STATUS,
+			DELIV_DATE,
+			DELIV_TIME,
+			RESPONSIBL,
+			IMPLE_DATE,
+			IMPLE_TIME,
+			L_IMPL_REL,
+			PATCH_TYPE,
+			COMP_REL,
+			COMPONENT
+		from
+			${SAP_USER}.PAT03
+		order by
+			PATCH, COMP_REL, COMPONENT;"
+
+	scc_oracle_query "${query}"             |
+	sed -e "s/^/${class}/"
+
+	echo "${query}"                         |
+	scc_help_info "${class}"
+
+	#################################################################
+	# installed SAP - Printers
+	class="fix:software:SAP:${ORACLE_SID}:SAP_Printers::"
+
+	query="\
+		select
+			${SAP_USER}.TSP03.PADEST,
+			PATYPE,
+			${SAP_USER}.TSP03C.PAPROSNAME,
+			PAMETHOD,
+			${SAP_USER}.TSP03C.PAMSSERVER,
+			PAMSG
+		from  
+			${SAP_USER}.TSP03,
+			${SAP_USER}.TSP03C
+		where 
+			${SAP_USER}.TSP03.PADEST = ${SAP_USER}.TSP03C.PADEST
+		order by
+			${SAP_USER}.TSP03.PADEST;"
+
+	scc_oracle_query "${query}"             |
+	sed -e "s/^/${class}/"
+
+	echo "${query}"                         |
+	scc_help_info "${class}"
+
+done	# while read ORACLE_USER ORACLE_SID ORACLE_HOME
+
+if [ -d /usr/sap/trans/bin ]
+then
+	export class="fix:software:SAP:transport"
+	(
+		cd /usr/sap/trans/bin
+		ls DOMAIN.CFG TPPARMS TP_DOMAIN*.PFL 2>/dev/null        |
+		xargs grep -l "$(hostname)"                             |
+		while read file
+		do
+			scc_check_file "${file}" "${class}:${file}::" "#"
+		done
+	)
+fi
+
+exit 0

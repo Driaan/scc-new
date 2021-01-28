@@ -1,0 +1,1690 @@
+#!/bin/sh
+
+# Shell script with utilities for the modules of scc.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_utils 6286 2019-11-12 16:39:07Z siemkorteweg $
+
+set -u
+
+# Do not set -x via SCC_DEBUG as this utils module is used by most of the scripts.
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+export LANG="C"
+export LC_COLLATE="C"
+
+scc_documentation()
+{
+	echo ""
+	echo "Documentation is available at https://sysconfcollect.sourceforge.net"
+	echo "and locally in /opt/scc/doc/README."
+	exit 0
+}
+
+scc_check_option_single()
+{
+	if [ "${2}" ]
+	then
+		echo "${ProgName}: multiple ${1} options not combined, use shell wildcards for muliple modules"
+		exit 1
+	fi
+}
+
+get_RANDOM()
+{
+	random="${RANDOM:-}"
+	if [ -z "${random}" ]
+	then
+		# No ${RANDOM}, use the seconds, minutes and hours. Add 10 to avoid multiplying with 0.
+		random="$(date '+%H:%M:%S' | awk -F: '{ print ( 10 + $1 ) * ( 10 + $2 ) * ( 10 + $3 ) }' )"
+	fi
+	echo "${random}"
+}
+
+get_sysctl_data()
+{
+	if [ -x /sbin/sysctl ]
+	then
+		if [ -d /proc/sys ]
+		then
+			# remove the files of the deprecated variables:
+			find /proc/sys -type f 2>/dev/null							|
+			sed	-e '/\/proc\/sys\/net\/ipv6\/route\/flush/d'				\
+				-e '/\/proc\/sys\/net\/ipv6\/neigh\/.*\/base_reachable_time$/d'		\
+				-e '/\/proc\/sys\/net\/ipv6\/neigh\/.*\/retrans_time$/d'		\
+				-e '/\/proc\/sys\/net\/ipv4\/route\/flush/d'				\
+				-e '/\/proc\/sys\/fs\/binfmt_misc\/register/d'					|
+			awk	'{
+					# Determine the label from the filename: /proc/sys/fs/aoi-nr => fs.aio-nr
+					cnt=split( $0, parts, "/" )
+					printf( "%s %s", $0, parts[ 4 ] )
+					for ( i = 5; i <= cnt; i++ )
+					{
+						printf( ".%s", parts[ i ] )
+					}
+					printf( "\n" )
+				}'										|
+			while read file label
+			do
+				# RHEL 6.0 contains a write-only file. Test to avoid errors.
+				if [ -r "${file}" ]
+				then
+					sed -e "s/^/${label} = /" "${file}" 2>/dev/null
+				fi
+			done
+		else
+			/sbin/sysctl -a 2>/dev/null			# No /proc/sys available
+		fi
+	fi
+}
+
+random="$(get_RANDOM)"
+export TMP_FILE=${SCC_TMP}/scc_utils_$$_${random}
+
+# NixOS specific
+if test -d /run/current-system/sw/bin
+then
+	export PATH="/run/current-system/sw/bin:${PATH}"
+fi
+
+# Use the following utilities for SunOS.
+for dir in /usr/xpg4/bin /usr/sfw/bin /opt/csw/bin /opt/csw/sbin
+do
+	if [ -d ${dir} ]
+	then
+		PATH=${dir}:${PATH}
+	fi
+done
+
+# Add the directories containing collections of symlinks to programs on Syllable:
+for dir in /usr/index/programs /system/index/programs /boot/system/bin /usr/indexes/bin /usr/indexes/sbin /system/indexes/bin /system/indexes/sbin
+do
+	if [ -d "${dir}" ]
+	then
+		PATH="${PATH}:${dir}"
+	fi
+done
+# Unfortunately aliases do not survive into sub-shells of functions.
+# Use a variable to indicate the program.
+export AWK=awk
+if [ -x /resource/gawk/bin/awk ]
+then
+	alias awk=/resource/gawk/bin/awk
+	AWK=/resource/gawk/bin/awk
+elif [ -x /usr/bin/gawk ]
+then
+	alias awk=/usr/bin/gawk
+	AWK=/usr/bin/gawk
+fi
+
+# Add the directory where Haiku puts the utilities:
+for dir in /boot/common/bin
+do
+	if [ -d "${dir}" ]
+	then
+		PATH="${PATH}:${dir}"
+	fi
+done
+
+# When .cshrc produces output and which is an csh script or when
+# which is not provided (FreeNAS for example), use a function.
+cnt="$(which which 2>/dev/null | wc -l)"
+which_exe="$(which which 2>/dev/null)"
+if [ ${cnt} -ne 1 -o ! -x "${which_exe}" ]
+then
+	which() {
+		for dir in $(echo ${PATH} | sed -e 's/:/ /g')
+		do
+			if [ -x "${dir}/${1}" ]
+			then
+				echo "${dir}/${1}"
+				return 0
+			fi
+		done
+
+		return 1
+	}
+fi
+
+realpath_exe="$(which realpath 2>/dev/null)"
+if [ ! -x "${realpath_exe}" ]
+then
+	realpath()
+	{
+		path="${1}"
+
+		while [ -h "${path}" ]
+		do
+			link="$(ls -ld "${path}" 2>/dev/null | sed -n -e 's/.* -> *//p')"
+
+			previous_path="${path}"
+			case "${link}" in
+			/*)	path="${link}";;
+			*)	path="$(dirname "${path}")/${link}";;
+			esac
+
+			if [ "${previous_path}" = "${path}" ]
+			then
+				exit 1
+			fi
+		done
+
+		if [ -r "${path}" ]
+		then
+			echo "${path}"				|
+			sed	-e 's|/[^/]*/\.\./|/|g'	\
+				-e 's|/[^/]*/\.\./|/|g'	\
+				-e 's|/[^/]*/\.\./|/|g'	\
+				-e 's|/[^/]*/\.\./|/|g'	\
+				-e 's|/[^/]*/\.\./|/|g'	\
+				-e 's|/\./|/|g'		\
+				-e 's|//*|/|g'
+		fi
+	}
+fi
+
+# Milax does not provide wc, replace by a function
+wc_exe="$(which wc 2>/dev/null)"
+if [ ! -x "${wc_exe}" ]
+then
+	wc()
+	{
+		line_opt=0
+		word_opt=0
+		char_opt=0
+		input=""
+		while [ $# -gt 0 ]
+		do
+			if [ "x${1}" = "x-l" ]
+			then
+				line_opt="1"
+				shift 1
+			elif [ "x${1}" = "x-w" ]
+			then
+				word_opt="1"
+				shift 1
+			elif [ "x${1}" = "x-c" ]
+			then
+				char_opt="1"
+				shift 1
+			elif [ -f "${1}" ]
+			then
+				input="${1}"
+				shift 1
+			else
+				echo "0"
+				echo "unknown option/argument for wc: ${1}" >&2
+				return
+			fi
+		done
+
+		if [ -f "${input}" ]
+		then
+			cat "${input}"
+		else
+			cat
+		fi				|
+		${AWK}	'{
+				char_count += ( 1 + length( $0 ) );	# +1 for newline character
+				word_count += NF
+				line_count += 1
+				next
+			}
+			END	{
+					if ( ( l + w + c ) > 1 )
+					{
+						printf( " " )
+					}
+					if ( l )
+					{
+						printf( "%d ", line_count )
+					}
+					if ( w )
+					{
+						printf( "%d ", word_count )
+					}
+					if ( c )
+					{
+						printf( "%d ", char_count )
+					}
+					if ( length( f ) )
+					{
+						print f
+					}
+					else
+					{
+						print ""
+					}
+				}' c=${char_opt} w=${word_opt} l=${line_opt} f="${input}"
+	}
+fi
+
+mount_exe="$(which mount 2>/dev/null)"
+if [ ! -x "${mount_exe}" ]
+then
+	mount()
+	{
+		if [ -x /bin/df ]
+		then
+			/bin/df		|
+			awk	'{
+					# Input format:		Filesystem         Bytes        Used     Available Use% Mounted on
+					# Output format:	<device> on <mount_point> type <fs_type> <options> 
+					if ( NR > 1 )
+					{
+						print $6, "on", $6, "type", $1;
+					}
+				}'
+		fi
+	}
+fi
+
+# Milax does not provide tee, replace by a function
+tee_exe="$(which tee 2>/dev/null)"
+if [ ! -x "${tee_exe}" ]
+then
+	tee()
+	{
+		if [ "x${1}" = "x-a" ]
+		then
+			shift 1
+		else
+			rm -f "${1}"
+			touch "${1}"
+		fi
+		cat >${TMP_FILE}
+		cat ${TMP_FILE} >>"${1}"
+		cat ${TMP_FILE}
+		rm -f ${TMP_FILE}
+	}
+fi
+
+# PuppyLinux does not provide cksum, replace the functionality by a (limited) function
+cksum_exe="$(which cksum 2>/dev/null)"
+if [ ! -x "${cksum_exe}" ]
+then
+	cksum()
+	{
+		if [ $# -eq 0 ]
+		then
+			wc -c -w
+		else
+			count="$(wc -c -w <"${1}")"
+			echo "${count} ${1}"
+		fi
+	}
+fi
+
+# Generic checksum function.
+scc_checksum()
+{
+	exe=""
+	for program in md5sum sha256sum sha1sum cksum
+	do
+		exe="$(which ${program} 2>/dev/null)"
+		if [ -x "${exe}" ]
+		then
+			if [ $# -eq 1 ]
+			then
+				"${exe}" "${1}"
+			else
+				"${exe}" 
+			fi				|
+			sed -e 's/[ 	].*//'
+			break
+		fi
+	done
+
+	if [ ! -x "${exe}" ]
+	then
+		for program in md5 sha256 sha1
+		do
+			exe="$(which ${program} 2>/dev/null)"
+			if [ -x "${exe}" ]
+			then
+				if [ $# -eq 1 ]
+				then
+					"${exe}" "${1}"
+				else
+					"${exe}" 
+				fi				|
+				${AWK} '{ print $4 }'
+				break
+			fi
+		done
+	else
+		if [ $# -eq 0 ]
+		then
+			cat >/dev/null
+		fi
+	fi
+}
+
+# Minix does not provide hostname
+hostname_exe="$(which hostname 2>/dev/null)"
+if [ ! -x "${hostname_exe}" -a -f /etc/hostname.file ]
+then
+	hostname()
+	{
+		cat /etc/hostname.file
+	}
+fi
+
+# Use a binary character '\001' as separator for sed substitute statements to avoid clashes.
+if [ -z "${sed_sep:-}" ]
+then
+	sed_sep=$(${AWK} 'END { printf( "%c", 1 ) }' /dev/null)
+	export sed_sep
+fi
+
+# On a Mandrake MNF the command "file" is absent.
+# In that case we ignore the check for binary contents of files.
+bin_file_check="yes"
+file_exe="$(which file 2>/dev/null)"
+if [ ! -x "${file_exe}" ]
+then
+	bin_file_check=""
+fi
+
+# On some systems the command fstyp is missing. Provide a  limited version for the syntax: fstyp -v <fs>
+fstyp_exe="$(which fstyp 2>/dev/null)"
+if [ ! -x "${fstyp_exe}" ]
+then
+	# Calling syntax is: fstyp -v <fs>
+	fstyp()
+	{
+		${AWK}	'{
+				if ( $2 == fs )
+				{
+					print $3
+				}
+			}' fs="${2}" /etc/fstab 2>/dev/null
+	}
+fi
+
+# Some data is determined from the process list and not from files on the system.
+# When a process is (temporarily) stopped, the corresponding data cannot be determined
+# resulting in differences in the logbook. To avoid this, we store this kind of data in
+# a keep-file. When this data is absent during the next run of SCC, we retrieve it from
+# the keep-file. To avoid that this goes on indefinitely, we also record the number of 
+# times the data has been used from the keep-file. When this exceeds a specific number of
+# times, the data is no longer used from the keep-file.
+#
+# Syntax: scc_keep <class> <max_keep_count>
+# This function uses two files, indicated by the following variables:
+# - ${SCC_KEEP_CONFIG} - the file with the data that was kept during the previous run of SCC
+# - ${SCC_KEEP_NEW} - the file with the data to be kept during the current run of SCC
+# The data from stdin is kept in the new keep file prefixed by "<class>:config:".
+# The number of time it has been absent is recorded by "<class>:count:<count>".
+scc_keep()
+{
+	class="${1}"
+	max_cnt=${2}
+
+	cat >${TMP_FILE}
+	if [ -s ${TMP_FILE} ]
+	then
+		# We retrieved data, store in new keep-file with count 1
+		echo "${class}:count:1" >>"${SCC_KEEP_NEW}"
+		sed -e "s@^@${class}:config:@" <${TMP_FILE} >>"${SCC_KEEP_NEW}"
+
+		cat ${TMP_FILE}	# send our input to stdout
+	else
+		# No data, have a look in the previous (current) keep-file
+		cur_cnt=$(sed -n -e "s/^${class}:count://p" ${SCC_KEEP_CONFIG} 2>/dev/null | tail -n 1)
+		cur_cnt=${cur_cnt:-0}
+		if [ ${cur_cnt} -le ${max_cnt} -a ${cur_cnt} -gt 0 ]
+		then
+			# The data has not been used too often:
+			cur_cnt=$(( cur_cnt + 1 ))
+			echo "${class}:count:${cur_cnt}" >>${SCC_KEEP_NEW}
+
+			# Use the data from a previous run of SCC, add it to 
+			# the new keep-file and send it to stdout.
+			grep "^${class}:config:" ${SCC_KEEP_CONFIG} 2>/dev/null	|
+			tee -a ${SCC_KEEP_NEW}					|
+			sed -e "s/^${class}:config://"
+		fi
+		touch ${SCC_KEEP_NEW}
+	fi
+
+	rm -f ${TMP_FILE}
+	return
+}
+
+# Add help-info to the snapshot.
+# Syntax: scc_help_info <class>
+# <class> can start with "fix:", "var:", "hlp:" or no prefix at all.
+# Help-info is on stdin. Typical a here-document.
+scc_help_info()
+{
+	case "${1}" in
+	fix:*|var:*)	utils_h_class="hlp:${1#*:}"
+			;;
+	hlp:*)		utils_h_class="${1}"
+			;;
+	*)		utils_h_class="hlp:${1}"
+			;;
+	esac
+
+	sed -e "s${sed_sep}^${sed_sep}${utils_h_class}${sed_sep}"
+
+	return 0
+}
+
+tr_exe="$(which tr 2>/dev/null)"
+if [ ! -x "${tr_exe}" ]
+then
+	tr()
+	{
+		if [ "${1}" = '-d' ]
+		then
+			if [ "${2}" = '\012' ]
+			then
+				awk '{ printf( "%s", $0 ) }' -
+			elif [ "${2}" = '\015' ]
+			then
+				sed -e 's/\r//' 
+			else
+				cat -		# assume that character is absent
+			fi
+		elif [ "${1}" = '[:upper:]' ]
+		then
+			# UPPER to lower
+			awk '{ print tolower( $0 ) }' -
+		elif [ "${1}" = '[:lower:]' ]
+		then
+			# lower to UPPER
+			awk '{ print toupper( $0 ) }' -
+		else
+			cat -			# assume that characters to be translated are absent
+		fi
+	}
+fi
+
+# Replace all non-ascii data in stdin by _
+# Syntax: scc_to_ascii
+# Return:	non
+scc_to_ascii()
+{
+	# Replace all non-ascci characters in the data by '_'. Keep \011 (hor. tab) and \012 (CR).
+	# Limit linelength to avoid messages for files with extremely long lines.
+	busybox_check tr
+	if [ $? -eq 0 ]
+	then
+		# The real thing
+		tr "\000-\010\013-\037\200-\377" "_"
+	else
+		# The busybox version of tr cannot handle ranges. 
+		tr "\000\001\002\003\004\005\006\007\010\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\260" "_"
+	fi
+}
+
+# Add the contents of the file to the snapshot (use keep-file for recording of file permissions).
+# Syntax: scc_check_file [ --xml | --ini ] <file> <prefix> [ <comment-char> ]
+# Return:	0	file is present
+# 		1	file is absent
+scc_check_file()
+{
+	ini=0
+	xml=0
+	if [ "X${1}" = "X--ini" ]
+	then
+		# Prefix data with [tag]
+		ini=1
+		shift 1
+	elif [ "X${1}" = "X--xml" ]
+	then
+		# Force ignore of comments in XML-files that do not start with <xml>.
+		xml=1
+		shift 1
+	fi
+
+	if [ $# -lt 2 -o $# -gt 3 ]
+	then
+		echo "Syntax error, use: scc_check_file [ --xml ] <file> <prefix> [ <comment-char> ]" >&2
+		for arg in $@
+		do
+			echo "argument: ${arg}" >&2
+		done
+		return 1
+	fi
+
+	# Avoid unbound variable errors when comment is not an argument of this function.
+	if [ $# -eq 2 ]
+	then
+		set "${1}" "${2}" ""
+	fi
+
+	check=${2%%::*}
+	if [ "${check}" = "${2}" ]
+	then
+		echo "improper prefix: ${2}, missing '::'" >&2
+	fi
+
+	# Not sure whether -L option of file(1) is available on all platforms. We do our own dereferencing.
+	if [ -h "${1}" ]
+	then
+		target="$(ls -l "${1}" | sed -e 's/.* -> *//')"
+		case "${target}" in
+		/*)	set "${target}" "${2}" "${3}";;
+		*)	set "${1%/*}/${target}" "${2}" "${3}";;
+		esac
+	fi
+
+	if [ -f "${1}" -a -r "${1}" ]
+	then
+		# Binary files do not look nice in the snapshots. Use file
+		# to avoid files with binary data.
+		# List with exceptions:
+		# - file thinks that some files in /proc are empty
+		#   so, do process empty files
+		# - on HP-UX: /etc/default/fs: nettl binary Log file -version 17217
+		# - RH uses: empty
+		# - SunOS uses: empty file
+
+		# values_action: 1 (process), 0 (report as non-ASCII), -1 (ignore)
+		utils_action=1
+		if [ -n "${bin_file_check}" ]
+		then
+			f_type="$(file "${1}" 2>/dev/null | head -n 1)"
+			case "${f_type}" in
+			*International?Language*)	utils_action=-1;;	# Ignore multibyte characterset files
+			*cannot?open*)			utils_action=-1;;	# Ignore NFS-errors.
+			*GIF?image?data,*)		utils_action=-1;;	# Ignore GIF-images.
+			*compress*)			utils_action=-1;;	# Ignore compressed files.
+			*ASCII*text,*)			;;
+			*text)				;;
+			*empty)				;;
+			*empty?)			;;
+			*empty?file)			;;
+			*executable?*?script)		;;
+			*nft*script*ASCII*)		;;
+			*script?text?executable)	;;
+			*LILO*)				;;
+			*public?key*)			;;
+			*shell?script*)			;;
+			*symbolic?link?to*)		;;
+			/etc/default/fs*)		;;
+			*vmware*text*)			;;
+			*xml*)				;;
+			*XML*)				;;
+			*:\ )				;;
+			*)				if [ -n "${f_type}" ]	# Display contents when file returns empty type.
+							then
+								utils_action=0
+							fi;;
+			esac
+		fi
+
+		if [ ${utils_action} -gt 0 ]
+		then
+			# Preserve in the keep file for later processing in the permissions module.
+			echo "fix:file_perms:${2}::${1}" >>${SCC_KEEP_NEW}
+
+			utils_class="${2}"
+			if [ "${1}" != "${1%%:*}" ]		# Filename contains ":"
+			then
+				# The filename is probably part of the classification.
+				# Replace ":" with "_" to avoid confusion with the class-separator.
+				utils_new_name="$(echo "${1##*/}" | sed -e 's/:/_/g')"
+				utils_class="$(echo "${2}" | sed -e "s${sed_sep}${1##*/}${sed_sep}${utils_new_name}${sed_sep}")"
+			fi
+
+			# Ignore comment and blank lines.
+			comment_regexp="$(echo "${3:-}" | sed -e 's@/@\\/@g')"		# escape / to avoid conflicts with regexp delimiter of awk.
+			if [ "${comment_regexp}" = "*" ]
+			then
+				comment_regexp="[*]"
+			fi
+
+			# Replace all binary data.
+			# Limit linelength to avoid messages for files with extremely long lines.
+			scc_to_ascii <"${1}"						|
+			cut -c1-2000							|
+			sed	-e 's/[ 	]*$//'	\
+				-e '/^$/d' 2>/dev/null					|
+			${AWK} 'BEGIN {
+					squelch = 0
+					ini_label = ""
+				}
+
+				# Keep the interpreter line.
+				/^#!\//	{ print p $0; next }
+
+				# Check if this is an ini-label
+				/^\[.*\]$/ {
+						if ( ini == 1 )
+						{
+							ini_label = $0
+						}
+					}
+
+				# Check if this is a XML file
+				/^<\?xml version/ {
+						if ( NR == 1 )
+						{
+							xml = 1
+						}
+					}
+
+				# Ignore lines in non-XML files starting with comment char
+				/^[ 	]*'"${comment_regexp}"'/ {
+						if ( xml == 0 && c != "" )
+						{
+							next
+						}
+					}
+
+				# General processing.
+					{
+						# Print non-XML lines
+						if ( xml == 0 )
+						{
+							if ( ini == 1 && length( ini_label ) > 0 )
+							{
+								print p ini_label ":" $0
+							}
+							else
+							{
+								print p $0
+							}
+							next
+						}
+
+						# every line that passes this point, is from an xml file,
+						# no further checks on xml var needed
+						line = $0
+						pline = ""
+						while ( line != "" )
+						{
+							if ( squelch == 0 )
+							{
+								# it seems we need to print something,
+								# check for beginning of comment
+								x = index (line, "<!--")
+								if ( x > 0 )
+								{
+									pline = pline substr( line, 1, x - 1 )
+									line = substr( line, x + 4 )
+									squelch = 1
+								}
+								else
+								{
+									pline = pline line
+									line = ""
+								}
+							}
+							if ( squelch == 1 )
+							{
+								# it seems we are squelching comment,
+								# check for end of that
+								x = index( line, "-->" )
+								if ( x > 0 )
+								{
+									line = substr( line, x + 3 )
+									squelch = 0
+								}
+								else
+								{
+									line = ""
+								}
+							}
+						}
+						sub(/[ 	]*$/, "", pline )
+						if ( pline != "" )
+						{
+							print p pline
+						}
+						next
+					}'	c="${3}"		\
+						p="${utils_class}"	\
+						ini=${ini}		\
+						xml=${xml}
+
+			comment=" and lines starting with character: ${3}"
+			if [ -z "${3}" ]
+			then
+				comment=""
+			fi
+
+			scc_help_info "${utils_class}" <<-_X_
+				Contents of file: ${1}
+				Ignore blank lines${comment}
+			_X_
+
+			return 0;	# indicate logging of data in file.
+		elif [ ${utils_action} -eq 0 ]
+		then
+			# Sometimes the file command tries to interpret too much.
+			# Add a comment-line to get the result: data
+			echo "fix:general::scc_check_file ignored non-ASCII file ${1}: '${f_type}'"
+		fi
+	fi
+
+	return 1;			# indicate skip of (absent) file.
+} 
+
+# Encrypt stdin
+# Syntax: scc_crypt
+scc_crypt()
+{
+	# Encrypt stdin.
+	{
+		# The variable crypt_key is initalized during the first run of scc.
+		# Adding this data avoids that the identical critical data on other systems
+		# have the same checksum on scc-srv. Indicated by Esther Hanko and Ronald van der Meer.
+		echo "${crypt_key}"
+		cat -
+		echo "${crypt_key}"
+	}				|
+	scc_checksum
+
+	return 0
+}
+
+# Add profiling data
+# Syntax: scc_timing <message>
+scc_timing()
+{
+	utils_now=$(date '+%H.%M.%S')
+	utils_hour=${utils_now%%.*}
+	utils_hour=${utils_hour#0}	# avoid 'octal' arithmetic
+	utils_min=${utils_now%.*}
+	utils_min=${utils_min#*.}
+	utils_min=${utils_min#0}	# avoid 'octal' arithmetic
+	utils_sec=${utils_now##*.}
+	utils_sec=${utils_sec#0}	# avoid 'octal' arithmetic
+
+	utils_tick_cur=$(( utils_sec + ( 60 * utils_min ) + ( 3600 * utils_hour ) ))
+
+	if [ ${utils_tick_cur} -lt ${tick_prev} ]
+	then
+		# Correction when previous measurement was yesterday.
+		utils_runtime=$(( utils_tick_cur + ( 24 * 3600 ) - tick_prev ))
+	else
+		utils_runtime=$(( utils_tick_cur - tick_prev ))
+	fi
+	total_time=$(( total_time + utils_runtime ))
+	echo "stats:profiling::${utils_now}:${total_time}:${utils_runtime}:${1}"
+
+	tick_prev=${utils_tick_cur}
+
+	return
+}
+
+# Reformat the output of ls -l, replace the time by the year.
+# The first 6 months after modification, the time is shown.
+# After 6 months, the year is shown. Avoid unnessary differences between snapshots.
+month_now=$(date '+%m')
+year_now=$(date '+%Y')
+scc_ls()
+{
+	${AWK} '{ if ( NF > 8 ) print }'		|
+	sed	-e 's/ Jan / 01 /'	\
+		-e 's/ Feb / 02 /'	\
+		-e 's/ Mar / 03 /'	\
+		-e 's/ Apr / 04 /'	\
+		-e 's/ May / 05 /'	\
+		-e 's/ Jun / 06 /'	\
+		-e 's/ Jul / 07 /'	\
+		-e 's/ Aug / 08 /'	\
+		-e 's/ Sep / 09 /'	\
+		-e 's/ Oct / 10 /'	\
+		-e 's/ Nov / 11 /'	\
+		-e 's/ Dec / 12 /'		|
+	${AWK} '{
+		if ( $8 ~ "^[0-9][0-9][0-9][0-9]$" )
+		{
+			year=$8
+		}
+		else
+		{
+			year=j
+			if ( $6 > m )
+			{
+				year--
+			}
+		}
+		printf( "%s:%s:%s:%s:%s:%d-%02d-%02d:%s %s %s\n",
+			$1, $2, $3, $4, $5, year, $6, $7, $9, $10, $11 )
+	}' j=${year_now} m=${month_now}
+
+	return
+}
+
+# Retrieve the Oracle SID's 
+# Requires:
+#	${ORATAB} or running ora_pmon processes
+#	oraInst.loc
+# Syntax:
+#	scc_oracle_sids
+# Output:
+#	<user> <sid> <home>
+#	Where <user> is "_" when no user can be determined from the process-list
+scc_oracle_sids ()
+{
+	# Determine the the oracle_home and oracle_sid combinations:
+	# - from oratab
+	# - via orainventory -> base directories -> init<SID>.ora and spfile<SID>.ora files (Erik-Jan Taal).
+	# Combine via sort -u and find the oracle user from the proc-file.
+	# Todo: Check owners of init- and sp-files.
+	(
+		if [ -f "${ORATAB:-}" ]
+		then
+			# Use the oratab to determine a list of ORACLE_SID and ORACLE_HOME
+			sed	-e 's/:/ /'		\
+				-e 's/:.*//'		\
+				-e 's/[#*].*//'		\
+				-e '/^[ 	]*$/d'	\
+					${ORATAB}		|
+			awk '{ print $2, $1; }'
+		fi
+
+		# Attempt to find some oracle-home directories and use the init<SID>.ora and spfile<SID>.ora files
+		# to list the oracle_home and oracle_sid combinations.
+		(
+			ora_inst="${ORATAB%/*}/oraInst.loc"
+			if [ -f "${ora_inst}" ]
+			then
+				inventory="$(sed -n -e 's/^inventory_loc=//p' "${ora_inst}")/ContentsXML/inventory.xml"
+				if [ -f "${inventory}" ]
+				then
+					# Example data:
+					#<HOME NAME="APPSDB_ORA" LOC="/app/oradb/920_64bit" TYPE="O" IDX="1"/>
+					sed -n "s/.*HOME.*LOC=\"*//p" "${inventory}"	|
+					sed -e "s/\"* .*//"
+				fi
+			fi
+
+			# Try a default ORACLE_HOME and retrieve sid from init.ora and spfile.ora:
+			# According to OFA:
+			if [ -x /opt/oracle/bin/sqlplus ]
+			then
+				echo "/opt/oracle"
+			fi
+
+			# Avoid automounts when searching for alternative paths.
+			if [ ! -x /usr/sbin/automount ]
+			then
+				ls /				|
+				while read entry
+				do
+					if [ -d "/${entry}" ]
+					then
+						for dir in /${entry}/app/oracle/product/*
+						do
+							if [ -x "${dir}/bin/sqlplus" ]
+							then
+								echo "${dir}"
+							fi
+						done
+					fi
+				done
+			fi
+		)		|
+		sort -u		|
+		while read ora_home
+		do
+			if [ -d "${ora_home}/dbs" ]
+			then
+				# - dbs/init<SID>.ora (spfile=)
+				# - dbs/spfile<SID>.ora (strings)
+				# - use an (additional) "?" to avoid faulty output with a 'init.ora' file (Erik-Jan Taal)
+				ls "${ora_home}"/dbs/init?*.ora "${ora_home}"/dbs/spfile?*.ora 2>/dev/null	|
+				sed	-e '/initdw.ora/d'			\
+					-e 's/\.ora$//'				\
+					-e "s@^.*/dbs/init@${ora_home} @"	\
+					-e "s@^.*/dbs/spfile@${ora_home} @"
+			elif [ -d "${ora_home}/network/admin" ] 
+			then 
+				echo "${ora_home}" _		# No server, client 
+			fi
+		done
+	)				|
+	sort -u -f			|
+	while read home sid
+	do
+		if [ "${sid}" = "_" ] 
+		then 
+			echo "_ _ ${home}" 
+		else 
+			# Retrieve the oracle user from the process list.
+			# On AIX a space is appended to the processname (indicated by Rick Veenstra).
+			user="$(sed -n -e "s/^[ 	]//" -e "s/ .* ora_pmon_${sid} *$//p" ${PROC_FILE})"
+			if [ -n "${user}" ]
+			then
+				echo "${user} ${sid} ${home}"
+			else
+				echo "_ ${sid} ${home}"
+			fi
+		fi
+	done
+
+	return
+}
+
+# Perform oracle query
+# Requires: ${ORACLE_HOME} and ${ORACLE_USER}
+# Syntax:
+# - scc_oracle_query <sql-statement>
+# - scc_oracle_query <query-file>
+scc_oracle_query ()
+{
+	# This routine only works for Oracle 7.3 and later!
+	ORA_USE_PROFILE=${ORA_USE_PROFILE:-0}
+
+	# We create a shellscript that will be interpreted.
+	# The structure of the shellscript contains a nested here-document:
+	# su ${ORACLE_USER} <<EOF_SU
+	# svrmgrl or sqlplus <<EOF_QRY
+	# query statements
+	# EOF_QRY
+	# EOF_SU
+	{
+		# Oracle users with /bin/csh als default shell, use a different syntax to set the library path.
+		utils_ora_shell="$(${AWK} -F: '/^'"${ORACLE_USER}"':/	{ print $NF }' /etc/passwd)"
+		case "${utils_ora_shell}" in
+		*csh)	utils_lib_cmd="setenv LD_LIBRARY_PATH ${ORACLE_HOME}/lib;"
+			;;
+		*)	utils_lib_cmd="LD_LIBRARY_PATH=${ORACLE_HOME}/lib; export LD_LIBRARY_PATH;"
+			;;
+		esac
+
+		if [ ${ORA_USE_PROFILE} -eq 1 ]
+		then
+			echo "su - ${ORACLE_USER} 2>/dev/null <<EOF_SU"
+		else
+			echo "su ${ORACLE_USER} 2>/dev/null <<EOF_SU"
+		fi
+
+		# Supply the query by means of a nested here-document.
+		if [ -x ${ORACLE_HOME}/bin/svrmgrl -a -z "${force_sqlplus_query:-}" ]
+		then
+			echo "${ORACLE_HOME}/bin/svrmgrl <<EOF_QRY"
+			echo "connect internal"
+		else
+			echo "${utils_lib_cmd}"
+			echo "${ORACLE_HOME}/bin/sqlplus /nolog <<EOF_QRY"
+			echo "connect / as sysdba"
+			echo "set linesize 32000;"
+			echo "set pagesize 32000;"
+		fi
+
+		if [ $# -eq 1 -a -f "${1}" ]
+		then
+			sed -e 's/\$/\\\\\\$/g' "${1}"	# query is supplied by means of a file
+		else
+			echo "$*"			# query is supplied by means of the command-line
+		fi			|
+		tr -d "\012"
+		# Reduce multiline queries to single line to avoid continuation prompts (2> ...) in the output.
+		echo ""				# add one CR
+
+		echo "exit"
+		echo "EOF_QRY"
+		echo "EOF_SU"
+
+		# the output of the script above, executed by sh below MUST be redirected
+		# to the TMP file, because of strange behavior of Oracle 7 svrmgrl
+	} | sh >${TMP_FILE} 2>/dev/null
+
+	if [ -z "${force_sqlplus_query:-}" ]
+	then
+		grep -l "^no rows selected" ${TMP_FILE} >/dev/null 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			sed	-e 's/SVRMGR> //'			\
+				-e 's/SQL> //g'				\
+				-e '1,/^Connected.$/d'			\
+				-e '/^Server Manager complete/d'	\
+				-e '/^Disconnected from Oracle/,$d'	\
+				-e '/^[ 	]*$/d'			\
+				-e 's/[ 	]*$//'			\
+				-e '/^1 row selected/d'			\
+				-e '/^no rows selected/d'		\
+				-e '/^[0123456789]* rows selected/d' ${TMP_FILE}
+		fi
+	else
+		cat ${TMP_FILE}
+	fi
+
+	rm ${TMP_FILE}
+
+	return 0
+}
+
+# Record Linux distribution
+# Syntax: scc_linux_distr [ <class> ]
+# - without arguments: variable SCC_LINUX_DISTRO is set
+# - (<class>) prefixes contents of release file of Linux distribution with <class> on stdout
+#   when version/release is determined, it is output with "<class> version:"
+#   name of file specifying distro details is output with "<class> <name>" and contents with "<class> details:"
+scc_linux_distro()
+{
+	export SCC_LINUX_DISTRO=""
+	scc_class="${1:-}"
+
+	if [ "${OS_NAME}" != "Linux" ]
+	then
+		return 0
+	fi
+
+	lsb_exe="$(which lsb_release 2>/dev/null)"
+	if [ -x "${lsb_exe}" ]
+	then
+		SCC_LINUX_DISTRO="$(${lsb_exe} -s -i 2>/dev/null)"
+		if [ $# -eq 1 ]
+		then
+			echo "${scc_class} version:$(${lsb_exe} -s -r 2>/dev/null)"
+
+			${lsb_exe} -s -d		|
+			sed -e "s@^@${scc_class} details:@"
+		fi
+		return 0
+	fi
+
+	OS_RELEASE_FILE=/etc/os-release
+	if [ -f ${OS_RELEASE_FILE} ]
+	then
+		SCC_LINUX_DISTRO="$(sed -n -e 's/"//g' -e 's/ Linux//' -e 's/^NAME=//p' "${OS_RELEASE_FILE}")"
+		if [ $# -eq 1 ]
+		then
+			sed	-e 's/"//g'	\
+				-e 's/=/ /' ${OS_RELEASE_FILE}		|
+			awk 	'/^VERSION_ID /	{ version = $2; }
+				/^VERSION /	{ if ( ! version ) version = $2 }
+				END		{ print c " version:" version }' c="${scc_class}"
+
+			echo "${scc_class} file:${OS_RELEASE_FILE}"
+			sed -e "s@^@${scc_class} details:@" "${OS_RELEASE_FILE}"
+		fi
+		return 0
+	fi
+
+	if [ -h /etc/redhat-release ]
+	then
+		# Symlink to "derived" distro like CentOs and pclinuxos
+		export SCC_LINUX_DISTRO="$(ls -ld /etc/redhat-release | sed -e 's/.*-> *//' -e 's/-.*//' -e 's/_.*//')"
+		if [ $# -eq 1 ]
+		then
+			sed -e "s@^@${scc_class} details:@" /etc/redhat-release
+		fi
+		return 0
+	fi
+
+	# Before we use /etc/lsb-release, process some distro that record their base-distro in that file.
+	while read file distro
+	do
+		if [ -f "${file}" ]
+		then
+			export SCC_LINUX_DISTRO="${distro}"
+			if [ $# -eq 1 ]
+			then
+				echo "${scc_class} file:${file}"
+				if [ -x "${file}" ]
+				then
+					"${file}" 2>/dev/null
+				else
+					cat "${file}"
+				fi				|
+				sed -e "s@^@${scc_class} details:@"
+			fi
+			return 0
+		fi
+	done <<-_X_
+		/etc/crunchbang-lsb-release	crunchbang
+		/etc/sabayon-edition		sabayon
+		/etc/SuSE-release		SuSe
+		/etc/centos-release		CentOS
+		/etc/pardus-release		Pardus
+		/etc/redhat-release		redhat
+		/etc/unity-release		unity
+		/etc/zevenos_version		zevenos
+	_X_
+
+	LSB_FILE=/etc/lsb-release
+	if [ -f ${LSB_FILE} ]
+	then
+		SCC_LINUX_DISTRO="$(sed -n -e 's/"//g' -e 's/.*DISTRIB_ID=//p' "${LSB_FILE}")"
+		if [ $# -eq 1 ]
+		then
+			sed -n -e 's/"//g' -e "s/.*DISTRIB_RELEASE=/${scc_class} version:/p" "${LSB_FILE}"
+			echo "${scc_class} file:${LSB_FILE}"
+			sed -e "s@^@${scc_class} details:@" "${LSB_FILE}"
+		fi
+		return 0
+	fi
+
+	if [ -f /etc/VERSION ]
+	then
+		SCC_LINUX_DISTRO="T2"
+		if [ $# -eq 1 ]
+		then
+			awk '{ print c $3; exit( 0 )}' c="${scc_class} version:" /etc/VERSION
+			echo "${scc_class} file:/etc/VERSION"
+			sed -e "s@^@${scc_class} details:@" /etc/VERSION
+		fi
+		return 0
+	fi
+
+	# Several distro's are based on others and have more than one release/version file.
+	# First check for derived distro's and stop after the first match.
+	while read file distro
+	do
+		if [ -f "${file}" ]
+		then
+			export SCC_LINUX_DISTRO="${distro}"
+			if [ $# -eq 1 ]
+			then
+				echo "${scc_class} file:${file}"
+				if [ -x "${file}" -a "${file%/*}" = "/usr/bin" ]
+				then
+					"${file}" 2>/dev/null
+				else
+					cat "${file}"
+					echo ""				# Just in case the file does not end with \n
+				fi				|
+				sed -e "s@^@${scc_class} details:@"
+			fi
+			return 0
+		fi
+	done <<-_X_
+		/etc/4MLinux-version		4MLinux
+		/etc/asianux-release		asianux
+		/etc/e-smith-release		sme
+		/etc/caos-release		caos
+		/etc/tinyme-release		tinyme
+		/etc/pclinuxos-release		pclinuxos
+		/etc/goblinx-version		goblinx
+		/etc/dragora-version		dragora
+		/etc/distro-release		rPath
+		/etc/frugalware-release		frugalware
+		/etc/sun-release		SunJDS
+		/etc/mepis-release		mepis
+		/etc/yellowdog-release		yellowdog
+		/etc/mandriva-release		mandriva
+		/etc/mandrakelinux-release	mandrake
+		/etc/zenwalk-version		zenwalk
+		/etc/altlinux-release		AltLinux
+		/usr/share/doc/tc/release.txt	tinycore
+		/usr/bin/crux			CRUX
+		/usr/share/doc/dsl/release.txt	DSL
+		/etc/GoboLinuxVersion		GoboLinux
+		/etc/SLOX-release		SLOX
+		/etc/idms-release		idms
+		/etc/sinux-release		sinux
+		/etc/debian_version		debian
+		/etc/slax-version		slax
+		/etc/vector-version		vector
+		/etc/linuxconsole		linuxconsole
+		/usr/bin/deli			deli
+		/etc/finnix-version		finnix
+		/etc/debris-release		debris
+		/etc/engarde-release		engarde
+		/etc/gentoo-release		gentoo
+		/etc/lunar.release		lunar
+		/etc/mandrake-release		mandrake
+		/etc/momonga-release		momonga
+		/etc/pld-release		pld
+		/media/ploplinux/ploplinux	ploplinux
+		/etc/linuxmint/info		Mint
+		/etc/nutyx-version		nutyx
+		/etc/bulinux-release		bulinux
+		/etc/owl-release		Owl
+		/etc/plamo-release		plamo
+		/etc/rms-version		rms
+		/etc/syn3-version		syn3
+		/etc/sms-version		sms
+		/etc/slackware-version		slackware
+		/etc/slitaz-release		slitaz
+		/etc/turbolinux-release		turbolinux
+		/etc/unraid-version		unRAID
+		/etc/UnitedLinux-release	UnitedLinux
+		/etc/vima-release		VIMA
+		/etc/vma-release		VMA
+		/etc/vmware-release		VMware
+		/etc/wrs-release		WindRiverSystems
+		/etc/yoper-release		Yoper
+	_X_
+
+	# And now some distro's that require some extra work to determine the details.
+
+	if [ -x /usr/sbin/kpkg -a -d /usr/shware/kwort/kpkg ]
+	then
+		# No details:
+		export SCC_LINUX_DISTRO="kwort"
+		return 0
+	fi
+
+	if [ -d /etc/endian ]
+	then
+		export SCC_LINUX_DISTRO="endian"
+		if [ $# -eq 1 ]
+		then
+			echo "${scc_class} file:/etc/release" 2>/dev/null
+			sed -e "s@^@${scc_class} details:@" /etc/release 2>/dev/null
+		fi
+		return 0
+	fi
+
+	# Check for Astaro appliances
+	grep "Astaro" /etc/product >/dev/null 2>/dev/null
+	if [ $? -eq 0 ]
+	then
+		export SCC_LINUX_DISTRO="$(sed -n -e 's/.$//' -e 's/.*ID.*=> *.//p')"
+		if [ $# -eq 1 ]
+		then
+			echo "${scc_class} file:/etc/product"
+			sed -e "s@^@${scc_class} details:@" /etc/product
+			if [ -f /etc/version ]
+			then
+				echo "${scc_class} file:/etc/version"
+				sed -e "s@^@${scc_class} details:@" /etc/version
+			fi
+		fi
+		return 0
+	fi
+
+	# Check for ipcop
+	if [ -x /usr/local/bin/ipcopbkcfg -a -d /var/ipcop ]
+	then
+		export SCC_LINUX_DISTRO=ipcop
+		if [ $# -eq 1 ]
+		then
+			if [ -f /etc/issue ]
+			then
+				echo "${scc_class} file:/etc/issue"
+				sed -e "s@^@${scc_class} details:@" /etc/issue
+			fi
+		fi
+		return 0
+	fi
+
+	# Check for PuppyLinux
+	puppy_file="/etc/puppy"
+	if [ -f /etc/puppyversion ]
+	then
+		puppy_file=/etc/puppyversion
+	fi
+	if [ -z "${SCC_LINUX_DISTRO}" -a -f "${puppy_file}" ]
+	then
+		export SCC_LINUX_DISTRO=PuppyLinux
+		if [ $# -eq 1 ]
+		then
+			echo "${scc_class} file:${puppy_file}"
+			echo "${scc_class} details:$(head -n 1 "${puppy_file}")"
+		fi
+		return 0
+	fi
+
+	puppy_file="/etc/DISTRO_SPECS"
+	if [ -f ${puppy_file} ]
+	then
+		grep -li "^DISTRO_NAME=.*puppy" ${puppy_file} >/dev/null
+		if [ $? -eq 0 ]
+		then
+			export SCC_LINUX_DISTRO=PuppyLinux
+			if [ $# -eq 1 ]
+			then
+				sed -n -e "s/^DISTRO_VERSION=/${scc_class} version:/p" ${puppy_file}
+				echo "${scc_class} file:${puppy_file}"
+				sed -e '/^#/d' -e "s@^@${scc_class} details:@" ${puppy_file}
+			fi
+			return 0
+		fi
+	fi
+
+	# Check for ttylinux:
+	tty_file=/etc/ttylinux-target
+	if [ -z "${SCC_LINUX_DISTRO}" -a -f "${tty_file}" ]
+	then
+		# Example data:
+		# 16.1-x86_64-pc_x86_64
+		export SCC_LINUX_DISTRO=ttylinux
+		if [ $# -eq 1 ]
+		then
+			echo "${scc_class} file:${tty_file}"
+			sed -e "s@^@${scc_class} details:@" "${tty_file}"
+		fi
+		return 0
+	fi
+
+	if [ -f /etc/system-release ]
+	then
+		# Example data:
+		# IPFire 2.5 - core36
+		export SCC_LINUX_DISTRO=$(sed -e 's/[ 	].*//' /etc/system-release)
+		if [ $# -eq 1 ]
+		then
+			echo "${scc_class} file:/etc/system-release"
+			sed -e "s@^@${scc_class} details:@" /etc/system-release
+		fi
+		return 0
+	fi
+
+	# Check for Syllable
+	Syllable_file=/proc/sys/kernel/osrelease
+	if [ -f "${Syllable_file}" ]
+	then
+		grep Syllable "${Syllable_file}" >/dev/null 2>/dev/null
+		if [ $? -eq 0 ]
+		then
+			export SCC_LINUX_DISTRO=Syllable
+			# No details: the file indicates the kernel version and not the distro release.
+			return 0
+		fi
+	fi
+
+	if [ -f /etc/issue ]
+	then
+		details="$(sed -n -e 's/.*paldo \([^ ][^ ]*\) .*/paldo \1/p' /etc/issue)"
+		if [ "${details}" ]
+		then
+			export SCC_LINUX_DISTRO=paldo
+			if [ $# -eq 1 ]
+			then
+				echo "${scc_class} file:/etc/issue"
+				echo "${scc_class} details:#{details}"
+			fi
+			return 0
+		fi
+	fi
+
+	return 0
+}
+
+# On some systems, there is no "strings", replace the functionality by a function.
+strings_exe="$(which strings 2>/dev/null)"
+if [ ! -x "${strings_exe}" ]
+then
+	strings()
+	{
+		if [ $# -ne 0 ]
+		then
+			cat <$1 2>/dev/null
+		fi							|
+		tr -s "\000-\010\013-\037\177-\377" "\012"
+
+		return 0
+	}
+fi
+
+# Use the following utilities for SunOS.
+if [ -x /usr/ccs/bin/what ]
+then
+	alias what=/usr/ccs/bin/what
+else
+	# On a RH73 Workstation, there is no "what", replace the functionality by a function.
+	utils_what_exe="$(which what 2>/dev/null)"
+	if [ ! -x "${utils_what_exe}" ]
+	then
+		what()
+		{
+			if [ -r "${1}" ]
+			then
+				echo "${1}:"
+				strings "${1}"		|
+				sed -n -e 's/^@(#)/	/p'
+
+				return 0
+			else
+				echo "can't open ${1}"
+
+				return 1
+			fi
+		}
+	fi
+fi
+
+# Add PPID to output of BusyBox ps
+# Syntax:
+# - no arguments
+busybox_ps()
+{
+	# BusyBox ps does not show PPID.
+	# Get all PPID's from the status files in /proc and add them to the output of ps.
+	ps >${TMP_FILE}
+
+	find /proc -name status 2>/dev/null				|
+	grep "^/proc/[0-9]*/status"					|
+	xargs ${AWK} '/^PPid|^Pid/	{ print "awk", $0 }' 2>/dev/null	|
+	${AWK}	'/^awk Pid/	{ pid = $3; next		}
+		/^awk PPid/	{ ppid[ pid ] = $3; next	}
+		/^  PID/	{
+					printf( "%s", substr( $0, 0, 14 ) )
+					printf( "%6s", "PPID" )
+					printf( "%s\n", substr( $0, 15 ) )
+					next
+				}
+				{
+					printf( "%s", substr( $0, 0, 14 ) )
+					printf( "%6s", ppid[ $1 ] )
+					printf( "%s\n", substr( $0, 15 ) )
+				}' - ${TMP_FILE}
+
+	rm -f ${TMP_FILE}
+
+	return
+}
+
+# Check whether program is implemented by busybox.
+# Currently only works for programs in /bin
+# Syntax:
+# - program to check
+# Return value:
+# - 0 program NOT implemented by busybox
+# - 1 program implemented by busybox
+busybox_check()
+{
+	busybox_exe="$(which busybox 2>/dev/null)"                         
+	if [ ! -x "${busybox_exe}" -a -x /usr/lib/vmware/busybox/bin/busybox ]
+	then                                                                  
+		busybox_exe="/usr/lib/vmware/busybox/bin/busybox"                                 
+	fi                                                                       
+
+	if [ -x "${busybox_exe}" ]                                                        
+	then
+		# Program is either a symbolic or hardlink to /bin/busybox.
+		prog_e="$(which ${1} 2>/dev/null)"
+		if [ -f "${prog_e}" ]
+		then
+			if [ -h "${prog_e}" ]
+			then
+				# Check whether the file links to program busybox.
+				target="$(ls -l "${prog_e}" | sed -e 's@.*[     ][      ]*@@' -e 's@.*/@@')"
+				if [ "${target}" = "busybox" ]
+				then
+					return 1;		# Program is symbolic link to /bin/busybox
+				fi
+			else
+				# Check for identical inodes (hard link).
+				b_i="$(ls -li "${busybox_exe}" | ${AWK} '{ print $1 }')"
+				p_i="$(ls -li "${prog_e}" | ${AWK} '{ print $1 }')"
+				if [ "${b_i}" -eq "${p_i}" ]
+				then
+					return 1;		# Program is a hard link to busybox.
+				fi
+			fi
+		fi
+	fi
+
+	return 0
+}
+
+# Synopsis:
+#	pack SCC data in transfer format.
+#
+# Syntax:
+#	scc_pack <host>
+#
+# Requires (in current directory):
+#	scc.<host>.cur, scc.<host>.log, scc.<host>.html and scc.<host>.log.html
+#
+# External influence:
+#	variables:
+#	- Progname		name of calling script, used in messages
+#	- SCC_KEY_FILE		public key file to encrypt (optional)
+#	- SCC_INSTALL_PHASE	indicator for running scc during installs
+#
+# Writes (in <target_directory>:
+#	scc.<host>.signal	(non-empty at completion of data-file)
+#	scc.<host>.data
+#
+# Upon failure (missing programs), a message is issued and the program exits (exit status 1).
+#
+# Steps for transfer format:
+#	- tar the 4 scc data and html files
+#	- compress the tar to file scc_client_data
+#	- optional encrypt file scc_client_data
+#	- create file recipe indicating hostname, compression and encryption
+#	- create empty file scc.<host>.signal
+#	- tar the files recipe and scc_client_data into scc.<host>.data
+#	- make sure file scc.<host>.signal is not empty
+
+scc_pack()
+{
+	ProgName="${ProgName:-scc_pack}"
+
+	if [ $# -ne 1 ]
+	then
+		echo "${ProgName}: syntax error, use: scc_pack <host>" >&2
+		exit 1
+	fi
+
+	scc_host="${1}"
+	target_dir="${SCC_DATA}/transfer"
+	if [ ! -d "${target_dir}" ]
+	then
+		mkdir -p "${target_dir}"
+	fi
+
+	if [ "${SCC_KEY_FILE:-}" -a ! -x "$(which openssl 2>/dev/null)" ]
+	then
+		echo "${ProgName}: missing openssl (required for encryption)" >&2
+		exit 1
+	fi
+
+	if [ ! -f scc.${scc_host}.cur -o ! -f scc.${scc_host}.log -o ! -f scc.${scc_host}.log.html -o ! -f scc.${scc_host}.html	]
+	then
+		echo "${ProgName}: missing scc files for host ${scc_host}" >&2
+		exit 1
+	fi
+
+	if [ -z "${SCC_KEY_FILE:-}" -a -x "$(which openssl 2>/dev/null)" -a "${SCC_INSTALL_PHASE:-}" ]
+	then
+		# openssl is installed and we run during an install/upgrade.
+		# When encryption is required and SCC_KEY_FILE is not set (via scc-localize), we do not pack data.
+		return 0
+	fi
+
+	c_p="$(which cat 2>/dev/null)"
+	for p in gzip bzip2 compress
+	do
+		c_p="$(which ${p} 2>/dev/null)"
+		if [ -x "${c_p}" ]
+		then
+			break
+		fi
+	done
+
+	(
+		echo "compression:${p}"
+		echo "host:${scc_host}"
+		echo "compare:client"
+	) > recipe
+
+	tar -chf - scc.${scc_host}.cur scc.${scc_host}.log scc.${scc_host}.log.html scc.${scc_host}.html	|
+	"${c_p}" >scc_client_data
+
+	# Optional encryption
+	if [ "${SCC_KEY_FILE:-}" ]
+	then
+		# Generate a random passphrase.
+		# Replace \0 and \n to avoid short (possibly empty) passwords.
+		openssl rand 40 | tr -s "\012\000" "n0" >passphrase
+
+		# Encrypt the scc-data with triple DES, using the random passphrase.
+		openssl	des3				\
+			-in scc_client_data		\
+			-out crypted_data		\
+			-pass file:passphrase		\
+			-e				\
+			-salt -S 83AF2E2D8BE716C2
+		mv -f crypted_data scc_client_data	# Preserve original name, recipe indicates encryption
+
+		# Encrypt the passphrase with the public key.
+		openssl	rsautl				\
+			-in passphrase			\
+			-out passphrase_encrypted	\
+			-inkey "${SCC_KEY_FILE}"	\
+			-pubin				\
+			-encrypt 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			echo "${ProgName}: unable to encrypt passphrase, please check format of public key file; refer to scc-srv(5)" >&2
+			rm -f passphrase_encrypted passphrase recipe scc_client_data
+			exit 1
+		fi
+
+		# The following line will indicate to scc-srv that the data has been encrypted
+		echo "passphrase:" >>recipe
+		# The remainder of the recipe contains the encrypted passphrase.
+		cat passphrase_encrypted >>recipe
+
+		rm -f passphrase passphrase_encrypted
+	fi
+
+	rm -f ${target_dir}/scc.${scc_host}.*		# remove kept (-k) data file from release prior to 1.24
+	>${target_dir}/scc.${scc_host}.signal
+	tar -cf ${target_dir}/scc.${scc_host}.data scc_client_data recipe
+	echo "done" >${target_dir}/scc.${scc_host}.signal
+
+	# Avoid permission issues when the -u option of scc is overlooked by an admin.
+	owner="$(ls -ld ${target_dir} | awk '{ print $3; exit 0 }')"
+	if [ "${owner:-}" -a "${owner}" != "root" ]
+	then
+		chown "${owner}" ${target_dir}/scc.${scc_host}.data ${target_dir}/scc.${scc_host}.signal 2>/dev/null
+	fi
+
+	rm -f scc_client_data recipe
+}
+
+# Do not exit

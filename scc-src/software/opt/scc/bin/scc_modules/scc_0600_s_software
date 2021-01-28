@@ -1,0 +1,3186 @@
+#!/bin/sh
+
+# Shell script to collect data concerning installed software.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0600_s_software 6300 2019-12-20 22:36:00Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# ASCII to postscript:
+scc_check_file /etc/a2ps.cfg "fix:software:a2ps:/etc/a2ps.cfg::" "#"
+sed -n -e "s/^Include:  *//" /etc/a2ps.cfg 2>/dev/null	|
+sort -u							|
+while read file
+do
+	scc_check_file "${file}" "fix:software:a2ps:${file}::" "#"
+done
+
+for file in /etc/alchemist/*adl
+do
+	scc_check_file "${file}" "fix:software:alchemist:${file}::" "#"
+done
+
+# Apache can be installed in many different places and can be used with
+# or without the -d and -f option. When the config-file cannot be determined
+# this way, check the contents of the binary executable for the compiled
+# location of the root and the name of the config-file.
+# As an additional bonus it can run as httpd or apache2.
+# The catch of apache2 should precede httpd to properly catch process: /opt/apache2/bin/httpd.
+# Ignore processes like (indicated by Harry van Wiggen):
+# root  2636  1  0  Mar 12 ?  1:03 /opt/apache/ssl/stunnel/sbin/stunnel -c -d 127.0.0.1:390 -r lda
+# hub   3471  1  0  Mar 31 ?  0:35 /appl/local/jdk/1.6.0_03/bin/java -Djava.util.logging.manager=org.apache.abc
+#
+# We do not store the actuel Apache config in the keep-file,
+# but the command-lines that are used to determine the Apache config.
+rm -f ${TMP2_FILE}
+> ${TMP1_FILE}
+> ${TMP3_FILE}
+awk	'		{ catch = ""; }
+	/\/stunnel /	{ next }
+	/\/java /	{ next }
+	/apache/	{ catch = "apache"; }
+	/apache2/	{ catch = "apache2"; }
+	/httpd/		{ catch = "httpd"; }
+			{
+				if ( length( catch ) > 0 )
+				{
+					# remove all data in front of the command.
+					for ( i = 1; $i !~ catch; i++ )
+					{
+						$i = ""
+					}
+					print
+				}
+			}' ${PROC_FILE}			|
+sed	-e 's/^ *//'	\
+	-e 's/-d/-d /g'	\
+	-e 's/-f/-f /g'		|
+awk '{
+	# complete all lines to format:
+	# <path>:<executable>:<config-directory>:<config-file>:<settings>
+	if ( $1 ~ "^/" )
+	{
+		path = $1
+		sub( "/[^/]*$", "", path )
+		sub( ".*/", "", $1 )
+		exe = $1
+	}
+	else
+	{
+		path = "_"
+		exe = $1
+	}
+	c_dir = "_"
+	c_file = "_"
+	settings = "_"
+	for ( i = 2; i <= NF; i++ )
+	{
+		if ( $i ~ "^-d$" )
+		{
+			i++
+			c_dir = $i
+		}
+		if ( $i ~ "^-f$" )
+		{
+			i++
+			c_file = $i
+		}
+		if ( $i ~ "^-D" )
+		{
+			setting = sprintf( "%s %s", settings, $i )
+		}
+	}
+	print path ":" exe ":" c_dir ":" c_file ":" settings
+}'				|
+sort -u				|
+scc_keep "software:Apache" 50	|
+sed -e 's/:/ /g'		|
+while read path exe c_dir c_file settings
+do
+	if [ -d "${path}/${exe}" ] 
+	then
+		continue			# A directory does not make sense, just skip
+	fi
+
+	parms="${path}:${exe}:${c_dir}:${c_file}:${settings}"
+	org_path="${path}"
+	org_exe="${exe}"
+
+	# In the keep-file, all data is labelled with Apache.
+	# In the snapshot we determine and indicate the specific webserver.
+	server="Apache"
+	if [ "${exe}" = "lighttpd" ]
+	then
+		server="lighttpd"
+	fi
+
+	if [ ! -d "${path}" ]
+	then
+		path=""
+	fi
+	if [ ! -f "${path}/${exe}" ]
+	then
+		exe=$(which "${exe}" 2>/dev/null)
+		exe=${exe##no *}	# erase the message: no httpd in . . 
+		exe=${exe:="httpd"}
+	else
+		exe="${path}/${exe}"
+	fi
+
+	# Record the settings for all servers.
+	if [ -x "${exe}" ]
+	then
+		# Record the compiled settings only once for each server.
+		# Same server as one of the previous processes?
+		# Slit full exe path into directory and filename.
+		grep "${org_path}:${org_exe}:" ${TMP1_FILE} >/dev/null 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			# Do not use: ${exe} -V as an ordinary user might craft his own httpd.
+			# Register the compiled settings in de the executable.
+			strings "${exe}" 2>/dev/null		|
+			sed -n -e "s@^ -D@fix:software:${server}:${exe}::-D@p"
+		fi
+
+		# Record the command-line settings for each instance.
+		if [ "${settings}" != "_" ]
+		then
+			echo "${settings}"		|
+			tr "," "\012"			|
+			sed -e "s@^@fix:software:${server}:${exe}::@"
+		fi
+	fi
+	# Insert into keep-file after processing!
+	echo "${parms}" >>${TMP1_FILE}
+
+	# Runtime options override compiled settings:
+	conf=""
+	if [ "${c_file}" != "_" ]			# -f option used?
+	then
+		if [ -f "${c_file}" ]			# absolute path?
+		then
+			conf="${c_file}"
+		elif [ -f "${c_dir}/${c_file}" ]
+		then
+			conf="${c_dir}/${c_file}"	# combine arguments of -d and -f options
+		else
+			strings ${exe} 2>/dev/null       |
+			sed -n	-e 's/"//g'	\
+				-e 's/^ -D //p' >${TMP2_FILE}
+
+			# Check the following directories:
+			# - compiled setting HTTPD_ROOT
+			# - "base" path of apache-installation
+			for dir in "$(sed -n -e 's/HTTPD_ROOT=//p' ${TMP2_FILE})" "${path%%/bin}"
+			do
+				if [ -f "${dir}/${c_file}" ]
+				then
+					conf="${dir}/${c_file}"
+					break
+				fi
+			done
+		fi
+	fi
+
+	if [ ! -s ${TMP2_FILE} ]
+	then
+		strings ${exe} 2>/dev/null       |
+		sed -n	-e 's/"//g'	\
+			-e 's/^ -D //p' >${TMP2_FILE}
+	fi
+	root_dir="$(sed -n -e 's/HTTPD_ROOT=//p' ${TMP2_FILE})"
+
+	if [ -z "${conf}" ]             # nothing yet from -f option?
+	then
+		# Try the compiled setting
+		file="$(sed -n -e 's/SERVER_CONFIG_FILE=//p' ${TMP2_FILE})"
+
+		# Check the following directories:
+		# - supplied with -d option
+		# - compiled setting HTTPD_ROOT
+		# - "base" path of apache-installation
+		# - empty, in case SERVER_CONFIG_FILE contains an absolute path
+		# For each directory check:
+		# - compiled setting for SERVER_CONFIG_FILE
+		# - conf/httpd.conf
+		for dir in "${c_dir}" "${root_dir}" ${path%%/bin} ${path} ""
+		do
+			if [ -f "${file}" ]
+			then
+				conf="${file}"
+				break
+			elif [ -f "${dir}/${file}" ]
+			then
+				conf="${dir}/${file}"
+				break
+			elif [ -f "${dir}/conf/httpd.conf" ]
+			then
+				conf="${dir}/conf/httpd.conf"
+				break
+			elif [ -f "${dir}/httpd.cfg" ]
+			then
+				conf="${dir}/httpd.cfg"
+				# Data already found, has been labelled Apache.
+				server="Gaztek webserver"
+				break
+			fi
+		done
+	fi
+
+	if [ -f "${conf}" ]
+	then
+		grep "^${conf}$" ${TMP3_FILE} >/dev/null 2>/dev/null
+		if [ $? -eq 0 ]
+		then
+			continue		# Already processed, ignore also derived files
+		fi
+		echo "${conf}" >>${TMP3_FILE}
+
+		scc_check_file "${conf}" "fix:software:${server}:${conf}::" "#"
+
+		envvars="${conf%/*}/envvars"
+		scc_check_file "${envvars}" "fix:software:${server}:${envvars}::" "#"
+
+		srm_conf="${conf%/*}/srm.conf"
+		scc_check_file "${srm_conf}" "fix:software:${server}:${srm_conf}::" "#"
+
+		# Wildcards can be used. Remove characters that can start a subshell.
+		(
+			# On OpenSuse, files in conf.d are implicitly included
+			echo "${conf%/*}/conf.d/*conf"
+
+			sed -n -e 's/^[ 	]*[Ii]nclude[ 	]*//p' "${conf}"
+			sed -n -e 's/^[ 	]*[Ii]ncludeOptional[ 	]*//p' "${conf}"
+		)								|
+		tr -d -c "a-z A-Z/.*#^\-_0-9[\]\012"				|
+		sort -u								|
+		while read file
+		do
+			conf_base="${conf%/conf/*}"
+			if [ -f "${file}" ]
+			then
+				echo "${file}"
+			elif [ -f "${conf%/*}/${file}" ]
+			then
+				echo "${conf%/*}/${file}"
+			elif [ -f "${root_dir}/${file}" ]
+			then
+				echo "${root_dir}/${file}"
+			elif [ -d "${file}" ]
+			then
+				for f in ${file}/*
+				do
+					echo "${f}"
+				done
+			elif [ -d "${conf%/*}/${file}" ]
+			then
+				for f in ${conf%/*}/${file}/*
+				do
+					echo "${f}"
+				done
+			elif [ -d "${root_dir}/${file}" ]
+			then
+				for f in ${root_dir}/${file}/*
+				do
+					echo "${f}"
+				done
+			else
+				# Let the shell resolve the pattern,
+				# the above "tr -d" avoids a subshell from being started.
+				for f in ${file} ${conf_base}/${file} ${conf%/*}/${file}
+				do
+					echo "${f}"
+				done
+			fi
+		done								|
+		sed -e 's@//@/@g'						|
+		sort -u								|
+		while read subconf
+		do
+			grep "^${subconf}$" ${TMP3_FILE} >/dev/null 2>/dev/null
+			if [ $? -eq 0 ]
+			then
+				continue		# Already processed, ignore
+			fi
+			echo "${subconf}" >>${TMP3_FILE}
+			scc_check_file "${subconf}" "fix:software:${server}:${conf} include:${subconf}::" "#"
+		done
+	fi
+	rm -f ${TMP2_FILE}
+done
+rm -f ${TMP1_FILE} ${TMP2_FILE} ${TMP3_FILE}
+
+if [ -d /etc/asterisk ]
+then
+	for file in /etc/asterisk/*conf /etc/asterisk/*inc /etc/asterisk/*adsi
+	do
+		scc_check_file "${file}" "fix:software:asterisk:${file}::" ";"
+	done
+
+	for file in /etc/asterisk/*ael
+	do
+		scc_check_file "${file}" "fix:software:asterisk:${file}::" "//"
+	done
+
+	for file in /etc/asterisk/*lua
+	do
+		scc_check_file "${file}" "fix:software:asterisk:${file}::" "--"
+	done
+fi
+
+scc_check_file /etc/Bastille/config "fix:software:Bastille:/etc/Bastille/config::" "#"
+
+# Check bbd to determine whether Big Brother/Sister is used.
+sed -n -e 's/.*[ 	]\(.*\)\/[b]in\/bbd$/\1/p' ${PROC_FILE}		|
+head -n 1								|
+scc_keep "software:BB" 5						|
+while read dir
+do
+	label="Big Brother"
+	if [ -d "${dir}/adm" ]
+	then
+		label="Big Sister"
+	fi
+
+	for file in "${dir}"/etc/* "${dir}"/adm/*
+	do
+		scc_check_file "${file}" "fix:software:${label}:${file}::" "#"
+	done
+done
+
+busybox_exe="$(which busybox 2>/dev/null)"
+link_cnt=1
+if [ -x "${busybox_exe}" ]
+then
+	# Record which commands are implemented via busybox.
+	# Commands are either soft/sym or hard linked to the main executable.
+	link_cnt="$(ls -l "${busybox_exe}" | awk '{ print $2 }')"
+	if [ "${link_cnt}" -gt 1 ]
+	then
+		inum="$(ls -i ${busybox_exe} | awk '{ print $1 }')"
+		for dir in /bin /sbin /usr/bin /usr/sbin
+		do
+			if [ -d ${dir} ]
+			then
+				find ${dir} -inum ${inum} 2>/dev/null	|
+				sort					|
+				sed -e "s@^${dir}/@fix:software:busybox:${dir}::@"
+			fi
+		done
+	fi
+fi
+
+# When busybox cannot be found, we check for soft/sym links to busybox.
+if [ ${link_cnt} -eq 1 -o ! -x "${busybox_exe}" ]
+then
+	for dir in /bin /sbin /usr/bin /usr/sbin
+	do
+		if [ -d ${dir} ]
+		then
+			ls -l ${dir}		|
+			awk '/busybox/	{
+						sub( " ->.*busybox.*", "" )
+						sub( ".* ", "" )
+						print "fix:software:busybox:" d "::" $0
+						next
+					}' d="${dir}"
+		fi
+	done
+fi
+
+case "${OS_NAME}" in
+HP-UX)		if [ -x /bin/cc ]
+		then
+			echo "fix:software:C-compiler::$(what /bin/cc 2>/dev/null | grep HP)"
+		fi
+		;;
+SunOS)		if [ -d /opt/SUNWspro ]
+		then
+			echo "fix:software:C-compiler::$(what /opt/SUNWspro/bin/cc 2>/dev/null | grep RELEASE)"
+		else
+			echo "fix:software:C-compiler::$(what /usr/ucb/cc 2>/dev/null | grep SMI)"
+		fi
+		;;
+esac
+
+scc_check_file /etc/opt/cifsclient/cifsclient.cfg "fix:software:cifs:cifsclient.cfg::" "#"
+
+for dir in	/var/opt/wbem				\
+		/etc/pegasus				\
+		/var/pegasus				\
+		/opt/freeware/cimom/pegasus/etc
+do
+	if [ ! -d "${dir}" ]
+	then
+		continue
+	fi
+
+	scc_check_file "${dir}"/cimserver_current.conf "fix:software:cimserver:config current::" "#"	|
+	sort
+
+	scc_check_file "${dir}"/cimserver_planned.conf "fix:software:cimserver:config planned::" "#"	|
+	sort
+
+	if [ -f "${dir}"/cimserver_current.conf -a -f "${dir}"/cimserver_planned.conf ]
+	then
+		sed -e '/^#/d' -e '/^[ 	]*$/d' "${dir}"/cimserver_current.conf		|
+		sort >${TMP1_FILE}
+
+		sed -e '/^#/d' -e '/^[ 	]*$/d' "${dir}"/cimserver_planned.conf		|
+		sort >${TMP2_FILE}
+
+		diff ${TMP1_FILE} ${TMP2_FILE}	|
+		sed	-n								\
+			-e "s/^</fix:software:cimserver:config differences::current /p"	\
+			-e "s/^>/fix:software:cimserver:config differences::planned /p"
+
+		rm -f ${TMP1_FILE} ${TMP2_FILE}
+	fi
+
+	scc_check_file "${dir}"/cimlistener.conf "fix:software:cimserver:config listener::" "#"
+
+	# Do not process next directories
+	break
+done
+
+for file in /etc/clamav.conf /etc/clamav/*.conf
+do
+	scc_check_file "${file}" "fix:software:clamav:${file}::" "#"
+done
+
+if [ -x /opt/rational/clearcase/bin/cleartool ]
+then
+	/opt/rational/clearcase/bin/cleartool -version 2>/dev/null	|
+	sed -e 's/^/fix:software:clearcase:version::/'
+fi
+for file in /opt/rational/clearcase/config/services/*.conf
+do
+	scc_check_file "${file}" "fix:software:clearcase:${file}::" "#"
+done
+
+if [ -x /opt/rational/clearquest/bin/clearquest ]
+then
+	/opt/rational/clearquest/bin/clearquest -version 2>/dev/null	|
+	sed -e 's/^/fix:software:clearquest:version::/'
+fi
+
+dir_list="/var/adm/cron /etc/cron.d /etc /etc/at /var/cron /var/at"
+if [ "${OS_NAME}" = "OSF1" ]
+then
+	# OSF1 has many .proto files in /etc. They are not related to cron.
+	dir_list="/var/adm/cron /etc/cron.d"
+fi
+for d in ${dir_list}
+do
+	for file in ${d}/queuedefs ${d}/.proto ${d}/.proto.*
+	do
+		scc_check_file "${file}" "fix:software:cron:configuration::${file}:	" "#"
+	done
+
+	# Sort the following files to make comparing systems easier.
+	for file in ${d}/at.allow ${d}/at.deny ${d}/cron.allow ${d}/cron.deny
+	do
+		scc_check_file "${file}" "fix:software:cron:configuration::${file}:	" "#"		|
+		sort
+	done
+done
+
+if [ -x /usr/sbin/fcron ]
+then
+	for file in /etc/fcron.*
+	do
+		scc_check_file "${file}" "fix:software:cron:${file}::" "#"
+	done
+
+	find /var/spool/cron -type f 2>/dev/null	|
+	grep -v "\.orig"				|
+	while read file
+	do
+		/usr/bin/fcrontab -l "${file##*/}" 2>/dev/null		|
+		sed	-e "s/#.*//"		\
+			-e '/^[ 	]*$/d'	\
+			-e "s@^@fix:software:cron:${file}::@"
+	done
+else
+	# Collect the cron-jobs.
+	for f in	/var/spool/cron/crontabs/*	\
+			/var/spool/cron/tabs/*		\
+			/etc/cron.*/*			\
+			/etc/crontab			\
+			/var/cron/tabs/*		\
+			/etc/anacrontab			\
+			/var/spool/cron/*		\
+			/etc/daily			\
+			/etc/daily.conf			\
+			/etc/weekly			\
+			/etc/weekly.conf		\
+			/etc/monthly			\
+			/etc/monthly.conf		
+	do
+		if [ ! -f "${f}" ]
+		then
+			continue
+		fi
+
+		job=$(basename ${f})
+
+		# NOTE: /etc/cron.d can contain cron configuration-files.
+		# Ignore these files, as we are collecting cron-jobs in this loop.
+		case ${job} in
+			*.allow)	continue;;
+			*.deny)		continue;;
+			queuedefs)	continue;;
+			.proto*)	continue;;
+		esac
+
+		# Ordinary users are allowed to change their cron-jobs.
+		# Register their jobs as variable parts in the snapshot.
+		# We need the uid of a user to determine whether it is a ordinary or system user. 
+		# When id fails, we have a job like: cron.daily which should be "fix"
+		prefix="fix"
+		uid=$(id -u ${job} 2>/dev/null)
+		if [ $? -eq 0 ]
+		then
+			if [ ${uid} -ge ${MAX_SYS_ACCOUNT_ID} ]
+			then
+				prefix="var"
+			fi
+		fi
+
+		scc_check_file "${f}" "${prefix}:software:cron:${f}::" "#"
+	done
+fi
+
+# Dag Wiers configuration collector.
+for file in /etc/dconf.conf /etc/dconf-custom.conf /etc/dconf.d/*.conf
+do
+	scc_check_file "${file}" "fix:software:dconf:${file}::" "#"
+done
+
+if [ -d /etc/dirsrv ]
+then
+	for file in /etc/dirsrv/*/*conf /etc/dirsrv/*/dse.ldif
+	do
+		scc_check_file "${file}" "fix:software:dirsrv:${file}::" "#"
+	done
+fi
+
+if  [ -x /bin/docker ]
+then
+	# ensure that data in a paragraph (^ ) is sorted by temporary adding index per paragraph to sort
+	/bin/docker info 2>/dev/null					|
+	awk	'	 { printf( "%06d %s\n", indx, $0 ) }
+		 /^[^ ]/ { indx++ }'					|
+	sort								|
+	sed -e 's/^......./fix:software:docker::/'			|
+	sed	-e 's/^fix:\(.*Available\)/var:\1/'	\
+		-e 's/^fix:\(.*Containers\)/var:\1/'	\
+		-e 's/^fix:\(.*Images\)/var:\1/'	\
+		-e 's/^fix:\(.*Paused\)/var:\1/'	\
+		-e 's/^fix:\(.*Running\)/var:\1/'	\
+		-e 's/^fix:\(.*Size\)/var:\1/'		\
+		-e 's/^fix:\(.*Space\)/var:\1/'		\
+		-e 's/^fix:\(.*Stopped\)/var:\1/'	\
+		-e 's/^fix:\(.*System Time\)/var:\1/'	\
+		-e 's/^fix:\(.*Total\)/var:\1/'		\
+		-e 's/^fix:\(.*Used\)/var:\1/'
+fi
+
+for file in /etc/ebox/*.conf
+do
+	scc_check_file "${file}" "fix:software:ebox:${file}::" "#"
+done
+
+if [ -x /opt/resmon/bin/resls ]
+then
+	/opt/resmon/bin/resls /					|
+	sed	-e '/^$/d'	\
+		-e 's/^/fix:software:EMS-resls::/'
+fi
+
+scc_check_file /etc/enscript.cfg "fix:software:/etc/enscript.cfg::" "#"
+
+if [ -x /etc/opt/resmon/lbin/moncheck ]
+then
+	/etc/opt/resmon/lbin/moncheck				|
+	sed	-e '/^$/d'			\
+		-e 's/port=[0-9][0-9]*$/port=/'	\
+		-e 's/^/fix:software:EMS-monitors::/'
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of EMS-monitors"
+fi
+
+if [ -x /usr/lib/errdemon ]
+then
+	/usr/lib/errdemon -l 2>/dev/null			|
+	sed	-e 's/^/fix:software:errdemon::/'	\
+		-e 's/^fix:\(.*\)Size/var:\1Size/g'
+fi
+
+scc_check_file /etc/evmdaemon.conf	"fix:software:evmd:/etc/evmdaemon.conf::"	"#"
+scc_check_file /etc/evmchannel.conf	"fix:software:evmd:/etc/evmchannel.conf::"	"#"
+scc_check_file /etc/evmlogger.conf	"fix:software:evmd:/etc/evmlogger.conf::"	"#"
+scc_check_file /etc/evmd.auth		"fix:software:evmd:/etc/evm.auth::"		"#"
+for filter in /usr/share/evm/filters/*evf
+do
+	scc_check_file "${filter}"  "fix:software:evmd:${filter}::" "#"
+done
+
+scc_check_file /etc/exim/configure "fix:software:exim::" "#"
+for dir in /etc/exim4/conf.d/*
+do
+	if [ -d "${dir}" ]
+	then
+		for file in "${dir}"/*
+		do
+			scc_check_file "${file}" "fix:software:exim4:${dir##*/}:${file}::" "#"
+		done
+	fi
+done
+
+# Contributed by Bill Dietrich
+for file in /etc/firejail/*
+do
+	scc_check_file "${file}"  "fix:software:firejail:${file}::" "#"
+done
+
+# Fail2ban is a file access monitor.
+for file in	/etc/fail2ban/fail2ban.conf		\
+		/etc/fail2ban/action.d/*.conf		\
+		/etc/fail2ban/filter.d/*.conf		\
+		/etc/fail2ban/jail.conf			\
+		/etc/fail2ban/jail.local
+do
+	scc_check_file "${file}"  "fix:software:jail2ban:${file}::" "#"
+done
+
+for file in /etc/gamin/gaminrc /etc/gamin/mandatory_gaminrc 
+do
+	scc_check_file "${file}"  "fix:software:gamin:${file}::" "#"
+done
+
+(
+	# Determine config files from running processes to detect non-default configuration directories.
+	awk '/\/[g]emetad|\/[g]mond/ { sub( ".*-c *", "" ); sub( " .*", "" ); if ( length( $0 ) ) { print } }' ${PROC_FILE} >${TMP1_FILE}
+
+	ganglia_keep_label="ganglia:config_files:"
+	if [ -s ${TMP1_FILE} ]
+	then
+		sed -e "s/^/${ganglia_keep_label}/" ${TMP1_FILE} >>${SCC_KEEP_NEW}
+		cat ${TMP1_FILE}
+	else
+		grep "^${ganglia_keep_label}" ${SCC_KEEP_CONFIG} 2>/dev/null	|
+		tee -a ${SCC_KEEP_NEW}						|
+		sed -e "s/^${ganglia_keep_label}//p"
+	fi
+	rm -f ${TMP1_FILE}
+
+	ls /etc/gmetad.conf /etc/gmond.conf /etc/ganglia/*.conf /etc/ganglia/conf.php /etc/ganglia/conf.d/*.conf 2>/dev/null
+)				|
+sort -u				|
+while read config_file
+do
+	scc_check_file "${config_file}"  "fix:software:ganglia:${config_file}::" "#"
+done
+
+for file in /etc/gre.conf /etc/gre.d/*.conf
+do
+	scc_check_file "${file}"  "fix:software:gecko runtime environment:${file}::" "#"
+done
+
+if [ -x /usr/bin/gpgconf ]
+then
+	/usr/bin/gpgconf --list-components 2>/dev/null		|
+	sort -f							|
+	sed -e 's/^/fix:software:gpgconf:components::/'
+
+	/usr/bin/gpgconf --list-components 2>/dev/null		|
+	sed -e 's/:.*//'					|
+	sort -f							|
+	while read component
+	do
+		/usr/bin/gpgconf --list-option  ${component} 2>/dev/null		|
+		sort -f									|
+		sed -e "s/^/fix:software:gpgconf:component ${component}::/"
+	done
+fi
+
+# Contributed by Harry van Wiggen.
+if [ -f /etc/ha.d/ha.cf ]
+then
+	scc_check_file /etc/ha.d/ha.cf		"fix:software:heartbeat:ha.cf::"	"#"
+	scc_check_file /etc/ha.d/haresources	"fix:software:heartbeat:haresources::"	"#"
+	for file in /etc/ha.d/authkeys /etc/ha.d/resource.d/*
+	do
+		if [ -f "${file}" ]
+		then
+			echo "fix:software:heartbeat:md5sum ${file}::$(md5sum ${file} 2>/dev/null)"
+		fi
+	done
+fi
+
+if [ -x /usr/sbin/cibadmin ]
+then
+	/usr/sbin/cibadmin --cib_query --obj_type configuration 2>/dev/null	|
+	sed -e "s/^/fix:software:cibadmin::/"
+fi
+
+for file in /etc/corosync/corosync.conf /etc/corosync/service.d/*
+do
+	scc_check_file "${file}" "fix:software:corosync:${file}::" "#"
+done
+
+# haproxy: suggested by Hendrik Visage
+if [ -d /etc/haproxy ]
+then
+	HAPROXY_CONF_D=/etc/haproxy
+else
+	HAPROXY_CONF_D="$(ls -d /etc/hapee-* 2>/dev/null| tail -n 1)"
+fi
+
+if [ -d "${HAPROXY_CONF_D}" ]
+then
+	find "${HAPROXY_CONF_D}" -type f	|
+	sort					|
+	while read file
+	do
+		scc_check_file "${file}" "fix:software:haproxy:${file}::" "#"
+	done
+
+	# record the symbolic links and their target
+	find "${HAPROXY_CONF_D}" -type l	|
+	sort					|
+	while read link
+	do
+		ls -l ${link}		|
+		sed -e "s|.* -> |fix:software:haproxy:links::${link} -> |"
+	done
+fi
+
+# Contributed by Harry van Wiggen.
+if [ -d /etc/htdig ]
+then
+	for file in /etc/htdig/*
+	do
+		scc_check_file "${file}"  "fix:software:htdig:${file}::" "#"
+	done
+fi
+
+if [ -d /opt/ignite/bin ]
+then
+	if [ -h /var/opt/ignite/recovery/latest ]
+	then
+		echo "fix:software:Ignite-UX:latest::$(ls -ld /var/opt/ignite/recovery/latest | scc_ls )"
+	elif [ -f  /var/opt/ignite/recovery/makrec.last ]
+	then
+		echo "fix:software:Ignite-UX:makrec.last::$(ls -l /var/opt/ignite/recovery/makrec.last | scc_ls )"
+	fi
+
+	# The output of print_manifest is not easy to process for comparing.
+	# Generate a new manifest-file and process that.
+	/opt/ignite/bin/print_manifest >/dev/null 2>&1
+	sort -u /var/opt/ignite/local/manifest/manifest.info	|
+	sed	-e '/^ *$/d'		\
+		-e '/^PERIPHERAL/d'	\
+		-e '/^LVM_DISK/d'	\
+		-e '/^UFS_DISK/d'	\
+		-e '/^UFS_LAYOUT/d'	\
+		-e 's/^/fix:software:Ignite-UX:manifest.info::/'
+
+	INDEX=/var/opt/ignite/INDEX
+	scc_check_file "${INDEX}" "fix:software:Ignite-UX:${INDEX}::" "#"
+
+	if [ -f ${INDEX} ]
+	then
+		sed	-e 's/^[ 	][ 	]*"//'	\
+			-e 's/"$//' ${INDEX}			|
+		grep "^/"					|
+		sort -u						|
+		while read file
+		do
+			scc_check_file "${file}" "fix:software:Ignite-UX:${file}::" "#"
+		done
+	fi
+
+	for f in /var/opt/ignite/scripts/*
+	do
+		scc_check_file "${f}" "fix:software:Ignite-UX:scripts:$(basename ${f})::" "#"
+	done
+
+	scc_check_file /var/opt/ignite/server/ignite.defs "fix:software:Ignite-UX:/var/opt/ignite/server/ignite.defs::" "#"
+
+	for f in /var/opt/ignite/clients/*
+	do
+		if [ -h ${f} ]
+		then
+			echo "fix:software:Ignite-UX:clients:$(basename ${f})::$(ls -ld ${f} | awk '{ print $NF }')"
+		fi
+	done
+
+	scc_check_file /etc/opt/ignite/instl_boottab "fix:software:Ignite-UX:/etc/opt/ignite/instl_boottab::" "#"
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of Ignite-UX"
+fi
+
+if [ -d /etc/java ]
+then
+	for file in /etc/java/*.conf /etc/java/jpackage-release
+	do
+		scc_check_file "${file}" "fix:software:java:${file}::" "#"
+	done
+fi
+if [ -d /etc/java/security/security.d ]
+then
+	ls /etc/java/security/security.d/			|
+	sed -e 's/^/fix:software:java:updates::/'
+fi
+
+rm -f ${TMP1_FILE}
+for java_candidate in	$(which java 2>/dev/null)	\
+			/usr/lib*/jvm/java*/*/bin/java	\
+			/usr/java/*/bin/java		\
+			$(alternatives --display java 2>/dev/null | sed -n -e 's/\.$//' -e 's/.*best.*version is //p')
+do
+	realpath "${java_candidate}" 2>/dev/null
+done			|
+sort -u			|
+tee ${TMP1_FILE}	|
+while read java_exe
+do
+        if [ -x "${java_exe}" ]
+        then
+		"${java_exe}" -version 2>&1			|
+		sed -e "s|^|fix:software:java:${java_exe}::|"
+        fi
+done
+
+# Combine current process list and java entries from process list of previous run
+# Ignore paths found by the above code
+(
+	grep "/java" <${PROC_FILE}		|
+	sed	-e "s/'/ /g"		\
+		-e 's@/java .*@/java@'	\
+		-e 's/.* //'
+
+	sed -n -e 's/^software:java://p' ${SCC_KEEP_CONFIG}
+)	|
+while read java_candidate
+do
+	realpath "${java_candidate}" 2>/dev/null
+done			|
+sort -u			|
+comm -13 ${TMP1_FILE} -	|
+while read java_exe
+do
+        if [ -r ${java_exe} ]
+        then
+		# do not trust paths from process list to avoid running user crafted java programs
+		strings ${java_exe}	|
+		sed	-n	\
+			-e "s|^\([1-9]\)|fix:software:java:${java_exe}::version \1|p"
+
+		echo "software:java:${java_exe}" >>${SCC_KEEP_NEW}
+	fi
+done
+rm -f ${TMP1_FILE}
+
+export JENKINS_HOME="/var/lib/jenkins"
+if [ ! -d "${JENKINS_HOME}" ]
+then
+	# Check the process list and optionally the keep file from a previous run
+	JENKINS_HOME="$(sed -ne 's/.*[J]ENKINS_HOME=//p' ${PROC_FILE} | sed -e 's/ .*//')"
+	if [ -z "${JENKINS_HOME}" ]
+	then
+		jenkins_keep_label="jenkins:config_files"
+		JENKINS_HOME="$(sed -n -e "s/${jenkins_keep_label}://p" ${SCC_KEEP_CONFIG} 2>/dev/null)"
+		if [ "${JENKINS_HOME}" ]
+		then
+			echo "${jenkins_keep_label}:${JENKINS_HOME}" >>${SCC_KEEP_NEW}
+		fi
+	fi
+fi
+if [ -d "${JENKINS_HOME}" ]
+then
+	for file in ${JENKINS_HOME}/*.xml ${JENKINS_HOME}/nodes/*/*.xml
+	do
+		case "${file}" in
+		*queue.xml|*LockableResourcesManager.xml|*FlowExecutionList.xml|*xecuteDslScripts.xml|*StageStep.xmlStageStep.xml)	# variable data
+			scc_check_file "${file}" "var:software:jenkins:${file}::" "#"
+			;;
+		*)	# Ignore historic data that is collected in these files.
+			scc_check_file "${file}" "fix:software:jenkins:${file}::" "#"	|
+			sed -e '/::  <history /,/::  <\/history>/d'
+			;;
+		esac
+	done
+
+	if [ -d ${JENKINS_HOME}/plugins/ ]
+	then
+		find ${JENKINS_HOME}/plugins -type f -name "pom.properties"	|
+		sort								|
+		while read file
+		do
+			class="$(echo ${file} | sed -e 's@/pom.properties@@' -e 's@.*/@@')"
+			scc_check_file "${file}" "fix:software:jenkins:plugins:${class}::" "#"
+		done
+	fi
+fi
+
+
+for file in /etc/mock/default.cfg /etc/mock/logging.ini /etc/mock/site-defaults.cfg
+do
+	scc_check_file "${file}" "fix:software:mock:${file}::" "#"
+done
+
+for file in /etc/monit/*
+do
+	scc_check_file "${file}" "fix:software:monit:${file}::" "#"
+done
+
+for dir in /etc/munin /etc/opt/munin
+do
+	for file in ${dir}/* ${dir}/plugin-conf.d/*
+	do
+		scc_check_file "${file}" "fix:software:munin:${file}::" "#"
+	done
+done
+
+for file in /etc/nagios/*.cfg
+do
+	scc_check_file "${file}" "fix:software:nagios:${file}::" "#"
+done
+
+for file in /etc/nagios2/*.conf /etc/nagios2/*.cfg
+do
+	scc_check_file "${file}" "fix:software:nagios2:${file}::" "#"
+done
+for file in /etc/nagios3/*.conf /etc/nagios3/*.cfg /etc/nagios3/conf.d/*cfg
+do
+	scc_check_file "${file}" "fix:software:nagios3:${file}::" "#"
+done
+for file in /etc/nagios-plugins/config/*.cfg
+do
+	scc_check_file "${file}" "fix:software:nagios3:${file}::" "#"
+done
+for file in /usr/local/nagios/etc/*.conf /usr/local/nagios/etc/*.cfg
+do
+	scc_check_file "${file}" "fix:software:nagios:${file}::" "#"
+done
+
+for file in /etc/netdisco/netdisco*
+do
+	scc_check_file "${file}" "fix:software:netdisco:${file}::" "#"
+done
+
+for file in /etc/nftables/*
+do
+	scc_check_file "${file}" "fix:software:nftables:${file}::" "#"
+done
+
+for file in /etc/ocsinventory/*cfg /etc/ocsinventory/*conf
+do
+	scc_check_file "${file}" "fix:software:OCS:${file}::" "#"
+done
+
+for file in /usr/local/opsview-web/etc/*.conf
+do
+	scc_check_file "${file}" "fix:software:opsview:${file}::" "#"
+done
+
+if [ -f /etc/bootparams ]
+then
+	# Base file /etc/bootparams is collected via the boot module.
+
+	# This code works when one system functions as boot_server, install_server and conf_server
+
+	> ${TMP1_FILE}
+
+	sed -e '/^[ 	]*#/d' -e '/^[ 	]*$/d' /etc/bootparams		|
+	awk	'{
+			sysid="?"
+			for ( i = 2; i <= NF; i++ )
+			{
+				if ( $i ~ "^sysid_config=" )
+				{
+					cnt = split( $i, parts, ":" )
+					if ( cnt == 2 )
+					{
+						sysid = parts[ 2 ]
+					}
+					break
+				}
+			}
+			print sysid
+		}'							|
+	sort -u								|
+	while read sysid_cfg
+	do
+		if [ -f "${sysid_cfg}/sysidcfg" ]
+		then
+			sed	-e 's/root_password=.*/root_password=ERASED/'				\
+				-e "s@^@fix:software:jumpstart:sysidcfg:${sysid_cfg}/sysidcfg::@"	\
+					<"${sysid_cfg}/sysidcfg"
+		fi
+	done
+
+	# Use the install_config item to retrieve all begin, class and finish files.
+	sed -e '/^[ 	]*#/d' -e '/^[ 	]*$/d' /etc/bootparams		|
+	awk	'{
+			inst="?"
+			for ( i = 2; i <= NF; i++ )
+			{
+				if ( $i ~ "^install_config=" )
+				{
+					cnt = split( $i, parts, ":" )
+					if ( cnt == 2 )
+					{
+						inst = parts[ 2 ]
+					}
+					break
+				}
+			}
+			print inst
+		}'							|
+	sort -u								|
+	while read inst
+	do
+		if [ -f "${inst}/rules.ok" ]
+		then
+			sed	-e '/^#/d'								\
+				-e "s@^@fix:software:jumpstart:install-config:${inst}/rules.ok::@"	\
+					<"${inst}/rules.ok"
+
+			sed	-e '/^[ 	]*#/d'		\
+				-e '/^[ 	]*$/d'		\
+					<"${inst}/rules.ok"				|
+			awk	'{
+					if ( NF > 2 )
+					{
+						printf( "begin %s/%s\n", d, $(NF-2) )
+						printf( "class %s/%s\n", d, $(NF-1) )
+						printf( "finish %s/%s\n", d, $NF )
+					}
+				}' d="${inst}"						|
+			sed -e '/-$/d'							|
+			sort -u								|
+			while read c file
+			do
+				grep -l "^${c} ${file}" ${TMP1_FILE} 2>/dev/null >/dev/null 2>/dev/null
+				if [ $? -ne 0 ]
+				then
+					echo "${c} ${file}" >>${TMP1_FILE}
+
+					if [ -f "${file}" ]
+					then
+						sed	-e '/^#/d'					\
+							-e "s@^@fix:software:jumpstart:${c}:${file}::@"	\
+								<"${file}"
+					fi
+				fi
+			done
+
+		fi
+
+		# The rules and the rules.ok files should be identical (except for the checksum line).
+		if [ -f "{inst}/rules" -a -f "${inst}/rules.ok" ]
+		then
+			diff rules rules.ok	|
+			sed -n -e '/^[<>] /p' >${TMP2_FILE}
+
+			differences="$(sed -e '/> # version=.*checksum=/d' <${TMP2_FILE})"
+			if [ -n "${differences}" ]
+			then
+				class="fix:software:jumpstart:${inst}:rules-rules.ok"
+				sed	-e "s/^</${class}::rules   /"	\
+					-e "s/^>/${class}::rules.ok/" ${TMP2_FILE}
+			fi
+			rm -f ${TMP2_FILE}
+		fi
+	done
+
+	rm -f ${TMP1_FILE}
+fi
+
+scc_check_file /etc/niminfo "fix:software:nim client:/etc/niminfo::" "#"
+# Do not call nimclient as the nim-server might not be responding and slowing down the scc run
+
+if [ -x  /usr/sbin/lsnim ]
+then
+	/usr/sbin/lsnim 2>/dev/null				|
+	sed -e 's/^/fix:software:nim server:lsnim:survey::/'
+
+	/usr/sbin/lsnim 2>/dev/null				|
+	while read element type remainder
+	do
+		/usr/sbin/lsnim -l "${element}" 2>/dev/null		|
+		sed	-e '/state/d'		\
+			-e "s/^/fix:software:nim server:lsnim:${type}:${element}::/"
+	done
+fi
+
+scc_check_file /etc/imapd "fix:software:imap:/etc/imapd::" "#"
+
+if [ -x /sbin/ipchains-save ]
+then
+	/sbin/ipchains-save 2>&1		|
+	sed -e 's/^/fix:software:ipchains:rules::/'
+
+	scc_check_file /etc/iptoip.xml "fix:software:ipchains:/etc/iptoip.xml::" "#"
+fi
+
+# To avoid many changes in the logbook when dynamic rules are added/deleted, all "dynamic" data is 
+# tagged variable. You can "label" your FW data by adding the following to all your iptables commands
+#	-m comment --comment "your label".
+# Environment variable ${SCC_FW_DYNAMIC_RULE} (from scc-localize) can be used for a
+# non-default label. Default label is "Dynamic_rule".
+if [ -z "${SCC_FW_DYNAMIC_RULE:-}" ]
+then
+	export SCC_FW_DYNAMIC_RULE="Dynamic_rule"
+fi
+if [ -x /sbin/iptables-save -o -x /usr/sbin/iptables-save ]
+then
+	# Ignore variable data:
+	# - comment lines contain timestamps
+	# - traffic counters are surrounded by '[' and ']'
+	# Mark labels as variable data.
+	iptables-save 2>&1				|
+	sed	-e 's/\[.*\]//'		\
+		-e '/^#/d'				|
+	awk	'		{ prefix = "fix"; }
+		/^[*:]/		{ prefix = "var"; }
+		/ -[io] veth/	{ prefix = "var"; }
+		/^COMMIT/	{ prefix = "var"; }
+				{ print prefix ":software:iptables:rules::" $0; next }'
+
+	iptables_exe="$(which iptables 2>/dev/null)"
+	if [ -x "${iptables_exe}" ]
+	then
+		${iptables_exe} -nL 2>/dev/null				|
+		uniq							|
+		sed	-e 's/^/fix:software:iptables:list::/'	\
+			-e 's/^fix:\(.* references\)/var:\1/'
+	fi
+fi	|
+sed -e "s${sed_sep}^fix:\(.*\)${SCC_FW_DYNAMIC_RULE}${sed_sep}var:\1${SCC_FW_DYNAMIC_RULE}${sed_sep}"
+
+if [ -d /var/ipcop ]
+then
+	for file in /var/ipcop/*/settings /var/ipcop/*/config /var/ipcop/*/*conf
+	do
+		scc_check_file "${file}" "fix:software:ipcop:${file}::" "#"
+	done
+fi
+
+scc_check_file /opt/hpservices/etc/motprefs "fix:software:ISEE:motprefs::" "#"
+scc_check_file /opt/hpservices/etc/hpservices.conf "fix:software:ISEE:hpservices.conf::" "#"
+
+scc_check_file /etc/ksysguarddrc "fix:software:/etc/ksysguarddrc::" "#"
+
+scc_check_file /etc/kbr5.conf "fix:software:kerberos:/etc/kbr5.conf::" "#"
+scc_check_file /etc/kbr5.keytab "fix:software:kerberos:/etc/kbr5.keytab::" "#"
+
+if [ -x /usr/sbin/ldapclient ]
+then
+	/usr/sbin/ldapclient list 2>/dev/null	|
+	sed	-e 's/BINDPASSWD.*/BINDPASSWD=_ERASED_/'	\
+		-e 's/^/fix:software:ldap:ldapclient::/'
+fi
+
+for file in	/etc/ldap.conf			\
+		/etc/nss_ldap.conf		\
+		/etc/pam_ldap.conf		\
+		/etc/openldap/ldap.conf		\
+		/usr/pkg/etc/openldap/ldap.conf
+do
+	scc_check_file ${file} "fix:software:ldap:${file}::" "#"
+done
+if [ -f /etc/ldap.secret ]
+then
+	scc_crypt </etc/ldap.secret		|
+	sed -e 's@^@fix:software:ldap:/etc/ldap.secret::@'
+fi
+scc_check_file /var/lib/ldap/DB_CONFIG "fix:software:ldap:/var/lib/ldap/DB_CONFIG::" "#"
+
+for dir in /etc/openldap /etc/ldap /usr/pkg/etc/openldap
+do
+	SLAPD=${dir}/slapd.conf
+	if [ -f ${SLAPD} ]
+	then
+		# Encrypt the plaintext rootpw.
+		rootpw="$(grep "^rootpw" ${SLAPD} | scc_crypt )"
+		scc_check_file "${SLAPD}" "fix:software:ldap:${SLAPD}::" "#"		|
+		sed -e "s/::rootpw.*/::rootpw ${rootpw}/"
+
+		# Get all the files that are included in the main config file for OpenLdap.
+		sed -n -e 's/^include[ 	]*//p' ${SLAPD}		|
+		while read file remainder
+		do
+			scc_check_file "${file}" "fix:software:ldap:${file}::" "#"
+		done
+	fi
+done
+
+if [ -x /usr/sbin/inulag ]
+then
+	/usr/sbin/inulag -lc				|
+	sed -e 's/^/fix:software:license:inulag::/'
+fi
+
+if [ -x /usr/bin/lslicense ]
+then
+	/usr/bin/lslicense				|
+	sed -e 's/^/fix:software:license:lslicense::/'
+fi
+
+scc_check_file /var/ifor/i4ls.ini "fix:software:license:i4ls.ini::" "#"
+scc_check_file /var/ifor/i4ls.rc "fix:software:license:i4ls.rc::" "#"
+
+scc_check_file /etc/locate.rc "fix:software:/etc/locate.rc::" "#"
+
+if [ -f /etc/logadm.conf ]
+then
+	# Contributed by Antoine Davous:
+	# The file /etc/logadm.conf is altered by the logadm command.
+	# Lines contain the date of the next processing of that line.
+	# Example date: Sat Aug 25 01:10:01 2007
+	# To avoid changes in the logbook, we change all date's to: DDD MMM dd hh:mm:ss YYYYY
+	scc_check_file /etc/logadm.conf "fix:software:logadm:/etc/logadm.conf::" "#"	|
+	sed	-e 's/[A-Z][a-z][a-z] [A-Z][a-z][a-z] [ 0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] [0-9][0-9][0-9][0-9]/DDD MMM dd hh:mm:ss YYYY/g'
+fi
+
+for file in /etc/logcheck/*/*
+do
+	scc_check_file "${file}" "fix:software:logcheck:${file}::" "#"
+done
+
+if [ -f /etc/logrotate.conf ]
+then
+	scc_check_file /etc/logrotate.conf "fix:software:logrotate:/etc/logrotate.conf::" "#"
+
+	rm -f ${TMP1_FILE}
+
+	sed -n -e 's/^include[ 	]*//p' /etc/logrotate.conf 2>/dev/null	|
+	sort -u								|
+	while read entry
+	do
+		if [ -d "${entry}" ]
+		then
+			echo "${entry}" >>${TMP1_FILE}
+			for rot_f in ${entry}/*
+			do
+				scc_check_file "${rot_f}" "fix:software:logrotate:/etc/logrotate.conf include:${rot_f}::" "#"
+			done
+		elif [ -f "${entry}" ]
+		then
+			scc_check_file "${entry}" "fix:software:logrotate:/etc/logrotate.conf include:${entry}::" "#"
+		fi
+	done
+
+	grep /etc/logrotate.d ${TMP1_FILE} >/dev/null 2>/dev/null
+	if [ $? -ne 0 ]
+	then
+		# /etc/logrotate.d has not been included in the main-config.
+		for file in /etc/logrotate.d/*
+		do
+			scc_check_file "${file}" "fix:software:logrotate:${file}::" "#"
+		done
+	fi
+	rm -f ${TMP1_FILE}
+fi
+
+for dir in /etc/log.d/conf /etc/logwatch/conf /usr/share/logwatch/default.conf
+do
+	for file in ${dir}/*.conf
+	do
+		scc_check_file "${file}" "fix:software:logwatch:${file}::" "#" 
+	done
+
+	for cat in logfiles services
+	do
+		# These files appear to be small. Do not give each file its own class.
+		# File contents are properties of class ${cat} (category).
+		for file in ${dir}/${cat}/*
+		do
+			scc_check_file "${file}" "fix:software:logwatch:${cat}::${file##*/}	: " "#"
+		done
+	done
+done
+
+if [ -x /usr/bin/lpstat ]
+then
+	/usr/bin/lpstat -d 2>/dev/null			|
+	sed -e 's/^/fix:software:lp:default::/'
+
+	if [ -h /usr/bin/lpstat ]
+	then
+		# Justprint installed and active
+		scc_check_file /opt/pms/setup/jpsetup.ini "fix:software:lp:justprint::" "#"
+	else
+		lpstat -v 2>/dev/null			|
+		sed -e 's/^/fix:software:lp:destinations::/'
+	fi
+
+	lpstat -r 2>/dev/null			|
+	sed -e 's/^/fix:software:lp:scheduler::/'
+elif [ -x /usr/sbin/lpc ]
+then
+	lpc status all				|
+	sed	-e '/^[ 	]/d'	\
+		-e 's/^/fix:software:lp:destinations::/'
+fi
+
+scc_check_file /etc/hosts.lpd "fix:software:lp:/etc/hosts.lpd::" "#"
+scc_check_file /etc/rlpd.conf "fix:software:lp:/etc/rlpd.conf::" "#"
+
+scc_check_file /etc/lsf.conf "fix:software:lsf:/etc/lsf.conf::" "#"
+
+if [ -x /usr/sbin/lsfilt ]
+then
+	/usr/sbin/lsfilt -a 2>/dev/null				|
+	sed -e 's/^/fix:software:lsfilt:active rules::/'
+
+	/usr/sbin/lsfilt -d 2>/dev/null				|
+	sed -e 's/^/var:software:lsfilt:dynamic rules::/'
+fi
+
+sed	-n -e 's/^.*:include:\(.*majordomo.*\)/\1/p'	\
+		/etc/aliases /etc/mail/aliases /etc/postfix/aliases 2>/dev/null		|
+while read file
+do
+	scc_check_file "${file}" "var:software:majordomo:${file}::" "#"
+done
+
+export HP_MC3_BIN=/opt/hpsmc/common/bin
+export HP_MC3_TMP=${SCC_TMP}/hp_mc3
+if [ -x ${HP_MC3_BIN}/hpssidgen ]
+then
+	mkdir -p ${HP_MC3_TMP}
+
+	# These programs are normally quiet and produce their output in files.
+	${HP_MC3_BIN}/hpssidgen -outdir ${HP_MC3_TMP} -V >/dev/null 2>&1
+	${HP_MC3_BIN}/hpsconfig -outdir ${HP_MC3_TMP} >/dev/null 2>&1
+
+	(
+		cd ${HP_MC3_TMP}
+		for file in *
+		do
+			scc_check_file "${file}" "fix:software:HP Mission Critical Common Component:${file}::" "#" |
+			sed -e '/TimestampGenerated/d'
+		done
+	)
+	rm -rf ${HP_MC3_TMP}
+fi
+
+for file in /opt/hp/hpsmh/conf/*.conf /opt/hp/hpsmh/conf/extra/*.conf
+do
+	scc_check_file "${file}" "fix:software:HP System Management:${file}::" "#"
+done
+
+for file in defaults.cfg site-defaults.cfg logging.ini
+do
+	scc_check_file "${file}" "fix:software:mock:${file}::" "#"
+done
+
+# Erik-Jan Taal:
+# config of munin: /etc/munin/ while if compiled from source it is often found in /etc/opt/munin/
+for file in /etc/munin/*.conf /etc/munin/*conf.d/* /etc/opt/munin/*.conf  /etc/opt/munin/*.conf.d/*
+do
+	scc_check_file "${file}" "fix:software:munin:${file}::" "#"
+done
+
+for dir in /etc/munin/plugins /etc/opt/munin/plugins
+do
+	if [ -d "${dir}" ]
+	then
+		# Use the -L option as this directory often contains symbolic links.
+		ls -Ll "${dir}"		|
+		scc_ls			|
+		sed -e "s@^@fix:software:munin:${dir}::@"
+	fi
+done
+
+for file in /etc/my.cnf /etc/mysql/my.cnf /opt/coolstack/mysql/etc/my.cnf
+do
+	if [ -f "${file}" ]
+	then
+		scc_check_file "${file}" "fix:software:MySQL:${file}::" "#"
+
+		grep "^!includedir" "${file}" 2>/dev/null		|
+		sort							|
+		while read include dir
+		do
+			for sub_file in "${dir}"/*cnf
+			do
+				scc_check_file "${sub_file}" "fix:software:MySQL:${sub_file}::" "#"
+			done
+		done
+
+		grep "^!include" "${file}" 2>/dev/null			|
+		grep -v "includedir"					|
+		sort							|
+		while read include sub_file
+		do
+			scc_check_file "${sub_file}" "fix:software:MySQL:${sub_file}::" "#"
+		done
+	fi
+done
+
+#root      6734     1  0 16:47 ?        00:00:00 nginx: master process /usr/sbin/nginx -c /etc/nginx/nginx.conf
+nginx_dir="$(sed -n -e 's@.*/nginx.* -c @@p' ${PROC_FILE} | sed -e 's/ .*//' -e 's@/[^/]*@@' | scc_keep "software:nginx" 5)"
+for dir in /etc/nginx "${nginx_dir}"
+do
+	if [ -d "${dir}" ]
+	then
+		for file in ${dir}/*params ${dir}/*.conf ${dir}/conf.d/*conf
+		do
+		        scc_check_file "${file}" "fix:software:nginx:${file}::" "#"
+		done
+
+		break
+	fi
+done
+
+for file in /etc/nikto/*
+do
+	scc_check_file "${file}" "fix:software:nikto:${file}::" "#"
+done
+
+for file in /etc/swift/*.conf /etc/swift/*/*.conf
+do
+	scc_check_file "${file}" "fix:software:openstack swift:${file}::" "#"
+done
+
+for file in /etc/ocsinventory-client/*.conf /etc/ocsinventory-client/*.adm
+do
+	scc_check_file "${file}" "fix:software:ocsinventory-client:${file}::" "#"
+done
+
+scc_check_file /etc/ossec-init.conf "fix:software:ossec:/etc/ossec-init.conf::" "#"		|
+sed -e '/::DATE/d'
+
+for file in /etc/p0f/*.fp
+do
+	scc_check_file "${file}" "fix:software:p0f:${file}::" "#"
+done
+
+for file in /etc/pads/*.conf
+do
+	scc_check_file "${file}" "fix:software:pads:${file}::" "#"
+done
+
+(
+	sed -n -e 's/.*[p]ostgres.* -D *//p' ${PROC_FILE}	|
+	while read dir remainder
+	do
+		for file in ${dir}/*.conf
+		do
+			echo ${file}
+		done
+	done
+
+	echo "/etc/postgresql-common/autovacuum.conf"
+	echo "/etc/postgresql-common/users_clusters"
+
+	sed -n -e 's/.*[p]ostgres.* -c config_file=//p' ${PROC_FILE}	|
+	sed	-e 's/[" ].*//'		\
+		-e 's@/[^/][^/]*$@@'					|
+	while read dir
+	do
+		for file in ${dir}/*
+		do
+			echo ${file}
+		done
+	done
+)		|
+sort -u		|
+while read file
+do
+	scc_check_file "${file}" "fix:software:postgresql:${file}::" "#"
+done
+
+# Netscape Fasttrack server
+awk '/ns-httpd.*-d/	{
+				sub( ".*ns-httpd.*-d[ 	]", "" )
+				sub( "[ 	].*", "" )
+				print
+			}' ${PROC_FILE}					|
+sort -u									|
+while read dir
+do
+	if [ -f "${dir}"/magnus.conf ]
+	then
+		server="$(awk '/^[ 	]*ServerID/ { print $NF; exit 0 }' "${dir}/magnus.conf")"
+		if [ "${server}" ]
+		then
+			class="fix:software:Netscape Fasttrack:${server}"
+		else
+			class="fix:software:Netscape Fasttrack:${dir}"
+		fi
+		scc_check_file "${dir}"/admin.conf "${class}:admin.conf::" "#"
+		scc_check_file "${dir}"/magnus.conf "${class}:magnus.conf::" "#"
+		scc_check_file "${dir}"/obj.conf "${class}:obj.conf::" "#"
+
+		acl="$(awk '/^[ 	]*ACLFile/ { print $NF; exit 0 }' "${dir}/magnus.conf")"
+		if [ -f "${acl}" ]
+		then
+			echo "${class}:ACL::${acl}"
+			scc_check_file "${acl}" "${class}:ACL::" "#"
+		fi
+	fi
+done
+
+# When the perl executable program cannot be found in the default PATH,
+# edit scc-localize and change the contents of the variable SCC_PATH. 
+# This replaces the variable SCC_PERL used for previous versions of the software.
+for dir in $(echo ${PATH} | awk -F: '{ for ( i = 1; i <= NF; i++) print $i }' | sort -u)
+do
+	perl_exe="${dir}/perl"
+	if [ -x "${perl_exe}" ]
+	then
+		echo "#!${perl_exe}" >${TMP1_FILE}
+		cat >>${TMP1_FILE} <<\_X_
+			use ExtUtils::Installed
+
+			my ($inst) = ExtUtils::Installed->new()
+			my (@modules) = $inst->modules()
+
+			foreach $module(@modules)
+			{
+				$version = $inst->version($module) || "unknown version"
+				@mod_dirs = $inst->directories($module,"prog")
+				print "fix:software:perl-modules:" . $module . "::" . "version	: " . $version . "\n"
+				foreach $dir(@mod_dirs)
+				{
+					print "fix:software:perl-modules:" . $module . "::" . $dir . "\n"
+				}
+			}
+_X_
+
+		chmod u+x ${TMP1_FILE}
+		${TMP1_FILE} 2>/dev/null
+
+		rm -f ${TMP1_FILE}
+	fi
+done
+
+scc_check_file /etc/Pegasus/access.conf "fix:software:Pegasus:/etc/Pegasus/access.conf::" "#"
+
+for file in	/etc/puppet/*.conf			\
+		/var/lib/puppet/classes.txt		\
+		/var/lib/puppet/state/classes.txt	\
+		/etc/facter/facts.d/*.yaml		\
+		/etc/puppetlabs/facter/facts.d/*.yaml
+do
+	scc_check_file "${file}" "fix:software:puppet:${file}::" "#"	|
+	grep -vi "last.*run"
+done
+facter_exe="$(which facter 2>/dev/null)"
+if [ -x "${facter_exe}" ]
+then
+	# The order of the elements in a hash can vary per call of facter => "var" for {}
+	# Network interface data is variable. Network module decides for fix and var interface data.
+	${facter_exe} -p 2>/dev/null 						|
+	awk	'/free|uptime|[{].*}/					{ print "var:" l $0; next }
+		/macaddress|address_|mtu_|interfaces|network_|netmask_/	{ print "var:" l $0; next }
+		/puppetrun/						{ print "var:" l $0; next }
+		/_[rt]x_cur_|_[rt]x_max_/				{ next }			# refer to network module for ring buffer data
+									{ print "fix:" l $0; next }' l="software:puppet:facter::"
+fi
+
+# Erik-Jan Taal:
+if [ -d /etc/libvirt/qemu ]
+then
+	find /etc/libvirt/qemu -type f -name '*xml'	|
+	sort						|
+	while read file
+	do
+		scc_check_file --xml "${file}" "fix:software:libvirt KVM/qemu:${file}::"
+	done
+fi
+
+for file in /etc/libvirt/*
+do
+	scc_check_file "${file}" "fix:software:libvirt KVM/qemu:${file}::" "#"	|
+	sed -e 's|sleet=\(.*://.*:\).*@|sleet=\1___@|'
+done
+
+for file in ${SCC_CONF}/*
+do
+	scc_check_file "${file}" "fix:software:scc:${file}::" "#"
+done
+for module in ${SCC_BIN}/scc_modules/scc_[0-9][0-9][0-9][0-9]_[su]_* ${SCC_BIN}/scc_modules/scc_utils
+do
+	case "${module}" in
+	*scc_*~)	continue;;		# Ignore (vim) copies.
+	esac
+
+	if [ -x "${module}" ]
+	then
+		# We detect changes in the modules. This checksum is also recorded in
+		# the output of a user-module. scc-log ignores changes when the checksum
+		# in the output of the user-module changes (when the user-module has run).
+		# Remove comments and empty lines to avoid extra changes in the checksum.
+		checksum="$(sed -e 's/[ 	]*#.*//' -e '/^[ 	]*$/d' <"${module}" | scc_checksum)"
+		echo "fix:software:scc:modules::${module##*/}	${checksum}"
+	fi
+done
+
+ORG_PATH=${PATH}
+PATH=${PATH}:/usr/local/bin
+php_exe="$(which php 2>/dev/null)"
+if [ ! -x "${php_exe}" ]
+then
+	# No longer php as executable.
+	php_exe="$(which php5 2>/dev/null)"
+fi
+if [ -x "${php_exe}" ]
+then
+	php -v 2>/dev/null		|
+	sed -e 's/^/fix:software:php:version::/'
+
+	php -m 2>/dev/null		|
+	sed -e 's/^/fix:software:php:modules::/'
+
+	php -i 2>/dev/null >${TMP1_FILE}
+	html="$(grep -li "^<!DOCTYPYE HTML" ${TMP1_FILE})"
+	if [ -z "${html}" ]
+	then
+		# Querying php also results in the environment being dumped.
+		# The variables of scc are part of this environment and they have 
+		# variable values, ignore them.
+		tr -d "\015" <${TMP1_FILE}					|
+		sed	-e '/^This program /,/^Configuration$/d'	\
+			-e '/REQUEST_TIME/d'				\
+			-e '/^[ 	]*$/d'					|
+		awk	'/\=>|^[ 	][ 	]*/	{
+					if ( cat != "Environment" && cat != "PHP Variables" )
+					{
+						print "fix:software:php:" cat "::" $0
+					}
+					next
+				}
+				{
+					if ( length( $0 ) < 2 )
+					{
+						if ( cat != "Environment" && cat != "PHP Variables" )
+						{
+							print "fix:software:php:" cat "::" $0
+						}
+					}
+					else
+					{
+						cat=$0
+					}
+				}'
+	fi
+	rm -f ${TMP1_FILE}
+fi
+PATH=${ORG_PATH};	export PATH
+
+for file in /etc/phph.ini /usr/local/lib/php.ini /etc/php.d/*.ini /etc/php5/*/php.ini
+do
+	scc_check_file "${file}" "fix:software:php:${file}::" ";"
+done
+
+# The collection of SAP config data has been moved to a separate module: scc_0610_s_oracle_sapr3.
+
+# To collect scc-srv config data we look under the default directory /var/opt/scc-srv.
+# When scc-srv has been relocated, we assume that scc has been relocated in the same way as scc-srv.
+# We reach the relocated scc-srv by appending "-srv" to "our" default directory /var/opt/scc.
+part1="var"
+part2="opt"
+part3="scc-srv"
+original_dir="/${part1}/${part2}/${part3}"
+relocate_dir="$(echo /var/opt/scc/data | sed -e 's@/data@@' -e 's/scc/scc-srv/')"
+dir_list="${relocate_dir}"
+if [ "${relocate_dir}" != "${original_dir}" ]
+then
+	dir_list="${relocate_dir} ${original_dir}"
+fi
+for d in ${dir_list}
+do
+	dir=${d}/conf
+	if [ ! -d "${dir}" ]
+	then
+		continue
+	fi
+
+	# The general configs.
+	for file in ${dir}/*
+	do
+		scc_check_file "${file}" "fix:software:scc-srv:${file}::" "#"
+	done
+
+	# The configs per realm.
+	for dir in ${d}/data/www/*/custom
+	do
+		if [ ! -d "${dir}" ]
+		then
+			continue
+		fi
+		realm="$(basename "$(dirname "${dir}")")"
+		perm="$(ls -ld "${dir}"/.. | awk '{ print $1, $3, $4 }')"
+		echo "fix:software:scc-srv:realm ${realm}::permissions:	${perm}"
+
+		scc_check_file "${dir}/scc-realm.conf" "fix:software:scc-srv:realm ${realm}::scc-realm.conf:	" "#"
+		scc_check_file "${dir}/scc-smt-select" "fix:software:scc-srv:realm ${realm}::scc-smt-select:	" "#"
+		scc_check_file "${dir}/scc-rules.conf" "fix:software:scc-srv:realm ${realm}::scc-rules.conf:	" "#"
+	done
+
+	# Permissions of all transfer directories.
+	for dir in ${d}/data/transfer/*
+	do
+		if [ ! -d "${dir}" ]
+		then
+			continue
+		fi
+
+		perm="$(ls -ld "${dir}" | awk '{ print $1, $3, $4 }')"
+		echo "fix:software:scc-srv:permissions::${dir}:	${perm}"
+	done
+
+	ls -d ${d}/data/www/ ${d}/data/www/* ${d}/data/www/*/* 2>/dev/null	|
+	sort									|
+	while read dir
+	do
+		if [ -d "${dir}" ]
+		then
+			ls -Zd ${dir} 2>/dev/null </dev/null
+		fi
+	done 									|
+	sed -e "s/^/fix:software:scc-srv:selinux context::/"
+
+	# We do not "break" here, as systems might contain the scc-srv in the "original" AND the
+	# relocated location. This undesirable situation now appears in the snapshot.
+done
+
+for dir in /etc/ssh /opt/openssh2/etc /usr/local/etc/ssh
+do
+	if [ ! -d ${dir} ]
+	then
+		continue
+	fi
+
+	scc_check_file "${dir}/sshd_config" "fix:software:openssh2:sshd_config::" "#"
+	scc_check_file "${dir}/ssh_config" "fix:software:openssh2:ssh_config::" "#"
+
+	if [ -f ${dir}/ssh_host_key -a -r ${dir}/ssh_host_key ]
+	then
+		scc_crypt <${dir}/ssh_host_key			|
+		sed -e 's/^/fix:software:openssh2:ssh_host_key::/'
+	fi
+
+	scc_check_file "${dir}/ssh_host_key.pub" "fix:software:openssh2:ssh_host_key.pub::" "#"
+
+	scc_check_file "${dir}/ssh_known_hosts" "fix:software:openssh2:ssh_known_hosts::" "#"
+	scc_check_file "${dir}/shosts.equiv" "fix:software:openssh2:shosts.equiv::" "#"
+	scc_check_file "${dir}/sshrc" "fix:software:openssh2:sshrc::" "#"
+
+	break			# Do not check other directories
+done
+scc_check_file /etc/ssh_known_hosts "fix:software:openssh2:/etc/ssh_known_hosts::" "#"
+scc_check_file /etc/ssl/openssl.cnf "fix:software:openssl:/etc/ssl/openssl.cnf::" "#"
+scc_check_file /etc/openssl/openssl.cnf "fix:software:openssl:/etc/openssl/openssl.cnf::" "#"
+scc_check_file /etc/pki/CA/openssl.cnf "fix:software:openssl:/etc/pki/CA/openssl.cnf::" "#"
+
+for file in	/etc/ovirt-guest-agent.conf		\
+		/etc/ovirt-commandline.d/*		\
+		/etc/ovirt-engine/*.conf		\
+		/etc/ovirt-engine/*/*.conf		\
+		/etc/ovirt-engine/*/*.properties	\
+		/etc/ovirt-engine/*/*.xml		\
+		/etc/ovirt-hosted-engine/*.conf		\
+		/etc/ovirt-hosted-engine-ha/*.conf
+do
+	scc_check_file "${file}" "fix:software:ovirt:${file}::" "#"	|
+	sed -e 's/PASSWORD.*/PASSWORD/'
+done
+
+for p in ovirt-config rhevm-config
+do
+	exe="$(which ${p} 2>/dev/null)"
+	if [ -x "${exe}" ]
+	then
+		${exe} -a 2>/dev/null		|
+		sed -e "s/^/fix:software:ovirt:${p}::/"
+	fi
+done
+
+if [ -x /usr/bin/engine-config ]
+then
+	/usr/bin/engine-config -a 2>/dev/null			|
+	awk	'/^[^:][^:]*: ./	{ print $0; next }
+		/^[^:][^:]*: $/		{ label = $1; next }
+					{ print label $0 }'	|
+	sed -e 's/^/fix:software:ovirt:engine-config::/'
+fi
+
+if [ -x /usr/sbin/hosted-engine ]
+then
+	# Limit to hostnames, remainder is all status and variable.
+	/usr/sbin/hosted-engine --vm-status 2>/dev/null		|
+	sed -n -e 's/^Hostname.*:/fix:software:ovirt:hosted-engine::Hostname/p'
+fi
+
+virt_shell_cmd=""
+sub_class=""
+profile=""
+if [ -x /usr/bin/rhevm-shell ]
+then
+	virt_shell_cmd=/usr/bin/rhevm-shell
+	sub_class="rhevm"
+	profile=".rhevmshellrc"
+elif [ -x /usr/bin/ovirt-shell ]
+then
+	virt_shell_cmd=/usr/bin/ovirt-shell
+	sub_class="ovirt"
+	profile=".ovirtshellrc"
+fi
+
+export HOME=~root
+if [ -f ${HOME}/"${profile}" -a -x "${virt_shell_cmd}" ]
+then
+	# Structured output of rhevm/ovirt-shell where output of type X references type Y by means of an ID.
+	# Record ID - name pairs to be used for other type of objects.
+	# The order of collection does matter: get datacenters to obtain data_center-id used by clusters and others.
+	#
+	# - datacenters:
+	#	id is used by others as data_center-id
+	# - clusters:
+	#	id is used by others as cluster-id
+	#	uses data_center-id
+	# - storagedomains:
+	#	id is used by others as storage_domain-id
+	# - hosts:
+	#	uses cluster-id
+	# - networks:
+	#	uses data_center-id
+	# - diskprofiles:
+	#	uses storage_domain-id
+	# - domains:
+	#	id is used by others as domain-id
+	# - groups:
+	#	uses domain-id
+	# - bookmarks:
+	#	display "name" - "value" pairs
+
+	scc_class="fix:software:${sub_class}"
+	timeout="$(which timeout 2>/dev/null)"
+	if [ -x "${timeout}" ]
+	then
+		timeout="${timeout} 60"         # avoid hanging command with incomplete profile
+	fi
+
+	scc_check_file ${HOME}/${profile} "${scc_class}:${profile}::" "#"	|
+	sed -e '/password/d'
+
+	scc_virt_shell_cmd()
+	{
+		export TERM=xterm
+
+		echo "list ${1} --show-all"			|
+		${timeout} "${virt_shell_cmd}" 2>/dev/null	|
+		sed	-e '/oVirt shell/d'	\
+			-e '/RHEVM shell/d'	\
+			-e '/^[^a-z]/d'		\
+			-e '/^[ 	]*$/d'
+	}
+
+	# Tag "variable" data as "var".
+	cat >${TMP2_FILE} <<- _X_
+		s/fix:\(.*storage_domain.*data_centers-data_center-id\)/var:\1/
+		s/fix:\(.*\)::status-state/var:\1::status-state/
+		s/fix:\(.*\)::summary-/var:\1::summary-/
+		s/fix:\(.*\)::max_scheduling_memory/var:\1::max_scheduling_memory/
+		s/fix:\(.*\)::available/var:\1::available/
+		s/fix:\(.*\)::committed/var:\1::committed/
+		s/fix:\(.*\)::ksm-enabled/var:\1::ksm-enabled/
+		s/fix:\(.*\)::storage_manager-valueOf/var:\1::storage_manager-valueOf/
+		s/fix:\(.*\)::used/var:\1::used/
+_X_
+
+	while read id_label id_name type
+	do
+		>${TMP1_FILE}			# sed expressions for type we are processing now
+
+		scc_virt_shell_cmd ${type}							|
+		awk	'/^id /		{ id = $3; next }
+			/^name /	{
+						name = $3
+
+						# Create a sed expression to substitute the current ID value ($3 from id line)
+						# into the current name value ($3 from name line) for other types of objects.
+						# Add 3 spaces to compensate for "-id" and keep data aligned.
+						printf( "s/:%s\\(.*: \\)%s/:%s   \\1%s/\n",
+							id_label, id, id_name, name ) >>sed_file; 
+
+						print scc_label ":" id_name ":" name "::" $0
+						next
+					}
+					{ print scc_label ":" id_name ":" name "::" $0; }'	\
+						scc_label="${scc_class}"	\
+						id_label="${id_label}"		\
+						id_name="${id_name}"		\
+						sed_file=${TMP1_FILE}				|
+		sed -f "${TMP2_FILE}"								|
+		sort
+
+		cat ${TMP1_FILE} >>${TMP2_FILE}
+	done <<- _X_
+		data_center-id		data_center		datacenters
+		cluster-id		cluster			clusters
+		storage_domain-id	storage_domain		storagedomains
+		host-id			host			hosts
+		_no_extern_id_		network			networks
+		_no_extern_id_		diskprofile		diskprofiles
+		domain-id		domain			domains
+		_no_extern_id_		group			groups
+_X_
+
+	# From the bookmarks, we only display "name" - "value" pairs that is incompatible with the above processing.
+	# Therefore a dedicated call to the virtualization shell is made.
+	scc_virt_shell_cmd bookmarks												|
+	awk	'/^name/	{ $1 = ""; $2 = ""; sub( "^  *", "" ); name = $0; next }
+		/value/		{ $1 = ""; $2 = ""; print scc_label ":bookmarks::" name ": " $0;}' scc_label="${scc_class}"	|
+	sort
+
+	rm -f ${TMP1_FILE} ${TMP2_FILE} parser_lex.py
+fi
+HOME=""
+
+scc_check_file /etc/pam.conf "fix:software:pam:/etc/pam.conf::" "#"
+scc_check_file /etc/pam_user.conf "fix:software:pam:/etc/pam_user.conf::" "#"
+
+for f in /etc/pam_* /etc/pam_*/*.conf /etc/pam.d/*
+do
+	scc_check_file "${f}" "fix:software:pam:${f}::" "#"
+done
+
+# OpenBSD packet filter
+scc_check_file /etc/pf.conf			"fix:software:packet filter:/etc/pf.conf::"			"#"
+scc_check_file /etc/pf.os			"fix:software:packet filter:/etc/pf.os::"			"#"
+scc_check_file /etc/authpf/authpf.conf		"fix:software:packet filter:/etc/authpf/authpf.conf::"		"#"
+scc_check_file /etc/authpf/authpf.allow		"fix:software:packet filter:/etc/authpf/authpf.allow::"		"#"
+scc_check_file /etc/authpf/authpf.rules		"fix:software:packet filter:/etc/authpf/authpf.rules::"		"#"
+scc_check_file /etc/authpf/authpf.message	"fix:software:packet filter:/etc/authpf/authpf.message::"	"#"
+scc_check_file /etc/authpf/authpf.problem	"fix:software:packet filter:/etc/authpf/authpf.problem::"	"#"
+for f in /etc/authpf/users/*/authpf.conf /etc/authpf/banned/*
+do
+	scc_check_file "${f}" "fix:software:packet filter:${f}::" "#"
+done
+
+postconf_exe="$(which postconf 2>/dev/null)"
+if [ -x "${postconf_exe}" ]
+then
+	postconf 2>/dev/null			|
+	sed	-e '/process_id/d'	\
+		-e 's/^/fix:software:postfix::/'
+fi
+
+prefix="fix:software:Predictive"
+if [ -x /opt/pred/bin/psconfig ]
+then
+	/opt/pred/bin/psconfig print configuration 2>&1		|
+	sed -e '1,/^---/d'					|
+	sed -e "s/^/${prefix}:psconfig::config:		/"
+
+	/opt/pred/bin/psconfig print versions 2>&1		|
+	sed -e '1,/^---/d'					|
+	sed -e "s/^/${prefix}:psconfig::ruleset:	/"
+
+	scc_check_file /etc/uucp/Devices "${prefix}:/etc/uucp/Devices::" "#"
+	scc_check_file /etc/uucp/Dialers "${prefix}:/etc/uucp/Dialers::" "#"
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of Predictive"
+fi
+prefix=""
+
+scc_check_file /etc/prmconf "fix:software:PRM /etc/prmconf::" "#"
+
+scc_check_file /etc/pythonstart "fix:software:python:/etc/pythonstart::" "#"
+
+# Determine the activated python eggs.
+python_exe="$(which python 2>/dev/null)"
+site_package_dir=""
+if [ -x "${python_exe}" ]
+then
+	site_package_dir="$("${python_exe}" -c "from distutils.sysconfig import get_python_lib; print get_python_lib()" 2>/dev/null)"
+fi
+if [ -z "${site_package_dir}" ]
+then
+	site_package_dir="/usr/lib/python*/site-packages"
+fi
+for dir in ${site_package_dir}
+do
+	for file in ${dir}/easy-install.pth
+	do
+		if [ -f "${file}" ]
+		then
+			sort "${file}"					|
+			sed -e "s@^@fix:software:python:${file}::@"
+		fi
+	done
+done
+
+for file in /etc/raa/*conf /etc/raa/*cfg
+do
+	if [ "${file}" != "/etc/raa/lighttpd.conf" ]
+	then
+		scc_check_file "${file}" "fix:software:rPath Appliance Agent:general:${file}::" "#"
+	fi
+done
+
+for file in /etc/raa/plugins.d/*cfg
+do
+	scc_check_file "${file}" "fix:software:rPath Appliance Agent:plugins:${file}::" "#"
+done
+
+scc_check_file /var/sam/.acl "fix:software:SAM:.acl::" "#"
+scc_check_file /var/sam/preferences/app_preference "fix:software:SAM:app_preference::" "#"
+
+for f in /etc/sam/custom/*.tp
+do
+	scc_check_file "${f}" "fix:software:SAM:template:$(basename ${f})::" "#"
+done
+for f in /etc/sam/custom/*.cf
+do
+	scc_check_file "${f}" "fix:software:SAM:restricted users:$(basename ${f})::" "#"
+done
+for f in /etc/sam/custom/*.gp
+do
+	scc_check_file "${f}" "fix:software:SAM:restricted groups:$(basename ${f})::" "#"
+done
+
+scc_check_file /etc/sam/reg_dirs.db "fix:software:SAM:reg_dirs.db::" "#"
+scc_check_file /etc/sam/reg_files.db "fix:software:SAM:reg_files.db::" "#"
+
+for f in /etc/sam/*excl
+do
+	scc_check_file "${f}" "fix:software:SAM:exclude lists:$(basename ${f})::" "#"
+done
+
+# When the samba testparm program cannot be found in the default PATH,
+# edit scc-localize and change the contents of the variable SCC_PATH. 
+# This replaces the variable TESTPARM used for previous versions of the software.
+testparm_exe="$(which testparm 2>/dev/null)"
+if [ ! -x "${testparm_exe}" ]
+then
+	testparm_exe="$(sed -n -e 's@/smbd .*@@p' ${PROC_FILE} | sed -e 's/.* //' | head -n 1)/testparm"
+	if [ ! -x "${testparm_exe}" ]
+	then
+		# On Solaris smbd is in /opt/csw/sbin and testparm in /opt/csw/bin.
+		testparm_exe="$(sed -n -e 's@/sbin/smbd .*@@p' ${PROC_FILE} | sed -e 's/.* //' | head -n 1)/sbin/testparm"
+	fi
+	if [ -x "${testparm_exe}" ]
+	then
+		# Avoid running a "fake" testparm; owner of directory should be root
+		owner="$(ls -ld ${testparm_exe%/*} | awk '{ print $3 }')"
+		if [ "${owner}" = "root" ]
+		then
+			# Preserve for next run, when smbd might not be running
+			echo "fix:testparm:${testparm_exe}" >> ${SCC_KEEP_NEW}
+		else
+			testparm_exe=""
+		fi
+	else
+		# Reuse from previous run
+		testparm_exe="$(sed -n	-e "/^fix:testparm:/p"	${SCC_KEEP_CONFIG} 2>/dev/null | tee -a ${SCC_KEEP_NEW})"
+	fi
+fi
+if [ -x "${testparm_exe}" ]
+then
+	"${testparm_exe}" -s 2>/dev/null				|
+	awk '/^\[.*\]$/ { prefix=$1; next; }
+		{
+			if ( NR == 1 )
+			{
+				prefix="general"
+			}
+
+			if ( NF > 0 )
+			{
+				print prefix "::" $0
+			}
+		}'					|
+	sed	-e 's/^\[//'	\
+		-e 's/]::/::/'	\
+		-e 's/^/fix:software:samba:/'
+else
+	# testparm is not accessible through our PATH.
+	# When smbd is running, we signal via a message that we cannot 
+	# capture the configuration of the running Samba server.
+	grep -l "[ 	/]smbd" ${PROC_FILE} >/dev/null 2>/dev/null
+	if [ $? -eq 0 ]
+	then
+		echo "fix:messages::to access testparm (samba), copy and edit scc-localize: SCC_PATH"
+	else
+		# Samba is not running and we cannot access testparm, try some config files on default locations.
+		for dir in /etc /etc/samba
+		do
+			for file in lmhosts smb.conf smbusers
+			do
+				scc_check_file "${dir}/${file}" "fix:software:samba:${dir}/${file}::" "#"
+			done
+		done
+	fi
+fi
+
+if [ -x /usr/sbin/sasldblistusers2 -a -f /etc/sasldb2 ]
+then
+	/usr/sbin/sasldblistusers2 2>/dev/null				|
+	sed -e "s@^@var:software:/usr/sbin/sasldblistusers2::@"
+fi
+
+# Service Control Manager
+# Only report SCM when this is a management system, otherwise ignore
+SCM_LABEL="fix:software:Service Control Manager"
+scc_check_file /var/opt/mx/data/mx.properties "${SCM_LABEL}:mx.properties::" "#"
+if [ -x /etc/rc.config.d/ServCtlMgr ]
+then
+	. /etc/rc.config.d/ServCtlMgr
+	if [ ${SCM_START_CMS} = 1 ]
+	then
+		if [ -x /opt/mx/bin/mxnode ]
+		then
+			/opt/mx/bin/mxauth -lt 2>&1		|
+			sed -e "s/^/${SCM_LABEL}:autorisation::/"
+
+			/opt/mx/bin/mxnode -lt 2>&1		|
+			sed -e "s/^/${SCM_LABEL}:nodes::/"
+
+			/opt/mx/bin/mxngroup -lt 2>&1		|
+			sed -e "s/^/${SCM_LABEL}:nodegroup::/"
+
+			/opt/mx/bin/mxrole -lt 2>&1		|
+			sed -e "s/^/${SCM_LABEL}:role::/"
+
+			/opt/mx/bin/mxuser -lt 2>&1		|
+			sed -e "s/^/${SCM_LABEL}:users::/"
+		fi
+		if [ -x /opt/mx/bin/mxtool ]
+		then
+			/opt/mx/bin/mxtool -ld 2>/dev/null	|
+			grep "/Category:"			|
+			cut -c25-				|
+			sort -u					|
+			while read cat
+			do
+				/opt/mx/bin/mxtool -ld -c "${cat}" 2>/dev/null	|
+				grep "^Tool name:"				|
+				cut -c25-					|
+				sort -u						|
+				while read tool
+				do
+					/opt/mx/bin/mxtool -ld -t "${tool}" 2>&1		|
+					sed -e "s/^/${SCM_LABEL}:category ${cat}::${tool}:	/"
+				done
+			done
+		fi
+	fi
+fi
+
+if [ -x /opt/scr/bin/scrconfig ]
+then
+	# System Configuration Repository
+	/opt/scr/bin/scrconfig 2>/dev/null				|
+	sed -e 's@[0-9][0-9]/[0-9][0-9]/[0-9][0-9][0-9][0-9] [0-9][0-9]:[0-9][0-9] ......@MM/DD/YYYY HH:MM ???   @' \
+		-e 's/^/fix:software:SCR:config::/'
+
+	# By using scc, you don't need SCR-details. Ignore it by default as it produces MUCH output.
+	# Edit scc-localize to change the default setting of this variable.
+	if [ "${SCC_SCR_DETAILS:-no}" ]
+	then
+		/opt/scr/bin/scrfilter 2>/dev/null				|
+		while read filter
+		do
+			/opt/scr/bin/scrfilter -l "${filter}" 2>/dev/null			|
+			sed	-e "s/^/fix:software:SCR:filter ${filter}::/"	\
+				-e 's/  *on$/	on/'				\
+				-e 's/  *off$/	off/'
+		done
+	fi
+fi
+
+# Several small files contain the elements of the user interface. Filename is not part of the classification.
+for file in /etc/setuptool.d/*
+do
+	scc_check_file "${file}" "fix:software:setuptool::${file}	: " "#"
+done
+
+# Do not run on Engarde and NetBSD as the -bt option is not supported and produces log-messages.
+sm=$(which sendmail 2>/dev/null)
+if [ -x "${sm}" -a "${SCC_LINUX_DISTRO}" != "engarde" -a "${OS_NAME}" != "NetBSD" ]
+then
+	# Determine whether postfix is running as sendmail (not supporting the -bt option).
+	# Indicated by Ralf Rebsamen.
+	postfix="$(strings ${sm} | grep postfix)"
+	if [ -z "${postfix}" ]
+	then
+		# Assign "var" to Real and RunAS UG to avoid differences between interactive runs and cron-jobs.
+		echo ""							|
+		sendmail -bt -d 2>/dev/null				|
+		sed	-e '/^[ 	]*$/d'			\
+			-e '/getla/d'				\
+			-e '/assign_queueid/d'				|
+		awk	'				{ prefix="fix"; }
+			/Real.UG.id=[^:]*:[^:]*,/	{ prefix="var"; }
+			/RunAs[UG]id=[^:]*:[^:]*,/	{ prefix="var"; }
+							{ print prefix ":software:sendmail:options::" $0 }'
+	fi
+fi
+
+for f in	access			\
+		aliases			\
+		domaintable		\
+		mail.rc			\
+		mailertable		\
+		mailer.conf		\
+		sendmail.cf		\
+		sendmail.mc		\
+		service.switch		\
+		spamd.conf		\
+		local-host-names	\
+		trusted-users		\
+		virtusertable
+do
+	for d in /etc/postfix /etc /etc/mail
+	do
+		# Stop when the file is found.
+		scc_check_file "${d}/${f}" "fix:software:sendmail:${d}/${f}::" "#" && break
+	done
+done
+
+ls -l /etc/smrsh/* 2>/dev/null		|
+scc_ls					|
+sed -e 's@^@fix:software:sendmail:/etc/smrsh::@'
+
+scc_check_file /etc/sensorsd.conf "fix:software:/etc/sensorsd.conf::" "#"
+
+scc_check_file /etc/cloudkick.conf "fix:software:Amazon cloud:/etc/cloudkick.conf::" "#"	|
+sed -e 's/oauth_secret.*/oauth_secret ERASED/'
+
+scc_check_file "/etc/cluster.conf"		"fix:software:RedHat /etc/cluster.conf::" "#"
+scc_check_file "/etc/cluster.xml"		"fix:software:RedHat /etc/cluster.xml::" "#"
+scc_check_file "/etc/cluster/cluster.conf"	"fix:software:RedHat /etc/cluster/cluster.conf::" "#"
+scc_check_file "/etc/rhsm/rhsm.conf"		"fix:software:RedHat /etc/rhsm/rhsm.conf::" "#"
+
+#### HP ServiceGuard: both Linux and HP-UX versions
+# Read cluster paths on linux cluster
+if [ -f /etc/cmcluster.conf ]
+then
+	scc_check_file /etc/cmcluster.conf "fix:software:ServiceGuard:/etc/cmcluster.conf::" "#"
+	. /etc/cmcluster.conf
+fi
+
+for file in /etc/snort/*.config /etc/snort/*.conf /etc/snort/vars /etc/snort/rules/*.config
+do
+	scc_check_file "${file}" "fix:software:snort:${file}::" "#"
+done
+
+for file in /etc/spamassassin/*
+do
+	scc_check_file "${file}" "fix:software:spamassassin:${file}::" "#"
+done
+
+# Set path for HP-UX cluster if linux cluster paths not set
+SGSBIN=${SGSBIN:-/usr/sbin}
+SGCONF=${SGCONF:-/etc/cmcluster}
+export SGSBIN SGCONF SGLBIN
+
+scc_check_file "${SGCONF}/cmclnodelist" "fix:software:ServiceGuard:${SGCONF}/cmclnodelist::" "#"
+
+scc_check_file /opt/qs/conf/qs_authfile "fix:software:ServiceGuard:/opt/qs/conf/qs_authfile::" "#"
+
+if [ -x ${SGSBIN}/cmquerycl ]
+then
+	grep -l -e "${SGLBIN}/c[m]cld" -e " c[m]cld" ${PROC_FILE} >/dev/null 2>/dev/null
+	if [ $? -eq 0 ]
+	then
+		echo "fix:software:ServiceGuard:general::status:	active"
+
+		${SGSBIN}/cmquerycl -v		|
+		sed -e 's/^/var:software:ServiceGuard:sw-status::/'
+
+		${SGSBIN}/cmgetconf 2>/dev/null					|
+		sed	-e '/^#/d'					\
+			-e '/does not have an ID, or a disk label/d'	\
+			-e '/cannot be included in the topology/d'	\
+			-e '/^[Uu]se /d'				\
+			-e 's/^/fix:software:ServiceGuard:cluster::/'		|
+		uniq
+
+		scc_check_file "${SGCONF}/cmclnodelist" "fix:software:ServiceGuard:cmclnodelist::" "#"
+		scc_check_file "${SGCONF}/cmcluster.rc" "fix:software:ServiceGuard:cmcluster.rc::" "#"
+
+		${SGSBIN}/cmviewcl -v 2>${TMP1_FILE}		|
+		sed -e "s/^/var:software:ServiceGuard:status::/"
+
+		sed -e 's/^/fix:software:ServiceGuard:messages::/' ${TMP1_FILE}
+		rm -f ${TMP1_FILE}
+
+		# Get the status of the package.
+		${SGSBIN}/cmviewcl -l package 2>/dev/null	|
+		sed	-e '/^[ 	]*$/d'	\
+			-e '/PACKAGE/d'		\
+			-e 's/^[ 	]*//'	\
+			-e 's/[ 	].*//'			|
+		sort						|
+		while read pkg remainder
+		do
+			${SGSBIN}/cmgetconf -v -p ${pkg}		|
+			sed	-e '/^#/d'		\
+				-e '/^[ 	]*$/d'	\
+				-e "s/^/fix:software:ServiceGuard:${pkg}::/"
+
+			${SGSBIN}/cmgetconf -p ${pkg}							|
+			awk	'/^RUN_SCRIPT[ 	]/	{ run = $2; print $2, $1 }
+				/^HALT_SCRIPT[ 	]/	{ if ( $2 != run ) print $2, $1 }'	|
+			while read file category
+			do
+				scc_check_file "${file}" "fix:software:ServiceGuard:${pkg}::${category}:	" "#"
+			done
+
+		done
+	else
+		echo "fix:software:ServiceGuard:general::status:	inactive"
+	fi
+fi
+
+if [ -d /etc/shorewall ]
+then
+	for file in /etc/shorewall/* /etc/ifw/* /etc/ifw/rules.d/*
+	do
+		scc_check_file "${file}" "fix:software:shorewall:${file}::" "#"
+	done
+fi
+
+for svn_dir in /etc/opt/CollabNet_Subversion/conf /etc/subversion/conf /etc/subversion
+do
+	if [ ! -d "${svn_dir}" ]
+	then
+		continue
+	fi
+
+	for file in ${svn_dir}/*.conf ${svn_dir}/server
+	do
+		scc_check_file "${file}" "fix:software:subversion:${file}::" "#"
+	done
+
+	# Erase passwords in the following file:
+	scc_check_file "${svn_dir}/svnserve_auth_file" "fix:software:subversion:${svn_dir}/svnserve_auth_file::" "#"	|
+	sed -e 's/=.*//'
+
+	# Determine the repositories:
+	repo_dir="$(sed -n -e 's/[ 	]*$//' -e 's/repository = //p' ${svn_dir}/server 2>/dev/null)"
+	if [ -z "${repo_dir}" ]
+	then
+		#svn       1790     1  0 19:39 ?        00:00:00 svnserve -d -r /opt/var/svn
+		repo_dir="$(sed -n -e 's/.*svnserve.* -r //p' ${PROC_FILE} | scc_keep "software:subversion" 5)"
+	fi
+	if [ -d "${repo_dir}" ]
+	then
+		for dir in ${repo_dir}/*/conf
+		do
+			if [ -d "${dir}" ]
+			then
+				scc_check_file "${dir}/svnserve.conf" "fix:software:subversion:${dir}:svnserve.conf::" "#" 
+				scc_check_file "${dir}/authz" "fix:software:subversion:${dir}:authz::" "#" 
+
+				# Erase passwords in the following file:
+				scc_check_file "${dir}/passwd" "fix:software:subversion:${dir}:passwd::" "#"	|
+				sed -e 's/=.*//'
+			fi
+		done
+	fi
+done
+
+if [ -x /usr/sbin/suma ]
+then
+	/usr/sbin/suma -c	|
+	sed -e 's/^/fix:software:SUMA configuration::/'
+fi
+
+# Sun Cluster.
+if [ -x /usr/cluster/bin/scconf ]
+then
+	/usr/cluster/bin/scinstall -p 2>/dev/null	|
+	sed -e 's/^/fix:software:Sun Cluster:scinstall::/'
+
+	/usr/cluster/bin/scconf -p 2>/dev/null		|
+	sed -e 's/^/fix:software:Sun Cluster:scconf::/'
+
+	/usr/cluster/bin/scrgadm -p 2>/dev/null		|
+	sed -e 's/^/fix:software:Sun Cluster:scrgadm::/'
+
+	/usr/cluster/bin/scstat -p 2>/dev/null		|
+	sed -e 's/^/var:software:Sun Cluster:scstat::/'
+fi
+
+# TRU64 Cluster
+if [ -x /usr/sbin/clu_get_info ]
+then
+	/usr/sbin/clu_get_info 2>/dev/null		|
+	tee ${TMP1_FILE}				|
+	sed -e 's/^/fix:software:TRU64 Cluster:clu_get_info::/'
+
+	myid="$(awk '/memberid for this member =/ { print $NF }' ${TMP1_FILE})"
+	if [ "${myid}" ]
+	then
+		/usr/sbin/clu_get_info -full -m "${myid}" 2>/dev/null		|
+		sed -e 's/^/fix:software:TRU64 Cluster:full info::/'
+	fi
+
+	rm -f ${TMP1_FILE}
+fi
+
+if [ -x /usr/bin/caa_stat ]
+then
+	/usr/bin/caa_stat -v 2>/dev/null		|
+	awk	'				{ prefix="fix"; }
+		/^RESTART|^FAILURE_COUNT/	{ prefix="var"; }
+						{ print prefix ":software:TRU64 Cluster:applications::" $0 }'
+fi
+
+scc_check_file /etc/rc.config.common "fix:software:TRU64 Cluster:/etc/rc.config.common::" "#"
+if [ "${OS_NAME}" = "OSF1" ]
+then
+	scc_check_file /etc/rc.config "fix:software:TRU64 Cluster:/etc/rc.config::" "#"
+fi
+
+for file in /etc/rsyslog.conf /etc/rsyslog.d/*
+do
+	scc_check_file "${file}" "fix:software:rsyslog:${file}::" "#"
+done
+
+grep -l "squid.*-f" ${PROC_FILE} >/dev/null 2>/dev/null
+if [ $? -eq 0 ]
+then
+	grep "squid.*-f" ${PROC_FILE}		|
+	sed	-e 's/.*squid.*-f *//'	\
+		-e 's/ .*//'
+else
+	# In order to let the following code work, squid should be located in 
+	# one of the directories of PATH. Or a symbolic link to the executable
+	# should be placed in directory ${SCC_BIN}.
+	squid_exe="$(which squid 2>/dev/null)"
+	if [ -x "${squid_exe}" ]
+	then
+		squid -h 2>&1		|
+		awk '/  *-f file/	{ 
+						if ( NF > 7 )
+						{
+							print $8
+						}
+						else
+						{
+							getline
+							print $1
+						}
+					}'
+	fi
+fi					|
+scc_keep "software:squid" 5		|
+while read squid_cfg
+do
+	scc_check_file "${squid_cfg}" "fix:software:squid:${squid_cfg}::" "#"
+
+	(
+		# Attempt to collect all config files in the same directory as the squid config file.
+		squid_dir="${squid_cfg%/*}"
+		if [ -d "${squid_dir}" ]
+		then
+			ls ${squid_dir}/*.conf		|
+			grep -v ${squid_cfg}
+		fi
+
+		# Harry van Wiggen indicated the include statement for squid. Example line:
+		#acl PROX_ALLOW_DST  url_regex   "/usr/local/squid/etc/prox_allow_dest.txt"
+		# These files can reside in another directory than the squid config file.
+		awk	'/^acl/	{
+					gsub( "\"", "", $(NF) )
+					print $NF
+				}' "${squid_cfg}" 2>/dev/null
+	)					|
+	sort -u					|
+	while read file
+	do
+		scc_check_file "${file}" "fix:software:squid:${file}::" "#"
+	done
+done
+
+sram_dir=/etc/opt/sram
+sram_cfg=${sram_dir}/user.ini
+
+if [ -f ${sram_cfg} ]
+then
+
+	include_path=$(sed -n -e 's/^include=//p' ${sram_cfg})
+	specs=$(sed -n -e 's/^configfile=//p' ${sram_cfg})
+
+	# Select the existing directories to speed-up finding the included files.
+	touch ${TMP1_FILE}
+	dir_list=$(for d in $(echo ${sram_dir} ${include_path} | sed -e 's/:/ /g')
+		do
+			if [ -d "${d}" ]
+			then
+				echo "${d}"
+
+				# Check all include directories in case configfile is a relative path.
+				if [ -f "${d}/${specs}" ]
+				then
+					echo "${d}/${specs}" >${TMP1_FILE}
+				fi
+			fi
+		done)
+
+	if [ ! -f "${specs}" ]
+	then
+		specs=$(<${TMP1_FILE})
+	fi
+	rm -f ${TMP1_FILE}
+
+	scc_check_file "${sram_cfg}" "fix:software:SRAM:${sram_cfg}::" "#"
+
+	# ${TMP1_FILE} holds the hierarchy.
+	# We process the hierarchy to find new includes.
+	# ${TMP2_FILE}  holds the hierarchy and its includes.
+	# We loop until there are no new includes.
+	level=0
+	todo="${specs}"
+	echo "${specs}" >${TMP1_FILE}
+	while [ -n "${todo}" ]
+	do
+		level=$(( level + 1 ))
+		if [ ${level} -gt 20 ]
+		then
+			echo "fix:messages::nesting too deep for SRAM: ${level}"
+		fi
+
+		todo=""
+		>${TMP2_FILE}
+
+		while read l f
+		do
+			if [ -n "${f}" ]
+			then
+				# level and file are determined: ready
+				echo "${l} ${f}" >>${TMP2_FILE}
+				continue
+			fi
+			f="${l}"
+
+			if [ ! -f "${f}" ]
+			then
+				echo "fix:messages::missing include file for SRAM: ${f}"
+				continue
+			fi
+
+			echo "${level} ${f}" >>${TMP2_FILE}
+
+			# Now we are adding the includes of ${f} without a level indicator.
+			# Process these files at the next level (run of the outer loop).
+			sed -n -e 's/^[ 	]*include[ 	]*"//p' "${f}"	|
+			sed -e 's/";.*//'					|
+			while read inc remainder
+			do
+				if [ -f "${inc}" ]
+				then
+					todo="${inc}"
+					echo "${inc}" >>${TMP2_FILE}
+				else
+					for d in ${dir_list}
+					do
+						if [ -f "${d}/${inc}" ]
+						then
+							todo="${d}/${inc}"
+							echo "${d}/${inc}" >>${TMP2_FILE}
+							break
+						fi
+					done
+				fi
+			done
+		done <${TMP1_FILE}
+
+		mv ${TMP2_FILE} ${TMP1_FILE}
+	done
+
+	# Add the hierarchy to the snapshot
+	awk '{
+		# Syntax is: <level> <file>
+		printf( "fix:software:SRAM:hierarchy::" )
+		# Replace the level by indentation.
+		for ( i = 1; i < $1; i++ )
+		{
+			printf( "   " )
+		}
+		$1 = ""
+		print
+	}' ${TMP1_FILE}
+
+	# Add the config and all included files to the snapshot.
+	sed -e 's/^[0-9][0-9]*.//' ${TMP1_FILE}		|
+	sort -u						|
+	while read file remainder
+	do
+		sed -e "s@^@fix:software:SRAM:${file}::@" ${file}
+	done
+
+	rm -f ${TMP1_FILE} ${TMP2_FILE}
+fi
+
+scc_check_file /etc/initlog.conf "fix:software:syslog:/etc/initlog.conf::" "#"
+
+# SOS: Son Of Sysreport
+if [ -x /usr/sbin/sosreport ]
+then
+	# Erase the escape-sequences used to color the listing and the --nocolor option is missing on some versions.
+	/usr/sbin/sosreport -l 2>/dev/null			|
+	awk	'{
+			if ( NR == 1 )
+			{
+				class = "general";		# first line indicates the version
+			}
+			gsub( "\033[[0-9][0-9]*;[0-9][0-9]*m", "" )
+			gsub( "\033[[0-9][0-9]*m", "" )
+		}
+		/^The following plugin/ {
+			class = $NF
+			sub( ":$", "", class )
+			next
+		}
+		/^$/	{
+			next
+		}
+		{
+			printf( "fix:software:sosreport:%s::%s\n", class, $0 )
+		}'
+
+	rm -rf ${SCC_TMP}/sos_*			# remove the temporary file created by sosreport.
+fi
+scc_check_file /etc/sos.conf "fix:software:sosreport:/etc/sos.conf::" "#"
+
+for base_dir in /opt/splunkforwarder/etc
+do
+	if [ -d "${base_dir}" ]
+	then
+		(
+			cd "${base_dir}"
+
+			ls	./*.cfg			\
+				./*.conf		\
+				apps/*/*/*.conf		\
+				system/*/*.conf					|
+			sed	-e 's@^\./@@'				\
+				-e '/\/default\//d'			\
+				-e '/learned\/local\/props.conf/d'	\
+				-e '/sourcetypes.conf/d' 			|
+			while read file
+			do
+				scc_check_file "${file}" "fix:software:splunk-forwarder:${file}::" "#"
+			done
+		)
+
+		break
+	fi
+done
+
+for sudo_file in /etc/sudoers /usr/pkg/etc/sudoers /etc/opt/csw/sudo.conf
+do
+	if [ -f ${sudo_file} -a -r ${sudo_file} ]
+	then
+		scc_check_file ${sudo_file} "fix:software:sudo::${sudo_file}	" "#"
+
+		grep "^#include[ 	]" ${sudo_file}			|
+		while read include file
+		do
+			scc_check_file "${file}" "fix:software:sudo::${file}	" "#"
+		done
+
+		grep "^#includedir[ 	]" ${sudo_file}			|
+		while read include dir
+		do
+			for file in "${dir}"/*
+			do
+				scc_check_file "${file}" "fix:software:sudo::${file}	" "#"
+			done
+		done
+	fi
+done
+for file in /etc/sudo.conf /etc/sudo-ldap.conf
+do
+	scc_check_file ${file} "fix:software:sudo::${file}	" "#"
+done
+
+if [ -d ~sybase ]
+then
+	(
+	cd ~sybase
+
+	if [ -h interfaces ]
+	then
+		link=$(ls -l interfaces	| awk '{ print $NF }')
+		cd "$(dirname ${link})"
+	fi
+
+	if [ -f interfaces ]
+	then
+		awk '/#/		{ next }
+			/^[ 	]*$/	{ next }
+			/^[^ 	]/	{ prefix = $1 }
+					{ printf( "fix:software:sybase:%s::interface:	%s\n", prefix, $0 ) }' interfaces
+	fi
+
+	for f in init/*/version
+	do
+		scc_check_file "${f}" "fix:software:sybase:version:$(basename ${f})::" "#"
+	done
+
+	sed -n "s/.*-s//p" install/RUN_* 2>/dev/null	|
+	sed -e 's/ .*//'				|
+	sort -u						|
+	while read dbms
+	do
+		grep -l "${dbms}" ${PROC_FILE} >/dev/null 2>/dev/null
+		if [ $? -eq 0 ]
+		then
+			scc_check_file "${dbms}.cfg" "fix:software:sybase:${dbms}.cfg::" "#"	|
+			grep -v "DEFAULT$"
+		fi
+	done
+	)
+fi
+
+# Switch-over is replaced after HP-UX 10.20 by MC/ServiceGuard
+scc_check_file /etc/switch/Switchinfo "fix:software:switchover:/etc/switch/Switchinfo::" "#"
+scc_check_file /etc/switch/become "fix:software:switchover:/etc/switch/become::" "#"
+
+scc_check_file /var/adm/sw/.codewords "fix:software:swinstall /var/adm/sw/.codewords::" "#"
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli system syslog config get						|
+	sed -e 's/^/fix:software:syslog:config::/'
+
+	/bin/esxcli system syslog config logger list					|
+	awk	'/Description:/	{ desc=$0; next }
+		/Destination:/	{ dest=$0; next }
+		/^$/		{ next }
+		/ID:/		{ id=$2; print id "::" desc; print id "::" dest }
+				{ print id "::" $0 }'					|
+	sort										|
+	sed -e 's/^/fix:software:syslog loggers:/'
+fi
+
+syslog_cfg=$(sed -n -e 's/.*[s]yslogd.*-f *//p' ${PROC_FILE} | sed -e 's/ .*//')
+if [ ! -f "${syslog_cfg}" ]
+then
+	syslog_cfg=/etc/syslog.conf
+fi
+scc_check_file "${syslog_cfg}"				"fix:software:syslogd:${syslog_cfg}::" "#"
+scc_check_file /etc/newsyslog.conf			"fix:software:syslogd:/etc/newsyslog.conf::" "#"
+for dir in /etc/syslog-ng /opt/syslog-ng/etc
+do
+	scc_check_file "${dir}"/syslog-ng.conf "fix:software:syslog-ng:${dir}/syslog-ng.conf::" "#"
+
+	# Check for incudes in the logfile. Includes can be files or directories (absolute and relative paths).
+	sed -n -e 's/"*;.*//' -e 's/^include *"*//p' "${dir}"/syslog-ng.conf 2>/dev/null	|
+	sort											|
+	while read entry
+	do
+		if [ -f "${entry}" ]				# File with absolute path
+		then
+			scc_check_file "${entry}" "fix:software:syslog-ng:${entry}::" "#"
+		elif [ -f "${dir}/${entry}" ]			# File with relative path
+		then
+			scc_check_file "${dir}/${entry}" "fix:software:syslog-ng:${dir}/${entry}::" "#"
+		elif [ -d "${entry}" ]				# Directory with absolute path.
+		then
+			for file in "${entry}"/*
+			do
+				scc_check_file "${file}" "fix:software:syslog-ng:${file}::" "#"
+			done
+		elif [ -d "${dir}/${entry}" ]			# Directory with relative path.
+		then
+			for file in "${dir}/${entry}"/*
+			do
+				scc_check_file "${file}" "fix:software:syslog-ng:${file}::" "#"
+			done
+		fi
+	done
+done
+
+scc_check_file /etc/ucf.conf "fix:software:/etc/ucf.conf::" "#"
+
+# run idsilink to be able to access the following scripts in /usr/bin
+if [ -x /usr/bin/idsversion ]
+then
+	/usr/bin/idsversion 2>&1		|
+	sed -e 's/^/fix:software:TDS:idsversion::/'
+fi
+
+if [ -x /usr/bin/idsilist ]
+then
+	/usr/bin/idsilist -a 2>&1		|
+	awk	'/^Name:/	{ instance = $2; next }
+		/^$/		{ next }
+				{
+					if ( length( instance ) )
+					{
+						print "fix:software:TDS:instance " instance ":general::" $0
+					}
+				}'		|
+	sort -f
+
+	/usr/bin/idsilist -a 2>&1		|
+	awk	'/^Name:/	{ instance = $2; next }
+		/^Location:/	{ print $2, instance }'	|
+	while read dir instance
+	do
+		file="${dir}/idsslapd-${instance}/etc/ibmslapd.conf"
+		if [ -f "${file}" ]
+		then
+			# Do not use scc_check_file to preserve comments and empty lines.
+			sed -e "s@^@fix:software:TDS:instance ${instance}:${file}::@" "${file}"
+		fi
+	done
+fi
+
+if [ -x /usr/bin/idsldapsearch ]
+then
+	/usr/bin/idsldapsearch -e 2>/dev/null	|
+	sed -e 's/^/fix:software:TDS:client::/'
+fi
+
+if [ -x /usr/bin/ibmslapd ]
+then
+	/usr/bin/ibmslapd -v 2>&1		|
+	sed -e 's/^/fix:software:TDS:server version::/'
+fi
+
+for f in	/usr/tivoli/tsm/client/ba/bin/dsm.sys	\
+		/usr/tivoli/tsm/client/ba/bin/dsm.opt	\
+		/usr/tivoli/tsm/client/ba/bin/inclexcl	\
+		/usr/lpp/adsm/bin/dsm.sys		\
+		/usr/lpp/adsm/bin/dsm.opt		\
+		/usr/lpp/adsm/bin/archive.excl
+do
+        if [ -f "${f}" ]
+        then
+                scc_check_file "${f}" "fix:software:TSM client:${f}::" "#"
+        fi
+done
+
+if [ -d /etc/tomcat6 ]
+then
+	for file in /etc/tomcat6/policy.d/*
+	do
+		scc_check_file "${file}" "fix:software:tomcat6:${file}::" "//"
+	done
+fi
+
+if [ -x /usr/sbin/ufw ]
+then
+	/usr/sbin/ufw status 2>/dev/null		|
+	sed -e 's/^/fix:software:UbuntuFireWall:status::/'
+fi
+for file in /etc/ufw/*.rules /etc/ufw/*.conf /etc/ufw/applications.d/*
+do
+	scc_check_file "${file}" "fix:software:UbuntuFireWall:${file}::" "#"
+done
+
+scc_check_file /etc/updatedb.conf "fix:software:/etc/updatedb.conf::" "#"
+
+VCS_BIN=/opt/VRTSvcs/bin
+export VCS_BIN
+
+if [ -d "${VCS_BIN}" ]
+then
+	VCS_CLASS="software:Veritas Cluster Server"
+
+	grep -l "${VCS_BIN}/[h]ad" ${PROC_FILE} >/dev/null
+	if [ $? -eq 1 ]
+	then
+		# VCS not active, check the keep-file for VCS-data.
+		sed -n	-e "/^fix:${VCS_CLASS}:/p"	\
+			-e "/^var:${VCS_CLASS}:/p"	\
+				${SCC_KEEP_CONFIG} 2>/dev/null	|
+		tee -a ${SCC_KEEP_NEW}
+	else
+		{
+			class="${VCS_CLASS}:dependencies"
+			${VCS_BIN}/hagrp -dep			|
+			sed -e "s/^/fix:${class}::/"
+
+			class="${VCS_CLASS}:group"
+			${VCS_BIN}/hagrp -display -localclus				|
+			sed	-e '/^[ 	]$/d'				\
+				-e '/^#/d'					\
+				-e 's/[ 	][ 	]*/::/'			\
+				-e "s/^/fix:${class}:/"					|
+			sed	-e "s/^fix:\(${class}:.*::Enabled\)/var:\1/"	\
+				-e "s/^fix:\(${class}:.*::State\)/var:\1/"
+
+			class="${VCS_CLASS}:attributes"
+			${VCS_BIN}/haclus -display -localclus		|
+			sed -e "s/^/fix:${class}::/"			|
+			sed	-e "s/^fix:\(${class}::ClusterTime\)/var:\1/"	\
+				-e "s/^fix:\(${class}::GlobalCounter\)/var:\1/"
+
+			class="${VCS_CLASS}:status"
+			${VCS_BIN}/hastatus -summary		|
+			sed -e "s/^/var:${class}::/"
+
+			class="${VCS_CLASS}:resource"
+			${VCS_BIN}/hares -display -localclus					|
+			sed	-e '/^[ 	]$/d'					\
+				-e '/^#/d'						\
+				-e 's/[ 	][ 	]*/::/'				\
+				-e "s/^/fix:${class}:/"						|
+			sed	-e "s/^fix:\(${class}:.*::ConfidenceLevel\)/var:\1/"	\
+				-e "s/^fix:\(${class}:.*::LastOnline\)/var:\1/"		\
+				-e "s/^fix:\(${class}:.*::ResourceInfo\)/var:\1/"	\
+				-e "s/^fix:\(${class}:.*::Start\)/var:\1/"		\
+				-e "s/^fix:\(${class}:.*::State\)/var:\1/"
+
+			class="${VCS_CLASS}:resource:dependencies"
+			${VCS_BIN}/hares -dep			|
+			sed -e "s/^/fix:${class}::/"
+
+			class="${VCS_CLASS}:system"
+			${VCS_BIN}/hasys -display -localclus					|
+			sed	-e '/^[ 	]$/d'					\
+				-e '/^#/d'						\
+				-e 's/[ 	][ 	]*/::/'				\
+				-e "s/^/fix:${class}:/"						|
+			sed	-e "s/^fix:\(${class}:.*::ConfigCheckSum\)/var:\1/"     \
+				-e "s/^fix:\(${class}:.*::ConfigModDate\)/var:\1/"
+
+			class="${VCS_CLASS}:system:status"
+			${VCS_BIN}/hasys -state -localclus		|
+			sed -e "s/^/var:${class}::/"
+
+			class="${VCS_CLASS}:resource type"
+			${VCS_BIN}/hatype -display			|
+			sed	-e '/^[ 	]$/d'		\
+				-e '/^#/d'			\
+				-e 's/[ 	][ 	]*/::/'	\
+				-e "s/^/var:${class}:/"
+
+			class="${VCS_CLASS}:users"
+			${VCS_BIN}/hauser -display			|
+			sed -e "s/^/fix:${class}::/"
+
+			class="${VCS_CLASS}:log"
+			${VCS_BIN}/halog -info				|
+			sed -e "s/^/fix:${class}::/"
+
+			class="${VCS_CLASS}:heartbeat"
+			${VCS_BIN}/hahb -display 2>/dev/null		|
+			sed -e "s/^/var:${class}::/"
+
+			class="${VCS_CLASS}:defaults"
+			for type in cluster group system heartbeat
+			do
+				${VCS_BIN}/haattr -display ${type} 2>/dev/null		|
+				sed -e "s/^/fix:${class}:${type}::/"
+			done
+
+			class="${VCS_CLASS}:agents"
+			${VCS_BIN}/haagent -display 2>/dev/null		|
+			sed -e "s/^/var:${class}::/"
+
+			scc_check_file /etc/llttab "fix:${VCS_CLASS}:connections::" "#"
+		}	|
+		tee -a ${SCC_KEEP_NEW}
+
+	fi	# if process "had" active
+fi	# if [ -d "${VCS_BIN}" ]
+
+for file in	/etc/vdsm/*.conf	\
+		/etc/vdsm-reg/*.conf
+do
+	scc_check_file "${file}" "fix:software:vdsm:${file}::" "#"
+done
+
+if [ -x /usr/bin/vmware ]
+then
+	/usr/bin/vmware -v 2>/dev/null			|
+	sed -e 's/^/fix:software:vmware:version::/'
+fi
+
+if [ -d /etc/vmware ]
+then
+	scc_check_file /etc/vmware/config "fix:software:vmware:/etc/vmware/config::" "#"
+
+	scc_check_file /etc/vmware/esx.conf "fix:software:vmware:/etc/vmware/esx.conf::" "#"	|
+	sort											|
+	sed	-e "s/^fix:\(.*RandomSeed\)/var:\1/"			\
+		-e "s/^fix:\(.*firewall.services.esxupdate\)/var:\1/"	\
+		-e "s/^fix:\(.*VMOverheadGrowthLimit\)/var:\1/"
+
+	for vmnet in /etc/vmware/vmnet*
+	do
+		if [ -d "${vmnet}" ]
+		then
+			for type in dhcpd nat
+			do
+				scc_check_file "${vmnet}"/${type}/${type}.conf "fix:software:vmware:${vmnet}:${type}.conf::" "#"
+			done
+		fi
+	done
+
+	scc_check_file --xml /etc/vmware/hostd/config.xml "fix:software:vmware:/etc/vmware/hostd/config.xml::" "#"
+
+	for version in /etc/vmware/license.gsx* /etc/vmware/vmware.lic
+	do
+		scc_check_file "${version}" "fix:software:vmware:config ${version}::" "#"
+	done
+	scc_check_file /etc/vmware/locations "fix:software:vmware:locations::" "#"
+	scc_check_file /etc/vmware/vm-list "fix:software:vmware:virtual machines::" "#"
+	scc_check_file /etc/vmware/vm-list-private "fix:software:vmware:private virtual machines::" "#"
+
+	sed -n -e 's/"[ 	]*$//' -e 's/^config[ 	][ 	]*"//p' /etc/vmware/vm-list 2>/dev/null	|
+	sort												|
+	while read machine
+	do
+		# Show the full path of the virtual machine (vmx) file in the classification.
+		scc_check_file "${machine}" "fix:software:vmware:installed machines:${machine}::" "#"
+	done
+
+	for file in /etc/vmware-tools/*.conf
+	do
+		scc_check_file "${file}" "fix:software:vmware:tools:${file}::" "#"
+	done
+fi
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli software acceptance get	|
+	sed -e "s/^/fix:software:vmware:acceptance level::/"
+fi
+
+for file in /etc/openwbem/openwbem.conf /etc/openwbem/openwbem.conf.d/*
+do
+	scc_check_file "${file}" "fix:software:openwbem:${file}::" "#"
+done
+
+for file in zabbix_agent.conf zabbix_agentd.conf zabbix_server.conf
+do
+	scc_check_file "/etc/zabbix/${file}" "fix:software:zabbix:${file}::" "#"
+done
+
+for file in /home/zenoss/etc/*
+do
+	case "${file}" in
+	*example*)	;;
+	*)		scc_check_file "${file}" "fix:software:zenoss:config:${file}::" "#"
+			;;
+	esac
+done
+
+scc_check_file /etc/zmd/zmd.conf "fix:software:Zenworks Linux Management:zmd.conf::" "#"
+
+grep "python.*Zope.*run.[p]y.* -C .*/parts/instance" "${PROC_FILE}"	|
+sed	-e 's/.* -C *//'	\
+	-e 's/ *//'							|
+sort -u									|
+scc_keep "software:Plone" 50						|
+while read file
+do
+	# Now process the names of the Plone config file(s).
+	if [ ! -f "${file}" ]
+	then
+		continue
+	fi
+
+	# Determine the instance from the path, for example:
+	# /usr/local/Plone/zinstance/parts/instance/etc/zope.conf
+	instance="$(echo "${file}" | sed -n -e 's@.*/\([^/]*\)/parts/instance/.*@\1@p')"
+	if [ -z "${instance}" ]
+	then
+		class="fix:software:Plone"
+	else
+		class="fix:software:Plone:${instance}"
+		base_dir="$(echo "${file}" | sed -e "s@/${instance}/parts/instance/.*@@")"
+		echo "${class}:general::Zope Version:$(ls ${base_dir} | grep Zope)"
+		echo "${class}:general::Python Version:$(ls ${base_dir} | grep Python)"
+	fi
+
+	scc_check_file "${file}" "${class}:${file}::" "#"
+
+	# Add buildout.cfg file:
+	#/usr/local/Plone/zinstance/buildout.cfg
+	buildout="$(echo "${file}" | sed -n -e 's@/parts/instance/.*@/buildout.cfg@p')"
+	scc_check_file "${buildout}" "${class}:${buildout}::" "#"
+
+	dir="${file%/*}"
+	site_file="${dir}/site.zcml"
+	scc_check_file "${site_file}" "${class}:${site_file}::" "#"
+
+	# Search for files to be included:
+	#<include files="package-includes/*-configure.zcml" />
+	sed     -n					\
+		-e 's@" />@@'				\
+		-e 's/.*<include files="//p'		\
+			<"${site_file}" 2>/dev/null		|
+	sort -u                                                 |
+	while read sub_files
+	do
+		for sub_file in ${dir}/${sub_files}
+		do
+			scc_check_file "${sub_file}" "${class}:${sub_file}::" "#"
+		done
+	done
+done
+
+if [ -d ~xymon/server/etc -o -d ~xymon/client/etc ]
+then
+	for file in ~xymon/server/etc/*cfg ~xymon/client/etc/*cfg
+	do
+		scc_check_file "${file}" "fix:software:xymon:${file}::" "#"
+	done
+fi
+
+exit 0

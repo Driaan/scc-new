@@ -1,0 +1,904 @@
+#!/bin/sh
+
+# Shell script to summarize snapshots for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-summary 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_WWW=${SCC_DATA}/www
+export SCC_TMP=/tmp
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+export LANG=C
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};		export PATH
+if [ -d /usr/xpg4/bin ]
+then
+	PATH="/usr/xpg4/bin:${PATH}"
+fi
+
+SYNTAX="Syntax error, use: ${ProgName} [ -d|--directory <scc_web_path> ] [ -f|--force ] <dir>"
+
+export TMP_FILE_1=${SCC_TMP}/scc_summary_1_$$
+export TMP_FILE_2=${SCC_TMP}/scc_summary_2_$$
+export TMP_FILE_3=${SCC_TMP}/scc_summary_3_$$
+
+generate_summary_data() 
+{
+	# Extract data from snapshots into scc-summary.data to speed-up summary generation and searching.
+	# Ignore snapshots in sub-directories (with more than one '/' in the name).
+	> scc-summary.data				# no remove to preserve selinux context
+	find . -name "scc.*.cur" 2>/dev/null			|
+	sed -e '/\/.*\//d'					|
+	xargs head -n 60 /dev/null 2>/dev/null			|
+	sed -e '/\/dev\/null/d'					|
+	awk -F:	'/^==> .* <==$/				{
+								if ( length( host ) > 0 )
+								{
+									# Mind the printf in the END part.
+									printf( "general_data:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s\n",
+										host, model, os, release, last_d, last_t, domain, runtime, size, virtualization )
+									release_done = ""
+									model = ""
+									domain = ""
+									os = ""
+									release = ""
+									last_d = ""
+									last_t = ""
+									runtime = ""
+									size = ""
+									virtualization = ""
+								}
+		
+								host=$0
+								sub( /.*[ 	]\.\/scc\./, "", host )
+								sub( /\.cur.*/, "", host )
+								next
+							}
+		/^var:general::date:/			{ last_d = $5; next }
+		/^var:general::time:start:/		{ last_t = $6; next; }
+		/^var:general::start time:/		{ last_t = $5; next; }
+		/^var:general::runtime:/		{ runtime = $5; next; }
+		/^var:general::size .*:/		{ size = $5; next; }
+		/^fix:general::model:/			{ model = $5; next }
+		/^fix:general::domain:/			{ domain = $5; next }
+		/^fix:general::virtualization:/		{ virtualization = $5; next }
+		/^fix:general::OS-name:/		{ os = $5; next }
+		/^fix:general::OS-release:/		{ release = $5; next }
+		/^fix:general::linux distro name:/	{ os = $5; next }
+		/ANSI_COLOR/				{ next }
+		/^fix:general::linux distro details:/	{
+								# check the last line of the details data for the first field starting with a number.
+								if ( length( release_done ) == 0 )
+								{
+									gsub( "\"", " ", $5 )
+									sub( "^[^0-9]*", "", $5 )
+									sub( "[ -].*", "", $5 )
+									release = $5
+									if ( length( release ) )
+									{
+										release_done = "yes"
+									}
+								}
+								next
+							}
+	END	{
+			if ( length( host ) )
+			{
+				printf( "general_data:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s\n",
+					host, model, os, release, last_d, last_t, domain, runtime, size, virtualization )
+			}
+	}'					|
+	sort >> scc-summary.data
+	chown "${new_owner_group}" scc-summary.data
+}
+
+generate_log_csv()
+{
+	# Generate CSV files with runs and changes per host/date
+	log_date_csv="scc.log_date.csv"
+	log_host_csv="scc.log_host.csv"
+	echo "date;total runs;identical %;different %" > ${log_date_csv}	# no remove to preserve selinux context
+	echo "host;total runs;identical %;different %" > ${log_host_csv}	# no remove to preserve selinux context
+
+	# Ignore log files in sub-directories (with more than one '/' in the name).
+	> ${TMP_FILE_1}
+	> ${TMP_FILE_2}
+	find . -name "scc.*.log"										|
+	sed -e '/\/.*\//d'											|
+	xargs awk -F: '/:data::/	{ next }
+					{ host = FILENAME; sub( "./scc.", "", host ); sub( ".log", "", host ); }
+			/:result::/	{ if ( $5 != "different" ) { printf( "%s:%s:%s:%s\n", $1, $5, 0, host ) } next }
+			/:count::/	{ printf( "%s:%s:%s:%s\n", $1, "different", $5, host ) }'	|
+	awk -F:	'/different/	{ h_runs[ $4 ]++; h_different[ $4 ]++; d_runs[ $1 ]++; d_different[ $1 ]++; next }
+				{ h_runs[ $4 ]++; h_identical[ $4 ]++; d_runs[ $1 ]++; d_identical[ $1 ]++; next }
+		END		{
+					for ( s in h_runs )
+					{
+						printf( "%s;%d;%d;%d\n",
+							s,
+							h_runs[ s ],
+							( 100 * h_identical[ s ] ) / h_runs[ s ],
+							( 100 * h_different[ s ] ) / h_runs[ s ] ) >>h_csv
+					}
+
+					for ( d in d_runs )
+					{
+						printf( "%s;%d;%d;%d\n",
+							d,
+							d_runs[ d ],
+							( 100 * d_identical[ d ] ) / d_runs[ d ],
+							( 100 * d_different[ d ] ) / d_runs[ d ] ) >>d_csv
+					}
+				}' d_csv=${TMP_FILE_1} h_csv=${TMP_FILE_2}
+
+	sort ${TMP_FILE_1} >>${log_date_csv} 2>/dev/null
+	sort ${TMP_FILE_2} >>${log_host_csv} 2>/dev/null
+	rm -f ${TMP_FILE_1} ${TMP_FILE_2}
+}
+
+generate_summary_init()
+{
+	# Initialize the main-summary file
+	# Be sure to pick the same names as below when these html-files are generated.
+	cat >scc-summary-init.html <<-EndOfTxt
+		<!DOCTYPE HTML>
+		<HTML lang="en">
+		<HEAD>
+			${STYLE_CSS}
+			${FAVICON_ICO}
+			<TITLE>Summary: ${realm}</TITLE>
+		</HEAD>
+		<BODY>
+		<P style="text-align:center"><A HREF="${scc_web_path_dir}/scc-help/scc-summary-index.html">${logo_tag}</A></P>
+
+		<P style="text-align:center" class=header>
+			<A HREF="${web_realm_dir}/index.html">Home</A>&nbsp;&nbsp;&nbsp;&nbsp;
+			Summary of SCC-data for realm ${realm} (${system_cnt} systems)&nbsp;&nbsp;&nbsp;&nbsp;
+			<A TITLE="Summary of ${realm} in CSV format" HREF="${web_realm_dir}/scc.summary.csv">CSV</A>
+		</P>
+
+		<TABLE CLASS=SCC style="margin: 0px auto;">
+		<THEAD>
+			<TR class=Odd style="text-align:left">
+				<TH><A HREF="${web_realm_dir}/scc-summary-sys_SORT_ORDER_.html">System</A>_SORT_LABEL_</TH>
+				<TH><A HREF="${web_realm_dir}/scc-summary-virtualization_SORT_ORDER_.html">Virtualization</A>_SORT_LABEL_</TH>
+				<TH><A HREF="${web_realm_dir}/scc-summary-model_SORT_ORDER_.html">Model</A>_SORT_LABEL_</TH>
+				<TH><A HREF="${web_realm_dir}/scc-summary-os_SORT_ORDER_.html">OS</A>_SORT_LABEL_</TH>
+				<TH><A HREF="${web_realm_dir}/scc-summary-firstrun_SORT_ORDER_.html">First run</A>_SORT_LABEL_</TH>
+				<TH><A HREF="${web_realm_dir}/scc-summary-lastrun_SORT_ORDER_.html">Last run</A>_SORT_LABEL_</TH>
+				<TH><A HREF="${web_realm_dir}/scc-summary-change_SORT_ORDER_.html">Last change</A>_SORT_LABEL_</TH>
+				<TH><A HREF="${web_realm_dir}/scc-summary-runtime_SORT_ORDER_.html">Runtime (s)</A>_SORT_LABEL_</TH>
+				<TH><A HREF="${web_realm_dir}/scc-summary-size_SORT_ORDER_.html">Size (MB)</A>_SORT_LABEL_</TH>
+			</TR>
+		</THEAD>
+	EndOfTxt
+}
+
+trap 'rm -f ${TMP_FILE_1} ${TMP_FILE_2} ${TMP_FILE_3}' 0
+trap "exit 2" 1 2 3 15
+
+MISSING_OPT_ARG="${ProgName}: Syntax error, missing argument for option:"
+scc_web_path_dir=""
+force=0
+while [ $# -gt 1 ]
+do
+	case "${1}" in
+	-d|--directory)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			if [ "${2}" != "/" ]
+			then
+				scc_web_path_dir="$2"
+			fi
+			shift 2;;
+
+	-f|--force)	force=1
+			shift 1;;
+
+	*)		echo "${SYNTAX}" >&2
+			exit 1;;
+	esac
+done
+
+if [ $# -ne 1 ]
+then
+	echo "${SYNTAX}" >&2
+	exit 1
+fi
+
+if [ -z "${scc_web_path_dir}" ]
+then
+	scc_web_path_dir="$(sed -n 's/^SCC_WEB_PATH=//p' ${SCC_CONF}/scc.conf 2>/dev/null)"
+fi
+
+if [ -d "${SCC_WWW}/${1}" ]
+then
+	# The argument is the name of a realm, use absolute paths
+	realm="${1}"
+	web_realm_dir="${scc_web_path_dir}/${realm}"
+	cd "${SCC_WWW}/${realm}"
+elif [ -d "${1}" ]
+then
+	# The argument is a directory, use relative paths
+	realm="${1##*/}"
+	web_realm_dir="."
+	cd "${1}"
+else
+	echo "${ProgName}: directory ${1} does not exist" >&2
+	exit 1
+fi
+
+if [ -f custom/scc-realm.conf ]
+then
+	. custom/scc-realm.conf
+fi
+export SCC_STATS="${SCC_STATS:-yes}"
+
+# Remove any generated statistics files.
+# Do not remove the csv file to avoid a missing page when scc-summary runs while a statistics page is being displayed.
+rm -f scc.*.stats.html scc.*.all_changes.png scc.*.recent_changes.png scc.*.all_runtime.png scc.*.recent_runtime.png
+
+now=$(date '+%Y-%m-%d %H:%M')
+
+copy_right="<BR><HR><P style=\"text-align:center\">Generated by SCC-SRV version 1.19.44 (&copy; Siem Korteweg) on ${now}</P>"
+
+# Use the owner/group/permissions of the destination directory for the files we put there.
+# We are only interested in the read-permissions of the directory.
+set dummy $(ls -ld .)
+case "${2}" in
+?r??r??r??*)	umask 333;;
+?r??r??-??*)	umask 337;;
+?r??-??-??*)	umask 377;;
+?r??-??r??*)	umask 373;;
+*)		umask 077;;
+esac
+new_owner_group="${4}:${5}"
+
+logo_tag="<IMG SRC=\"${web_realm_dir}/custom/scc-logo.png\" ALT=HelpInfo>"
+
+for snapshot in scc.*.cur
+do
+	# Check for broken links.
+	sys=${snapshot%%.cur}
+	sys=${sys#*scc.}
+	if [ -h ${snapshot} -a ! -f ${snapshot} ]
+	then
+		for suffix in cur log html log.html smt.html
+		do
+			rm -f scc.${sys}.${suffix}
+		done
+	fi
+done
+
+generate_summary_data
+system_cnt=$(wc -l <scc-summary.data)
+
+# CSV files with changes per host and per date
+generate_log_csv
+
+export STYLE_CSS="<LINK HREF=\"${web_realm_dir}/custom/style.css\" REL=\"stylesheet\" TYPE=\"text/css\">"
+export FAVICON_ICO="<LINK HREF=\"${web_realm_dir}/custom/favicon.ico\" REL=\"shortcut icon\" TYPE=\"image/x-icon\">"
+
+# Ignore log files in sub-directories (with more than one '/' in the name).
+# Find all the reported counts of differences.
+rm -f ${TMP_FILE_1} ${TMP_FILE_2}
+find . -name "scc.*.log"				|
+sed -e '/\/.*\//d'					|
+xargs grep "^[^:]*:[^:]*:count::" /dev/null		|
+grep -vi "Binary file .* matches"			|
+sed	-e 's@^\./scc\.@@'	\
+	-e 's/\.log:/ /'	\
+	-e 's/:/ /'		\
+	-e 's/:.*:/ /'		\
+	-e 's/  */:/g'					|
+sort -t: -k 2,2r -k 1,1f -k 3,3r >${TMP_FILE_1}
+
+# Remove all the html-files pointing to the changes per day.
+# We wille generate them again. From this point of time, the files
+# are not accessible by the web server until we chown them.
+find . -name "scc-log-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].html"	|
+sed -e '/\/.*\//d'							|
+xargs rm -f
+
+# Initialize the main log file.
+rm -f scc-log-index.html
+cat >scc-log-index.html <<-EndOfTxt
+	<!DOCTYPE HTML>
+	<HTML lang="en">
+	<HEAD>
+		${STYLE_CSS}
+		${FAVICON_ICO}
+		<TITLE>Changes: ${realm}</TITLE>
+	</HEAD>
+	<BODY>
+	<P style="text-align:center"><A HREF="${scc_web_path_dir}/scc-help/scc-log-index.html">${logo_tag}</A></P>
+
+	<P style="text-align:center" class=header>
+		<A HREF="${web_realm_dir}/index.html">Home</A>&nbsp;&nbsp;&nbsp;&nbsp;
+		Configuration changes for realm ${realm}&nbsp;&nbsp;&nbsp;&nbsp;
+		<A HREF="${web_realm_dir}/${log_date_csv}">day (CSV)</A>&nbsp;&nbsp;&nbsp;&nbsp;
+		<A HREF="${web_realm_dir}/${log_host_csv}">host (CSV)</A>
+
+	</P>
+
+	<TABLE CLASS=SCC style="margin: 0px auto;">
+	<THEAD>
+		<TR class=Odd style="text-align:left">
+			<TH>Date</TH>
+			<TH>System count</TH>
+		</TR>
+	</THEAD>
+EndOfTxt
+chown "${new_owner_group}" scc-log-index.html
+
+# Finish the main log index and create/populate the per day log summaries
+awk -F: 'BEGIN	{
+			c[ 0 ] = "Even"
+			c[ 1 ] = "Odd"
+			tr_m = 1;		# TR class for main file
+			tr_d = 1;		# TR class for detail files
+		}
+	/general_data/	{
+		# Get some general system data to add to the logs per day.
+		# Format of the input is: "general_data":<host>:<model>:<os>:<release>:<last_day>:<last_time>:<domain>:<runtime>:<size>:<virtualization>
+		model[ $2 ] = $3
+		if ( length( $3 ) == 0 )
+		{
+			model[ $2 ] = "&nbsp;"
+		}
+		os[ $2 ] = $4
+		rel[ $2 ] = $5
+		virt[ $2 ] = $11
+		next
+	}
+	{
+		if ( tbody_done == 0 )
+		{
+			print "<TBODY>"
+			tbody_done=1
+		}
+
+		# Format of the input is: <system> <day> <time> <line-count>
+		# The data is sorted on day and system.
+		# Stdout is written to the main log file.
+		if ( $2 != curr_day )
+		{
+			if ( length( curr_log ) > 0 )
+			{
+				# Write the data to the main log file.
+				printf( "<TR class=%s><TD%s><A HREF=\"%s/%s/scc-log-%s.html\">%s</A></TD><TD %s style=\"text-align:right;\">%s</TD></TR>\n",
+					c[ tr_m++ % 2 ], " class=Even", d, r, curr_day, curr_day, " class=Odd", cnt_per_day )
+
+				close( curr_log )
+			}
+			curr_day = $2
+			curr_log = sprintf( "scc-log-%s.html", $2 )
+			cnt_per_day = 0
+			visited[ curr_log ] = 1
+
+			tr_d = 1
+
+			# Initialize the log file for this day
+			print "<!DOCTYPE HTML>"								>curr_log
+			print "<HTML lang=\"en\">"							>>curr_log
+
+			print "<HEAD>"									>>curr_log
+			# Stylesheet:
+			print s										>>curr_log
+			# Favicon.ico:
+			print f										>>curr_log
+			print "<TITLE>Changes for ", r, "on", $2, "</TITLE>"				>>curr_log
+			print "</HEAD>"									>>curr_log
+
+			printf( "<BODY>\n" )								>>curr_log
+			print "<P style=\"text-align:center\">"						>>curr_log
+			printf( "	<A HREF=\"%s/scc-help/scc-log-index.html\">%s</A>\n", d,l )	>>curr_log
+			print "</P>"									>>curr_log
+			print "<P class=\"header\" style=\"text-align:center\">"			>>curr_log
+			printf( " <A HREF=\"%s/%s/index.html\">Home</A>&nbsp;&nbsp;&nbsp;&nbsp;\n",d,r) >>curr_log
+			print "	Configuration changes for realm", r, "on", $2				>>curr_log
+			print "</P>"									>>curr_log
+
+			print "<TABLE CLASS=SCC style=\"margin: 0px auto;\">"				>>curr_log
+			print "<THEAD>"									>>curr_log
+			printf( "	<TR class=%s style=\"text-align:left\">\n", c[ tr_d++ %2 ] )	>>curr_log
+			print "		<TH>System</TH>"						>>curr_log
+			print "		<TH>Virtualization</TH>"					>>curr_log
+			print "		<TH>Model</TH>"							>>curr_log
+			print "		<TH>OS</TH>"							>>curr_log
+			print "		<TH>Release</TH>"						>>curr_log
+			print "		<TH>Detection</TH>"						>>curr_log
+			print "		<TH>Line count</TH>"						>>curr_log
+			print "	</TR>"									>>curr_log
+			print "</THEAD>"								>>curr_log
+			print "<TBODY>"									>>curr_log
+		}
+
+		# Write the data to the log-files per day.
+		cnt_per_day++
+		printf( "<TR class=%s>\n", c[ tr_d++ % 2 ] )						>>curr_log
+		printf( "	<TD class=Even><A HREF=\"%s/%s/scc.%s.html\"><SPAN CLASS=\"mono\">%s</SPAN></A></TD>\n", d, r, $1, $1 )	>>curr_log
+		printf( "	<TD class=Odd>%s</TD>\n", virt[ $1 ] )					>>curr_log
+		printf( "	<TD class=Even>%s</TD>\n", model[ $1 ] )				>>curr_log
+		printf( "	<TD class=Odd>%s</TD>\n", os[ $1 ] )					>>curr_log
+		printf( "	<TD class=Even>%s</TD>\n", rel[ $1 ] )					>>curr_log
+		printf( "	<TD class=Odd><A HREF=\"%s/%s/scc.%s.log.html#log_%s_%s\">%s %s</A></TD>\n",
+			d, r, $1, $2, $3, $2, $3 )							>>curr_log
+		printf( "	<TD class=Even style=\"text-align:right;\">%s</TD>\n", $4 )		>>curr_log
+		print "</TR>"										>>curr_log
+	}
+END	{
+		if ( length( curr_day ) )
+		{
+			# Write the data to the main log file.
+			printf( "<TR class=%s><TD%s><A HREF=\"%s/%s/scc-log-%s.html\">%s</A></TD><TD %s style=\"text-align:right;\">%s</TD></TR>\n",
+				c[ tr_m %2 ], " class=Even", d, r, curr_day, curr_day, " class=Odd", cnt_per_day )
+			printf( "</TBODY>\n" )
+		}
+		printf( "</TABLE>%s</BODY></HTML>\n", cr )
+
+		# Finish all the html-files pointing to the changes per day.
+		for ( curr_log in visited )
+		{
+			print "</TBODY></TABLE>" cr "</BODY></HTML>"					>>curr_log
+			close( curr_log )
+		}
+}'	cr="${copy_right}"	\
+	l="${logo_tag}"		\
+	d="${scc_web_path_dir}"	\
+	r="${realm}"		\
+	s="${STYLE_CSS}"	\
+	f="${FAVICON_ICO}"	\
+		scc-summary.data ${TMP_FILE_1} >>scc-log-index.html
+
+# From now on, these files are accessible again by the web server.
+find . -name "scc-log-*.html" -type f	|
+sed -e '/\/.*\//d'			|
+xargs chown "${new_owner_group}" 2>/dev/null
+
+# Ignore log files in sub-directories (with more than one '/' in the name).
+# Find the first run of the client.
+rm -f ${TMP_FILE_3}
+find . -name "scc.*.log"				|
+sed -e '/\/.*\//d'					|
+xargs head -n 1 /dev/null				|
+awk	'/^==/	{ sub( "==> ./scc.", "" ); sub( ".log.*", "" ); s=$0; next }
+	/^$/	{ next }
+		{ sub( ":.*", "" ); print "first:" s ":" $0 }' >${TMP_FILE_3}
+
+# Record for all systems the date and time of the last detected change on the system.
+# Combine the general summary-data and the data of the changes.
+sort -t: -k 2,3r -k 1,1 ${TMP_FILE_1}	|
+awk -F: '/general_data/	{
+				# Format of the input is: "general_data":<host>:<model>:<os>:<release>:<last_day>:<last_time>:<domain>:<runtime>:<size>:<virtualization>
+				#                          1             2      3       4    5         6          7           8        9         10	11
+				printf( "%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s\n", $2, $11, $3, $4, $5, first[ $2 ], $6, $7, last_day[ $2 ], last_time[ $2 ], $9, $10 )
+				next
+			}
+	/^first/	{
+				first[ $2 ] = $3
+				next
+			}
+{
+	# Format of the input is: <system> <day> <time> <line-count>
+	# The data is sorted on day, time and system.
+	if ( ! visited[ $1 ] )
+	{
+		# Only record the first record of each system: get the most recent change.
+		visited[ $1 ] = 1
+		last_day[ $1 ] = $2
+		last_time[ $1 ] = $3
+	}
+}' - ${TMP_FILE_3} scc-summary.data >${TMP_FILE_2}
+
+echo "host;virtualization;model;OS;release;first run;last day run;last time run;last change day;last change time;runtime;size" >scc.summary.csv
+sed -e 's/:/;/g' -e 's/,/ /g'  <${TMP_FILE_2} >>scc.summary.csv
+chown "${new_owner_group}" scc.summary.csv
+
+generate_summary_init
+
+# Make sure that the titles match the names of the summary files in the general header.
+while read sort_order col title remainder
+do
+	if [ "${sort_order}" = "a" ]
+	then
+		html="scc-summary-${title}.html"
+	else
+		html="scc-summary-${title}_d.html"
+	fi
+	rm -f ${html}
+
+	# Each header is a HREF to a html-file with the data sorted on the
+	# corresponding column. Mark the proper heading in the table to indicate 
+	# the current html-file. 
+	sed	-e "s@${html}\">\(.*\)</A></TH>@${html}\"><SPAN CLASS=\"sort\">\1</SPAN></A></TH>@"	\
+		-e "s@SUM_TITLE@${title}@g"								\
+			<scc-summary-init.html									|
+	if [ "${sort_order}" = "a" ]
+	then
+		# Change _SORT_ORDER_ to "_d" for our own page (title), erase other sort order indicators
+		# Change _SORT_LABEL_ to " ^" for our own page (title), replace other labels with " v"
+		sed	-e "s/-${title}_SORT_ORDER_\(.*\)_SORT_LABEL_/-${title}_d\1 ^/"	\
+			-e 's/_SORT_ORDER_//'						\
+			-e 's/_SORT_LABEL_//'
+	else
+		# Change _SORT_ORDER_ to "" (ascending) for all pages
+		# Change _SORT_LABEL_ to " v" for our own page (title), erase other labels.
+		sed	-e 's/_SORT_ORDER_//'					\
+			-e "s/-${title}\(.*\)_SORT_LABEL_/-${title}\1 v/"	\
+			-e 's/_SORT_LABEL_//'
+	fi	>${html}
+
+	chown "${new_owner_group}" ${html}
+	
+	extra_sort=""
+	if [ "${remainder}" ]
+	then
+		extra_sort="-k ${remainder}"
+	fi
+
+	sort -t: -k ${col} ${extra_sort} ${TMP_FILE_2}	|
+	awk -F: 'BEGIN	{
+				c[ 0 ] = "Even"
+				c[ 1 ] = "Odd"
+				tr_c = 1;		# TR class 
+			}
+		{
+			if ( tbody_done == 0 )		# Only when table contains data
+			{
+				print "<TBODY>"
+				tbody_done = 1
+			}
+
+			# Format of the input is:
+			#	 1 <host>
+			#	 2 <virtualization>
+			#	 3 <model>
+			#	 4 <os>
+			#	 5 <release>
+			#	 6 <first_day_run>
+			#	 7 <last_day_run>
+			#	 8 <last_time_run>
+			#	 9 <last_change_day>
+			#	10 <last_change_time>
+			#	11 <runtime>
+			#	12 <size>
+			printf( "<TR class=%s style=\"text-align:left\">\n", c[ tr_c++ % 2 ] )
+
+			printf( "	<TD class=Even><A HREF=\"%s/%s/scc.%s.html\"><SPAN CLASS=\"mono\">%s</SPAN></A></TD>\n", d, r, $1, $1 )
+			if ( length( $2 ) == 0 ) { $2 = "&nbsp;" }
+			printf( "	<TD class=Odd>%s</TD>\n", $2 )
+			if ( length( $3 ) == 0 ) { $3 = "&nbsp;" }
+			printf( "	<TD class=Even>%s</TD>\n", $3 )
+			printf( "	<TD class=Odd>%s&nbsp;%s</TD>\n", $4, $5 )
+
+			if ( length( $6 ) == 0 ) { $6 = "&nbsp;" }
+			# No use for URL to first run, just the date
+			printf( "	<TD class=Even style=\"text-align:right;\">%s</TD>\n", $6 )
+
+			last_run = sprintf( "%s %s", $7, $8 )
+			last_change = sprintf( "%s %s", $9, $10 )
+			if ( length( last_run ) > 1 )
+			{
+				run_title=sprintf(" TITLE=\"last of run %s\"", $1 )
+				printf( "	<TD class=Odd><A HREF=\"%s/%s/scc.%s.log.html\"%s>%s</A></TD>\n",
+					d, r, $1, run_title, last_run )
+			}
+			else
+			{
+				printf( "	<TD class=Odd>&nbsp;</TD>\n" )
+			}
+			if ( length( last_change ) > 1 )
+			{
+				change_title=sprintf(" TITLE=\"last change of %s\"", $1 )
+				printf( "	<TD class=Even><A HREF=\"%s/%s/scc.%s.log.html#log_%s_%s\"%s>%s</A></TD>\n",
+					 d, r, $1, $8, $9, change_title, last_change )
+			}
+			else
+			{
+				printf( "	<TD class=Even>&nbsp;</TD>\n" )
+			}
+			if ( s != "no" )	# display statistics?
+			{
+				stats_title=sprintf(" TITLE=\"statistics of %s\"", $1 )
+				printf( "	<TD class=Odd style=\"text-align:right;\"><A HREF=\"%s/%s/cgi-bin/scc-wrapper.cgi?sys=%s&amp;statistics=1\"%s>%s</A></TD>\n",
+					d, r, $1, stats_title, $11 )
+			}
+			else
+			{
+				printf( "	<TD class=Odd style=\"text-align:right;\">%s</TD>\n", $11 )
+			}
+			if ( length( $12 ) == 0 ) { $12 = "&nbsp;" }
+			printf( "	<TD class=Even style=\"text-align:right;\">%s</TD>\n", $12 )
+			print "</TR>"
+		}
+		END	{
+				if ( tbody_done == 1 )		# Only when table contains data
+				{
+					print "</TBODY>"
+				}
+			}' d="${scc_web_path_dir}" r="${realm}" s="${SCC_STATS}" >>${html}
+
+	echo "</TABLE>${copy_right}</BODY></HTML>" >>${html}
+done <<_X_
+a 1,1f sys
+d 1,1fr sys
+a 2,2f virtualization
+d 2,2fr virtualization
+a 3,3f model 1,1f
+d 3,3fr model 1,1fr
+a 4,5f os 1,1f
+d 4,5fr os 1,1fr
+a 6,6 firstrun 1,1fr
+d 6,6r firstrun 1,1fr
+a 7,8 lastrun 1,1f
+d 7,8r lastrun 1,1fr
+a 9,10r change 1,1f
+d 9,10 change 1,1fr
+a 11,11n runtime
+d 11,11nr runtime
+a 12,12n size
+d 12,12nr size
+_X_
+
+rm -f scc-summary-init.html
+
+# Searching for all top-level classifications takes some time for a large number of
+# systems in a realm. To reduce the amount of time, we keep the classifications
+# in a file and save it for later runs during 7 days.
+create_class=1
+if [ -f scc-summary.class ]
+then
+	# Ignore files in subdirectories:
+	too_old=$(find . -name scc-summary.class -mtime +7 2>/dev/null | sed -e '/\/.*\//d')
+	if [ ${system_cnt} -gt 10 -a -z "${too_old}" ]
+	then
+		create_class=0
+	fi
+fi
+
+if [ ${create_class} -eq 1 -o ${force} -eq 1 ]
+then
+	# Retrieve all the top-level classifications that are used in this realm
+	# Ignore the class that is used to delimit the data of the user-modules: MoDuLe
+	find . -name "scc.*.cur" 2>/dev/null    			|
+	sed -e '/\/.*\//d'						|
+	xargs cut -d: -f1-2						|
+	sed	-e '/^stats:/d'		\
+		-e 's/^.*://'						|
+	uniq								|
+	sort -u								|
+	sort -f								|
+	sed	-e '/^MoDuLe$/d'	\
+		-e 's@^@<OPTION> @'	\
+		-e '/^[ 	]*$/d'	\
+		-e 's@$@ </OPTION>@' >scc-summary.class
+
+	chown "${new_owner_group}" scc-summary.class
+fi
+
+# Build the option-list for all systems.
+awk -F: '{ print "<OPTION>", $2, "</OPTION>" }' scc-summary.data >scc-summary.sys
+
+SCC_SMT_RADIO=""
+if [ -f "custom/scc-smt-select" -o -h "custom/scc-smt-select" ]
+then
+	SCC_SMT_RADIO="<INPUT TYPE=\"radio\" NAME=\"opt\" VALUE=\"smt\" TITLE=\"system tools\"> System Tools<BR>"
+fi
+
+if [ -f scc-rules.data -o -f custom/scc-rules.conf -o -h custom/scc-rules.conf ]
+then
+	if [ -s scc-rules.data ]
+	then
+		SCC_RULES_RADIO="<INPUT TYPE=\"radio\" NAME=\"opt\" VALUE=\"rules\" TITLE=\"rules\"> <SPAN CLASS=\"warning\">Rules</SPAN>"
+	else
+		SCC_RULES_RADIO="<INPUT TYPE=\"radio\" NAME=\"opt\" VALUE=\"rules\" TITLE=\"rules\"> Rules"
+	fi
+else
+	SCC_RULES_RADIO=""
+fi
+
+cnt="$(for dir in ${SCC_WWW}/*
+	do
+		if [ -d ${dir}/cgi-bin -a -d ${dir}/custom ]
+		then
+			echo "${dir}"
+		fi
+	done	| wc -l)"
+
+auto_realm_config=""
+auto_realm_config="$(sed -e '/^[ 	]*#/d' -e '/^[ 	]*$/d' custom/scc-auto-realm.conf 2>/dev/null)"
+if [ "${auto_realm_config}" ]
+then
+	auto_realm_config="<A HREF=\"${web_realm_dir}/scc-auto-realm-config.html\">Auto-realm system selection</A>&nbsp;&nbsp;&nbsp;&nbsp;"
+fi
+other_realms=""
+if [ ${cnt} -gt 1 ]
+then
+	other_realms="<A HREF=\"${scc_web_path_dir}/index.html\">Realm list</A>"
+fi
+
+# Build the index.html
+# The string "all_systems" for the option-list is used in scc.cgi.sh
+# Keep all the radio-buttons adjacent on one line.
+# Otherwise IE inserts a blank line after the longest entry!?!?!
+cat >${TMP_FILE_1} <<-EndOfTxt
+	<!DOCTYPE HTML>
+	<HTML lang="en">
+	<HEAD>
+		${STYLE_CSS}
+		${FAVICON_ICO}
+		<TITLE>Realm: ${realm}</TITLE>
+	</HEAD>
+	<BODY>
+	<P style="text-align:center"><A HREF="${scc_web_path_dir}/scc-help/scc-realm-index.html">${logo_tag}</A></P>
+
+	$(cat custom/index_start 2>/dev/null)
+
+	<P style="text-align:center" class=header>Configuration data for realm ${realm}:</P>
+
+	<FORM ACTION="${web_realm_dir}/cgi-bin/scc-wrapper.cgi">
+	<TABLE style="margin: 0px auto;">
+	<TR class=Odd>
+		<TD style="text-align:center">
+			<SELECT NAME=sys SIZE="1" TITLE="system">
+				<OPTION> all_systems </OPTION>
+				$(cat scc-summary.sys)
+			</SELECT>
+		</TD>
+
+		<TD>
+			<FIELDSET>
+				<LEGEND>type of data</LEGEND>
+				<INPUT TYPE="radio" NAME="opt" VALUE="cnf" CHECKED=CHECKED TITLE="configuration"> Configuration<BR>
+				<INPUT TYPE="radio" NAME="opt" VALUE="log" TITLE="logbook"> Changes (logbook)<BR>
+				${SCC_SMT_RADIO}
+				${SCC_RULES_RADIO}
+			</FIELDSET>
+		</TD>
+
+		<TD>
+			<INPUT TYPE="SUBMIT" NAME="config" VALUE="Start">
+		</TD>
+
+		<TD>
+			Search string:
+			<BR>
+			<INPUT TYPE="text" NAME="search" SIZE="30" MAXLENGTH="80" TITLE="search string">
+			<BR>
+			<INPUT TYPE="checkbox" NAME="s_case" VALUE="search" CHECKED=CHECKED TITLE="case sensitivty"> Case sensitive
+			<BR>
+			<INPUT TYPE="checkbox" NAME="s_limit" VALUE="all" CHECKED=CHECKED TITLE="limit search results per host"> Limit search results per hosts
+		</TD>
+
+	</TR>
+	</TABLE>
+	</FORM>
+
+	<HR style="WIDTH:70%">
+
+	<P style="text-align:center" class=header>Compare two systems in realm ${realm}:</P>
+
+	<FORM ACTION="${web_realm_dir}/cgi-bin/scc-wrapper.cgi">
+	<TABLE style="margin: 0px auto;">
+	<TR>
+		<TD style="text-align:center">System 1</TD>
+		<TD style="text-align:center">System 2</TD>
+		<TD>Class(es)</TD>
+		<TD>&nbsp;</TD>
+	</TR>
+
+	<TR>
+		<TD style="vertical-align:top;">
+			<SELECT NAME="sys1" SIZE="1" TITLE="first system to compare">
+				$(cat scc-summary.sys)
+			</SELECT>
+		</TD>
+
+		<TD style="vertical-align:top;">
+			<SELECT NAME="sys2" SIZE="1" TITLE="system to compare with">
+				$(cat scc-summary.sys)
+			</SELECT>
+		</TD>
+
+		<TD>
+			<SELECT MULTIPLE="multiple" NAME="class" SIZE="5" TITLE="select class(es) to compare">
+				$(cat scc-summary.class)
+			</SELECT>
+		</TD>
+	
+		<TD>
+			<INPUT TYPE="SUBMIT" NAME="compare" VALUE="Start">
+		</TD>
+	</TR>
+	</TABLE>
+	</FORM> 
+
+	$(cat custom/index_end 2>/dev/null)
+
+	<HR style="WIDTH:70%">
+
+	<P style="text-align:center">
+		${auto_realm_config}
+		${other_realms}
+	</P>
+
+	</BODY>
+		</HTML>
+EndOfTxt
+
+>index.html				# Two step copy to preserve selinux context
+cat ${TMP_FILE_1} >>index.html
+rm -f ${TMP_FILE_1}
+
+if [ "${auto_realm_config}" ]
+then
+	cat <<-EndOfTxt
+		<!DOCTYPE HTML>
+		<HTML lang="en">
+			<HEAD>
+				<LINK HREF="${web_realm_dir}/custom/style.css" REL="stylesheet" TYPE="text/css">
+				<LINK HREF="${web_realm_dir}/custom/favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+				<TITLE>Auto-realm configuration</TITLE>
+			</HEAD>
+			<BODY>
+			<A HREF="${scc_web_path_dir}/scc-help/scc-srv/scc-srv-5.html"><IMG SRC="../custom/scc-logo.png" ALT=scc-logo></A>
+	EndOfTxt
+
+	echo "<P class=\"header\">Configuration</P>"
+	echo "<P>The following configuration file is used to auto (de)select systems for this realm:</P>"
+
+	echo "<PRE>"
+	sed	-e 's/&/\&amp;/g'	\
+		-e 's/</\&lt;/g'	\
+		-e 's/>/\&gt;/g'	\
+		-e "s/'/\&#39;/g"	\
+		-e 's/"/\&quot;/g' custom/scc-auto-realm.conf 2>/dev/null
+	echo "</PRE>"
+	
+	echo "<HR>"
+	echo "	</BODY>"
+	echo "</HTML>"
+else
+	cat <<-EndOfTxt
+		<!DOCTYPE HTML>
+		<html> <head> <title>empty</title> </head> <body> </body> </html>
+	EndOfTxt
+fi >scc-auto-realm-config.html		# no remove to preserve selinux context
+
+chown "${new_owner_group}" index.html
+	
+rm -f scc-summary.sys
+
+exit 0

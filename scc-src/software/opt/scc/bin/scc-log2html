@@ -1,0 +1,523 @@
+#!/bin/sh
+
+# Shell script to convert a SCC logbook to html-format.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc-log2html 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+
+set -u
+
+ProgName=${0##*/};			export ProgName
+
+export SCC_BIN=/opt/scc/bin
+export SCC_DATA=${SCC_DATA:-/var/opt/scc/data}
+export SCC_TMP=/tmp
+export SCC_CONF=/etc/opt/scc/conf
+
+case "${SCC_DATA}" in
+/*)	;;
+*)	echo "${ProgName}: alternative SCC_DATA (${SCC_DATA}) should be an absolute path" >&2
+	exit 2;;
+esac
+
+# Perform the security settings before calling any program.
+PATH=/sbin:/usr/sbin:/usr/bin:/bin;	export PATH
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+cd ${SCC_TMP}
+
+umask 077
+
+CMD_LINE="${ProgName} [ -h|--help ] [ -s|--standalone ] <name>"
+SYNTAX_ERROR="Syntax error, use: ${CMD_LINE}"
+
+standalone=""
+while [ $# -gt 0 ]
+do
+	case "${1}" in
+	-s|--standalone)	standalone="yes"
+				shift 1;;
+	-h|--help)		echo "${CMD_LINE}"
+				exit 0;;
+	-*)			echo "${SYNTAX_ERROR}" >&2
+				exit 1;;
+	*)			break;;
+	esac
+done
+
+if [ $# -ne 1 ]
+then
+	echo "${SYNTAX_ERROR}" >&2
+	exit 1
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+[ -r ${SCC_CONF}/scc-localize ] && . ${SCC_CONF}/scc-localize
+
+random="$(get_RANDOM)"
+export TMP_FILE=${SCC_TMP}/scc_log_html_$$_${random}
+
+trap 'rm -f ${TMP_FILE}' 0
+trap "exit 2" 1 2 3 15
+
+# Replace special HTML-characters in input.
+sed	-e 's/&/\&amp;/g'	\
+	-e 's/</\&lt;/g'	\
+	-e 's/>/\&gt;/g'	\
+	-e "s/'/\&#39;/g"	\
+	-e 's/"/\&quot;/g' >${TMP_FILE}
+
+if [ ! -s ${TMP_FILE} ]
+then
+	exit 0
+fi
+
+# In standalone mode and with only one run, we do not generate statistics.
+single_run=""
+if [ "${standalone}" ]
+then
+	first_run_time="$(head -n 1 ${TMP_FILE} | sed -e 's/:[^0-9].*//')"
+	last_run_time="$(tail -n 1 ${TMP_FILE} | sed -e 's/:[^0-9].*//')"
+	if [ "${first_run_time}" = "${last_run_time}" ]
+	then
+		single_run="yes"
+	fi
+fi
+
+TABLE_TAG="<TABLE CLASS=SCC>"
+TOP_URL="<A HREF=\"#log_top\">Top</A>&nbsp;&nbsp;&nbsp;&nbsp;"
+
+echo '<!DOCTYPE HTML>'
+echo "<HTML lang=\"en\">"
+
+echo "<HEAD>"
+echo '	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">'
+if [ -z "${standalone}" ]
+then
+	# scc-transfer from scc-srv modifies the following line
+	echo '<LINK HREF="style.css" REL="stylesheet" TYPE="text/css">'
+else
+	if [ -f "${SCC_DATA}/style.css" ]
+	then
+		echo '<style TYPE="text/css">'
+		cat "${SCC_DATA}/style.css"
+		echo "</style>"
+	fi
+fi
+echo "	<TITLE>Logbook: $1</TITLE>"
+echo "</HEAD>"
+
+echo "<BODY>"
+echo '<DIV class=SCC_LOG>'
+
+echo "<H1 id=\"log_top\">Logbook: ${1}</H1>"
+
+# DO NOT CHANGE THE FOLLOWING HTML-CODE WITHOUT CONSULTING scc.cgi IN scc-srv
+if [ -z "${single_run}" ]
+then
+	echo "<DIV class=SCC_LOG_NAV>"
+
+	echo "<H2>"
+	if [ -z "${standalone}" ]
+	then
+		echo "	<A HREF=\"index.html\">Home</A>&nbsp;&nbsp;&nbsp;&nbsp;"
+		echo "	<A HREF=\"scc.${1}.html\">Configuration</A>&nbsp;&nbsp;&nbsp;&nbsp;"
+	fi
+	echo '	<A HREF="#log_statistics">Statistics</A>'
+	echo "</H2>"
+
+	echo "</DIV><!-- class=SCC_LOG_NAV -->"
+
+	echo "<H3>Summary of runs of SCC</H3>"
+else
+	echo "<H2>Run of SCC</H2>"
+fi
+
+# Build a table with URL's to reported differences in the logbook.
+# Use the date/time of the run as the ID for HREF and NAME.
+# Sort the data reverse to show the most recent change at the top of the table.
+# Check the code in scc-log for the specific layout of the logbook.
+awk -F: '/:result::/	{
+				stat_cnt_runs++
+				if ( length( prev_res ) )
+				{
+					# restart or identical, no number of differences.
+					print prev_res ":" ":" prev_runtime ":" prev_remark
+					prev_remark=""
+					prev_runtime=""
+				}
+				prev_res=$0
+			}
+	/:remark::/	{
+				# A remark can contain ":", syntax of a line is: <date>:<time>:remark::<remark>
+				prev_remark = $5
+				for ( i = 6; i <= NF; i++ )
+				{
+					prev_remark = sprintf( "%s: %s", prev_remark, $i )
+				}
+			}
+	/:runtime::/	{
+				# Use a separate counter as older versions of SCC did not record the runtime.
+				stat_runtime_cnt++
+				stat_runtime_total+=$NF
+				# The min/max urls from the statistics table refer to the entire table with the runs: prefix = "back"
+				if ( $NF > stat_runtime_max )
+				{
+					stat_runtime_max = $NF
+					runtime_max_date = $1
+					runtime_max_time = $2
+				}
+				if ( $NF < stat_runtime_min || stat_runtime_min == 0 )
+				{
+					stat_runtime_min = $NF
+					runtime_min_date = $1
+					runtime_min_time = $2
+				}
+				prev_runtime=$NF
+			}
+	/:count::/	{
+				stat_change_cnt++
+				stat_change_total+=$NF
+				# The min/max urls from the statistics table refer to the changes: prefix = "log"
+				if ( $NF > stat_change_max )
+				{
+					stat_change_max = $NF
+					change_max_date = $1
+					change_max_time = $2
+				}
+				if ( $NF < stat_change_min || stat_change_min == 0 )
+				{
+					stat_change_min = $NF
+					change_min_date = $1
+					change_min_time = $2
+				}
+				# changes detected, report
+				print prev_res ":" $NF ":" prev_runtime ":" prev_remark
+				prev_res=""
+				prev_remark=""
+			}
+END			{
+				# unreported results?
+				if ( length( prev_res ) )
+				{
+					print prev_res ":" ":" prev_runtime ":" prev_remark
+				}
+				if ( stat_cnt_runs == 0 )
+				{
+					stat_cnt_runs=1
+					stat_runtime_cnt=1
+				}
+
+				# Prefix the statistics lines with 0 to put them at the end of the data after the reverse sort we are going to perform:
+				printf( "0:9:runs total        : %d\n", stat_cnt_runs )
+				printf( "0:8:runs with changes : %d\n", stat_change_cnt )
+				printf( "0:7:runs perc. changes: %d\n", ( 100 * stat_change_cnt ) / stat_cnt_runs )
+				printf( "0:6:change count min. : %d:log:%s:%s\n", stat_change_min, change_min_date, change_min_time )
+				printf( "0:5:change count max. : %d:log:%s:%s\n", stat_change_max, change_max_date, change_max_time )
+				if ( stat_change_cnt == 0 )
+				{
+					stat_change_cnt = 1
+				}
+				printf( "0:4:change count average: %d\n", stat_change_total / stat_change_cnt )
+				printf( "0:3:runtime min.        : %d:back:%s:%s\n", stat_runtime_min, runtime_min_date, runtime_min_time )
+				printf( "0:2:runtime max.        : %d:back:%s:%s\n", stat_runtime_max, runtime_max_date, runtime_max_time )
+				printf( "0:1:runtime average     : %d\n", stat_runtime_total / stat_runtime_cnt )
+			}' ${TMP_FILE}		|
+sort -r						|
+awk -F":" '{
+		# We produce both the table with all runs and the table with the statistics. 
+		# Start with the table with all runs.
+		# The variable u is not initialized in a BEGIN-clause.
+		# Therefore we check for the first record.
+		if ( NR == 1 )
+		{
+			print "<DIV class=SCC_LOG_SUMMARY>"
+			print u
+			print "<THEAD>"
+			print "	<TR class=Odd>"
+			print "		<TH>Date</TH>"
+			print "		<TH>Time</TH>"
+			print "		<TH>Runtime</TH>"
+			print "		<TH>Result</TH>"
+			print "		<TH>Count</TH>"
+			print "		<TH>Remark</TH>"
+			print "	</TR>"
+			print "</THEAD>"
+
+			print "<TBODY>"
+			tr_c = "Even"
+		}
+	}
+/^0:/	{
+		# Process the statistics:
+		# Format of the input data is:
+		#0:<order>:<label>:<value>[:<prefix>:<date>:<time>]
+		if ( statistics == 0 )		# No heading yet?
+		{
+			print "</TBODY>"
+			print "</TABLE>"
+			print "</DIV><!-- class=SCC_LOG_SUMMARY -->"
+			statistics=1;		# Heading done!
+
+			if ( length( single_run ) )
+			{
+				next
+			}
+			print "<HR>"
+			print "<DIV class=SCC_LOG_STATS>"
+			printf( "<H3 id=\"log_statistics\">%sStatistics</H3>\n", t )
+
+			print u
+			print "<THEAD>"
+			print "	<TR class=Odd>"
+			print "		<TH>Category</TH>"
+			print "		<TH>Value</TH>"
+			print "		<TH>Date</TH>"
+			print "	</TR>"
+			print "</THEAD>"
+
+			print "<TBODY>"
+			s_tr="Even"
+		}
+
+		if ( length( single_run ) )
+		{
+			next
+		}
+
+		print "<TR class=" s_tr ">"
+		if ( s_tr != "Even" )
+		{
+			s_tr = "Even"
+		}
+		else
+		{
+			s_tr = "Odd"
+		}
+		print "	<TD class=Even>" $3 "</TD>";									# Category
+		printf( "	<TD class=Odd style=\"text-align:right;\">%s</TD>\n", $4 );				# Value
+		if ( length( $5 ) > 0 )
+		{
+			printf( "	<TD class=Even><A HREF=\"#%s_%s_%s\">%s %s</A></TD>\n", $5, $6, $7, $6, $7 );	# Date
+		}
+		else
+		{
+			printf( "	<TD class=Even>&nbsp;</TD>\n" );						# No date
+		}
+		print "</TR>"
+		next
+	}
+{
+	# Show data of a run.
+	# Format of the input is:
+	#<date>:<time>:result::different:<count>:<runtime>:<remark>
+	if ( $5 == "different" )
+	{
+		print "<TR class=" tr_c "_Emp>"
+	}
+	else
+	{
+		print "<TR class=" tr_c ">"
+	}
+
+	if ( tr_c != "Even" )
+	{
+		tr_c = "Even"
+	}
+	else
+	{
+		tr_c = "Odd"
+	}
+
+	printf( "	<TD class=Even id=\"back_%s_%s\">%s</TD>\n", $1, $2, $1 );	# Date
+	print "	<TD class=Odd>" $2 "</TD>";	# Time
+	if ( length( $7 ) > 0 )			# Runtime available?
+	{
+		printf( "	<TD class=Even style=\"text-align:right;\">%s</TD>\n", $7 )
+	}
+	else
+	{
+		print "	<TD class=Even>&nbsp;</TD>"
+	}
+	if ( $5 == "different" )		# Result
+	{
+		printf( "	<TD class=Odd_Emp><A HREF=\"#log_%s_%s\" TITLE=\"%s %s\">%s</A></TD>\n", $1, $2, $1, $2, $5 )
+	}
+	else
+	{
+		printf( "	<TD class=Odd>%s</TD>\n", $5 )
+	}
+	if ( length( $6 ) > 0 )			# Count available?
+	{
+		printf( "	<TD class=Even style=\"text-align:right;\">%s</TD>\n", $6 )
+	}
+	else
+	{
+		print "	<TD class=Even>&nbsp;</TD>"
+	}
+	remark = $8;				# Possibly contains ":"
+	for ( i = 9; i <= NF; i++ )
+	{
+		remark = sprintf( "%s: %s", remark, $i )
+	}
+	if ( length( remark ) > 0 )
+	{
+		printf( "	<TD class=Odd_Emp style=\"text-align:left;\">%s</TD>\n", remark )
+	}
+	else
+	{
+		print "	<TD class=Odd>&nbsp;</TD>"
+	}
+	print "</TR>"
+}
+END	{
+		if ( length( single_run ) == 0 )
+		{
+			print "</TBODY>"
+			print "</TABLE>"
+			print "</DIV><!-- class=SCC_LOG_STATS -->"
+		}
+	}' single_run="${single_run}" t="${TOP_URL}" u="${TABLE_TAG}"
+
+# When sorting the logdata, we want to preserve the order of the data within each single run.
+# As we sort descending, we use <total_line_nr> - <current_record_nr>.
+# First determine the total_line_nr:
+total_cnt="$(wc -l <${TMP_FILE})"
+
+# Now the table is present, we show the data.
+# Use the date/time of the run as the ID for HREF and NAME.
+awk -F:	'{
+		# Sort the log file, most recent run first, 
+		# within the run keep the data in the order of the log file.
+		log_date=$1
+		log_time=$2
+		gsub( "-", "", log_date )
+		gsub( /\./, "", log_time )
+		printf( "%s:%s:%010.10d:%s\n", log_date, log_time, total - NR, $0 )
+	}' total="${total_cnt}" ${TMP_FILE}		|
+sort -r							|
+sed -e 's/^[0-9]*:[0-9]*:[0-9]*://'			|
+awk -F":"	'BEGIN	{ first_log_entry = 1; }
+	/:result::different$/	{
+			if ( show_data )
+			{
+				print "</PRE>";		# end of previously showed data
+			}
+			show_data=1;			# indicate that we are going to show differences
+			prev_class="";			# reset class-identifier for this run
+			print "<HR>"
+			if ( first_log_entry )
+			{
+				print "<DIV class=SCC_LOG_ENTRY>"
+				first_log_entry=0
+			}
+			printf( "<H3 id=\"log_%s_%s\">%s<A HREF=\"#back_%s_%s\" TITLE=\"%s %s\">Runs</A>&nbsp;&nbsp;&nbsp;&nbsp;", $1, $2, u, $1, $2, $1, $2 )
+			printf( "Differences at: %s %s</H3>\n", $1, $2 )
+			print "<PRE>"
+			next
+		}
+	/:result::identical$|:result::.re.start$/	{
+			if ( show_data )
+			{
+				print "</PRE>";		# end of previously showed data
+			}
+			show_data=0;			# the are no differences: do not show data
+			next
+		}
+	/:data::/	{
+			if ( show_data )
+			{
+				# Do not show the classification on each line, only once in bold format.
+				change=$5;		# old/new or ctx for unchanged data with context diff
+				# $6 is empty to separate changed data from the classification
+				class=$7
+				for ( i = 8; length( $i ) > 0; i++ )
+				{
+					class=sprintf( "%s - %s", class, $i )
+				}
+				if ( class != prev_class )
+				{
+					print "</PRE>"
+					print "<H4>" class "</H4>"
+					print "<PRE>"
+					prev_class=class
+				}
+				if ( change == "ctx" )
+				{
+					printf( "<span class=\"%s\">	", change )
+				}
+				else
+				{
+					printf( "<span class=\"%s\">%s:	", change, change )
+				}
+				for ( i++; i < NF; i++ )
+				{
+					printf( "%s:", $i )
+				}
+				print $i "</span>"
+			}
+			next
+		}
+		{
+			# No data, classifications:
+			# possible classifications are: count, remark, previous date and time
+			if ( show_data )
+			{
+				printf( "%-30.30s: %s\n", $3, $5 )
+			}
+			next
+		}
+END	{
+		if ( show_data )
+		{
+			print "</PRE>";		# end of previously showed data
+		}
+		print "<HR>"
+		if ( first_log_entry == 0 )	# Have any log-entries been printed?
+		{
+			print "</DIV><!-- class=SCC_LOG_ENTRY -->";	# Mark the end of all log-entries.
+		}
+	}' u="${TOP_URL}"
+
+rm -f ${TMP_FILE}
+
+echo "<P>Generated by SCC version 1.26.73 (&copy; Siem Korteweg) on $(date)</P>"
+
+echo "</DIV><!-- class=SCC_LOG -->"
+echo "</BODY>"
+echo "</HTML>"
+
+exit 0

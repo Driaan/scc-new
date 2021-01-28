@@ -1,0 +1,579 @@
+#!/bin/sh
+
+# Shell script to collect kernel data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0300_s_kernel 6277 2019-11-06 19:59:42Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+if [ -x /usr/bin/checksec ]
+then
+	# eliminate the escape sequences for colouring.
+	/usr/bin/checksec --kernel 2>/dev/null		|
+	awk '{ gsub( "\033[[0-9][0-9]*m", "" ); print "fix:kernel:checksec::" $0 }'
+fi
+
+for file in /sys/kernel/debug/x86/*_enabled
+do
+	scc_check_file "${file}" "fix:kernel:debugfs:${file}::" "#"
+done
+
+scc_check_file /etc/system		"fix:kernel:/etc/system::"		"*"
+scc_check_file /etc/kdump.conf		"fix:kernel:/etc/kdump.conf::"		"#"
+scc_check_file /stand/kernrel		"fix:kernel:/stand/kernrel::"		"#"
+scc_check_file /stand/system		"fix:kernel:/stand/system::"		"#"
+
+# Indicated by Wes Brown and Michael Imrick.
+scc_check_file /etc/project		"fix:kernel:/etc/project::"		"#"
+
+if [ -x /usr/sbin/rctladm ]
+then
+	/usr/sbin/rctladm -l			|
+	sed -e 's@^@fix:kernel:rctladm::@'
+fi
+
+scc_check_file /etc/lkm.conf		"fix:kernel:/etc/lkm.conf::"		"#"
+scc_check_file /etc/kernel-pkg.conf	"fix:kernel:/etc/kernel-pkg.conf::"	"#"
+scc_check_file /etc/kernel-img.conf	"fix:kernel:/etc/kernel-img.conf::"	"#"
+
+if [ -x /sbin/kernelversion ]
+then
+	/sbin/kernelversion 2>/dev/null		|
+	sed -e 's/^/fix:kernel:kernelversion::/'
+fi
+
+for f in ioconfig rootconf vmunix
+do
+	if [ -f /stand/${f} ]
+	then
+		# Harry van Wiggen indicated changes in /stand/ioconfig after using the command ioscan.
+		# Erase the binary data and sort to avoid these unwanted changes in the logbook.
+		echo "fix:kernel:/stand/${f}::cksum:	$(strings /stand/${f} | sort | scc_checksum)"
+	fi
+done
+
+if [ "${OS_NAME}" = "HP-UX" ]
+then
+	# For HP-UX 10.20 this will not work when we are not
+	# running the default kernel: /stand/vmunix. In that case
+	# other programs like ioscan and lanscan will not work either and the
+	# snapshot will be incomplete.
+	# We do not correct for this particular case.
+	scc_help_info "hlp:kernel:boot-disk::" <<-_X_
+		Specific for HP-UX.
+		Use adb to obtain the value for boot_string from
+		the kernel ${HPUX_KERNEL}
+	_X_
+	echo "boot_string/${HPUX_ADB_STRING_FORMAT}"		|
+	/usr/bin/adb "${HPUX_KERNEL}" /dev/kmem 2>/dev/null	|
+	sed -n	-e 's/^/fix:kernel:boot-disk::/'	\
+		-e 's@/@/@p'
+
+	# Ignore header files. On HP-UX 11i, some header files occur very often.
+	/usr/bin/what ${HPUX_KERNEL}				|
+	sed	-e 's/^[ 	]*//'	\
+		-e '/^$/d'		\
+		-e '/\.h[ 	]/d'	\
+		-e "s@^@fix:kernel:${HPUX_KERNEL}::@"	|
+	sort
+fi
+
+if [ -x /usr/sbin/sizer ]
+then
+	echo "fix:kernel:running::$(/usr/sbin/sizer -b 2>/dev/null)"
+fi
+
+if [ -x /usr/sbin/lsdev -a "${OS_NAME}" != "AIX" ]
+then
+	/usr/sbin/lsdev 2>/dev/null			|
+	sed -e 's/^/fix:kernel:lsdev::/'
+fi
+
+if [ -x /usr/sbin/kconfig ]
+then
+	# Manage kernel configurations.
+	/usr/sbin/kconfig -v 2>/dev/null		|
+	sed	-e 's/^/fix:kernel:kconfig::/'	\
+		-e 's/fix:\(.* Time \)/var:\1/'
+fi
+
+if [ -f /stand/system -a -x /usr/lbin/sysadm/system_prep ]
+then
+	scc_help_info "hlp:kernel:mk_kernel::" <<-_X_
+		Specific for HP-UX.
+		When a new kernel is compiled via SAM, the command
+		system_prep generates the file /stand/system.
+		Anyone who edits this file directly to change a new kernel,
+		will loose the changes when SAM is used to generate a new kernel.
+		scc compares the output of system_prep with the contents of the file /stand/system.
+		Differences are reported.
+	_X_
+	/usr/lbin/sysadm/system_prep -s ${TMP1_FILE} >/dev/null 2>/dev/null
+	sed	-e 's/[ 	][ 	]*/ /g'	\
+		-e 's/ 0X/ 0x/g'		\
+			<${TMP1_FILE}		\
+			>${TMP2_FILE}
+	sed	-e 's/[ 	][ 	]*/ /g'	\
+		-e 's/ 0X/ 0x/g'		\
+			</stand/system		\
+			>${TMP3_FILE}
+	
+	cmp -s ${TMP2_FILE} ${TMP3_FILE}
+	if [ $? -eq 0 ]
+	then
+		echo "fix:kernel:mk_kernel::status:	${HPUX_KERNEL}-/stand/system identical"
+	else
+		echo "fix:kernel:mk_kernel::status:	${HPUX_KERNEL}-/stand/system different"
+
+		diff ${TMP2_FILE} ${TMP3_FILE}			|
+		sed	-e '/^[0-9\-]/d'                				\
+			-e '/< .*Created on/d'						\
+			-e "s@< @fix:kernel:mk_kernel::/usr/conf/master.d	:@"	\
+			-e "s@> @fix:kernel:mk_kernel::/stand/system		:@"
+
+	fi
+	rm -f ${TMP1_FILE} ${TMP2_FILE} ${TMP3_FILE}
+fi
+
+if [ -x /usr/sbin/kmadmin ]
+then
+	/usr/sbin/kmadmin -s			|
+	sed -e 's/^/fix:kernel:kmadmin:short::/'
+
+	/usr/sbin/kmadmin -S			|
+	sed -e 's/^/var:kernel:kmadmin:full::/'
+fi
+
+if [ -x /usr/sbin/kmsystem ]
+then
+	/usr/sbin/kmsystem			|
+	sed -e 's/^/fix:kernel:kmsystem::/'
+fi
+
+if [ -x /usr/sbin/kmtune ]
+then
+	# Dynamic variables can be altered without rebooting.
+	# They are treated as fix as we want to know when they are changed.
+	if [ -x /usr/sbin/kctune ]
+	then
+		# For IA64, kmtune reports that it is a wrapper and that kctune should be called.
+		# Avoid the message without ignoring other messages.
+		/usr/sbin/kctune -a -v
+	else
+		/usr/sbin/kmtune -l
+	fi						|
+	awk '/^$/	{
+				printf( "fix:kernel:kmtune:%s\n", parms )
+				parms=""
+				next
+			}
+			{ parms=sprintf( "%s:%s", parms, $2 ); }
+	END     {
+			if ( length( parms ) > 0 )
+			{
+				printf( "fix:kernel:kmtune:%s\n", parms )
+			}
+		}'
+fi
+
+if [ -x /sbin/ksyms ]
+then
+	# Remove the offset.
+	/sbin/ksyms -m 2>/dev/null				|
+	sed	-e 's/^[^ ][^ ]*  *//'	\
+		-e 's/^/var:kernel:modules:ksyms::/'
+fi
+
+if [ -x /usr/sbin/modinfo -a "${SCC_LINUX_DISTRO}" != "GoboLinux" ]
+then
+	/usr/sbin/modinfo 2>/dev/null				|
+	sed -e 's/^/var:kernel:modules:modinfo::/'
+fi
+
+for file in /etc/modprobe.conf /etc/modprobe.conf.local /etc/modprobe.d/* /etc/modules-load.d/*.conf /etc/depmod.d/*
+do
+	scc_check_file "${file}" "fix:kernel:modules:${file}::" "#"
+done
+
+for file in /etc/sysctl.d/*.conf
+do
+	scc_check_file "${file}" "fix:kernel:modules:paramaters:${file}::" "#"
+done
+
+if [ -x /sbin/modprobe ]
+then
+	# On some systems, the output of the next command can be huge due to the alias lines.
+	/sbin/modprobe -c 2>/dev/null			|
+	sed	-e '/^alias /d'		\
+		-e '/^[ 	]*$/d'	\
+		-e '/^#/d'		\
+		-e 's/^/fix:kernel:modules:modprobe-config::/'
+fi
+
+dep_file="/lib/modules/$(uname -r)/modules.dep"
+if [ -f "${dep_file}" ]
+then
+	# During a kernel upgrade, massive amounts of changes are reported when the version (uname -r) is part of the classification.
+	# Record the version via one separate line.
+	echo "fix:kernel:modules:modules.dep::full path: ${dep_file}"
+	scc_check_file "${dep_file}" "fix:kernel:modules:modules.dep::" "#"		|
+	sed -e "s@/lib/modules/[^/]*/@/lib/modules/VERSION/@"
+elif [ -x /sbin/modprobe ]
+then
+	find "/lib/modules/$(uname -r)" -type f 2>/dev/null	|
+	grep ".*\.ko$"						|
+	sort >${TMP1_FILE}
+
+	abs_path="$(head -n 1 ${TMP1_FILE} | grep "^/")"
+	if [ "${abs_path}" ]
+	then
+		# Each full path of a module usually contains the version-ID
+		# of the kernel. Record the base-directory first and then remove
+		# it from the module-list. This reduces the amount of output
+		# when comparing kernel-parts of snapshots.
+		awk -F/ '{
+				# Example data:
+				#/lib/modules/2.6.18-194.el5/kernel/drivers/net/tokenring/3c359.ko
+				if ( NR == 1 )
+				{
+					printf( "%s::basepath:	/%s/%s/%s\n", l, $2, $3, $4 )
+				}
+
+				printf( "%s::%s/%s", l, $5, $6 )
+				for ( i = 7; i <= NF; i++ )
+				{
+					printf( "/%s", $i )
+				}
+				printf( "\n" )
+			}' l="fix:kernel:modules:modprobe-list" ${TMP1_FILE}
+	else
+		# Relative paths do not contain the version; no processing required.
+		sed -e "s/^/fix:kernel:modules:modprobe-list::/" ${TMP1_FILE}
+	fi
+
+	rm -f ${TMP1_FILE}
+fi
+
+if [ -x /sbin/lsmod ]
+then
+	/sbin/lsmod 2>/dev/null			|
+	sed -e 's/^/var:kernel:modules:lsmod::/'
+fi
+
+if [ -x /sbin/lsmod -a -x /sbin/modinfo ]
+then
+	prefix="fix"
+	if [ "${SCC_LINUX_DISTRO}" = "debian" -o "${SCC_LINUX_DISTRO}" = "Mageia" ]
+	then
+		# Each reboot resulted in many changes. Mark the data as variable.
+		prefix="var"
+	fi
+	/sbin/lsmod 2>/dev/null			|
+	sed	-e '/^Module/d'		\
+		-e 's/ .*//'			|
+	sort					|
+	while read mod
+	do
+		case "${mod}" in
+		ip_set*|nfnetlink)	mod_prefix="var";;
+		*)			mod_prefix="${prefix}";;
+		esac
+		/sbin/modinfo "${mod}" 2>/dev/null			|
+		sed	-e '/^alias:/d'				\
+			-e '/^signature:/d'			\
+			-e '/^\t\t/d'				\
+			-e "s/^/${mod_prefix}:kernel:modules:${mod}::/"
+	done
+fi
+
+for mod in /sys/module/*
+do
+	if [ -d "${mod}/parameters" ]
+	then
+		mod_name="${mod##*/}"
+		for parm in "${mod}"/parameters/*
+		do
+			if [ -f "${parm}" ]
+			then
+				parm_name="${parm##*/}"
+				sed	-e "s@^@fix:kernel:modules:${mod_name}::parm ${parm_name} : @"	\
+					-e '/allocated_.*bytes/d'					\
+						"${parm}" 2>/dev/null
+			fi
+		done
+	fi
+done
+
+if [ -x /usr/bin/modstat ]
+then
+	/usr/bin/modstat 2>/dev/null			|
+	sed -e 's/^/fix:kernel:modules:modstat::/'
+fi
+
+for file in /etc/mkinitcpio.conf /etc/mkinitcpio.d/*
+do
+	scc_check_file "${file}" "fix:kernel:mkinitcpio:${file}::" "#"
+done
+
+# Kernel parameters for SLES.
+file=/etc/powertweak/tweaks
+sed	-e 's/#.*//'			\
+	-e '/^[ 	]*$/d'		\
+	-e "s@^@fix:kernel:${file}::@"	\
+		${file} 2>/dev/null
+
+# Kernel parameters for vsphere:
+if [ -x /bin/esxcli ]
+then
+	class="fix:kernel:parameters"
+	fields="Name,Type,Default,Configured,Runtime"
+
+	echo "${class}::${fields}"
+
+	/bin/esxcli --formatter=csv --format-param=fields="${fields}" system settings kernel list 2>/dev/null	|
+	sed	-e "/^${fields}/d"	\
+		-e "/BOOTUUID/d"	\
+		-e "s/^/${class}::/"										|
+	sort -f
+fi
+
+if [ -x /usr/sbin/scls ]
+then
+	/usr/sbin/scls -l				|
+	sed -e 's/^/fix:kernel:streams:scls::/'
+fi
+
+scc_check_file /etc/pse.conf		"fix:kernel:streams:pse.conf::"		"#"
+scc_check_file etc/pse_tune.conf	"fix:kernel:streams:pse_tune.conf::"	"#"
+
+if [ -x /usr/bin/genkex ]
+then
+	# Sample output:
+	#    Text address     Size File
+	#
+	#f1000000c030e000    1e000 /usr/lib/drivers/random
+	#         6440000   230000 /usr/lib/drivers/nfs.ext
+	/usr/bin/genkex							|
+	awk	'/^$/	{ next }
+		/File$/	{ next }
+			{ print "fix:kernel:extensions::" $NF }'	|
+	sort
+fi
+
+# Ignore /sbin/sysconfig on ttylinux, it does not support the -s option and produces it's syntax on stdout.
+if [ -x /sbin/sysconfig -a "${SCC_LINUX_DISTRO}" != "ttylinux" ]
+then
+	/sbin/sysconfig -s 2>&1				|
+	sed -e 's/^/fix:kernel:modules:sysconfig::/'
+fi
+
+if [ -x /usr/sbin/sizer ]
+then
+	/usr/sbin/sizer -m 2>/dev/null			|
+	sed -e 's/^/fix:kernel:modules:sizer::/'
+
+	/usr/sbin/sizer -M 2>/dev/null			|
+	sed -e 's/^/fix:kernel:foreign kit:sizer::/'
+fi
+
+scc_check_file /etc/modules.conf "fix:kernel:modules:/etc/modules.conf::" "#"
+scc_check_file /etc/conf.modules "fix:kernel:modules:/etc/conf.modules::" "#"
+scc_check_file /etc/sysconfigtab "fix:kernel:modules:/etc/sysconfigtab::" "#"
+
+for f in /kernel/drv/*.conf
+do
+	scc_check_file "${f}" "fix:kernel:/kernel/drv:$(basename "${f}")::" "#"
+done
+
+if [ "${OS_NAME}" = "OSF1" ]
+then
+	myhost="$(hostname | sed -e 's/\..*//' | tr "[:lower:]" "[:upper:]")"
+	scc_check_file "/sys/conf/${myhost}" "fix:kernel:config:/sys/conf/${myhost}::" "#"
+fi
+
+if [ -x /usr/sbin/lsattr -a "${OS_NAME}" = "AIX" ]
+then
+	/usr/sbin/lsattr -E -l sys0		|
+	sed	-e '/variable_weight/d'				\
+		-e 's/^/fix:kernel:parameters lsattr::/'
+fi
+
+if [ -x /usr/sbin/ioo ]
+then
+	# AIX
+	/usr/sbin/ioo -L					|
+	sed	-e '/^---------/d'	\
+		-e 's@^@fix:kernel:I/O parameters::@'
+fi
+if [ -x /usr/sbin/vmo ]
+then
+	# AIX
+	/usr/sbin/vmo -L					|
+	sed	-e '/^---------/d'	\
+		-e '/maxpin/d'		\
+		-e '/maxperm/d'		\
+		-e '/minperm/d'		\
+		-e '/pinnable_frames/d'	\
+		-e 's/^/fix:kernel:VM parameters::/'
+fi
+if [ -x /usr/sbin/no ]
+then
+	# AIX
+	/usr/sbin/no -L						|
+	sed	-e '/^---------/d'	\
+		-e 's/^/fix:kernel:network parameters::/'
+fi
+
+if [ -d /boot ]
+then
+	# The name of the config file is determined by the administrator.
+	# Convention is config<kernel-id> or .config<kernel-id>.
+	# Look for the most recent file.
+	cfg="$(ls -t /boot/config* /boot/.config* 2>/dev/null | head -n 1)"
+	if [ -f "${cfg}" ]
+	then
+		# On some systems, the config file is gzipped. Avoid binary
+		# data by using scc_check_file and ignore the data.
+		# Due to the formatting and contents of the data, we do not
+		# use scc_check_file to produce the data for the snapshot.
+		scc_check_file "${cfg}" "fix:dummy::" "#" >/dev/null 2>/dev/null
+		if [ $? -eq 0 ]
+		then
+			echo "fix:kernel:parameters::filename:${cfg}"
+			sed	-e '/^#/d'		\
+				-e '/^[ 	]*$/d'	\
+				-e 's/^/fix:kernel:parameters::/' "${cfg}"
+		fi
+	fi
+fi
+
+if [ -x /usr/sbin/sysdef ]
+then
+	if [ "${OS_NAME}" = "HP-UX" ]
+	then
+		# Use sysdef only for HP-UX 10.20 as it is being replaced by kmtune.
+		if [ ! -x /usr/sbin/kmtune ]
+		then
+			/usr/sbin/sysdef 2>/dev/null			|
+			sort						|
+			sed	-e '/^bufpages/d'	\
+				-e '/^\*/d'		\
+				-e '/^msgmap/d'		\
+				-e '/^nbuf/d'		\
+				-e '/^semmap/d'		\
+				-e 's/^/fix:kernel:sysdef::/'
+		fi
+	else
+		# Each zone that is booted on Solaris 10, has its own zcons instance.
+		# Change to var to avoid changes in the logbook.
+		/usr/sbin/sysdef -D 2>/dev/null				|
+		sed	-e '/^\//d'			\
+			-e '/^\*/d'			\
+			-e 's/^/fix:kernel:sysdef::/'	\
+			-e 's/fix:\(.*zcons, instance #\)/var:\1/'
+	fi
+fi
+
+if [ -x /sbin/sysctl ]
+then
+	case "${OS_NAME}" in
+	*BSD)	KERNEL="kern"
+		;;
+	*)	KERNEL="kernel"
+		;;
+	esac
+
+	# Only keep the kernel-stuff and ignore variable data.
+	sed -n										\
+		-e "/${KERNEL}\.cp_time/d"						\
+		-e "/${KERNEL}\.devstat.generation/d"					\
+		-e "/${KERNEL}\.eventtimer.et.LAPIC.frequency/d"			\
+		-e "/${KERNEL}\.forkstat/d"						\
+		-e "/${KERNEL}\.geom.transient_maps/d"					\
+		-e "/${KERNEL}\.hardclock_ticks/d"					\
+		-e "/${KERNEL}\.hung_task_warnings/d"					\
+		-e "/${KERNEL}\.ipc.numopensockets/d"					\
+		-e "/${KERNEL}\.ipc.nsfbufspeak/d"					\
+		-e "/${KERNEL}\.ipc.pipekva/d"						\
+		-e "/${KERNEL}\.ipc.pipes/d"						\
+		-e "/${KERNEL}\.lastpid/d"						\
+		-e "/${KERNEL}\.malloc.bucket/d"					\
+		-e "/${KERNEL}\.malloc.kmemstat/d"					\
+		-e "/${KERNEL}\.maxvnodes/d"						\
+		-e "/${KERNEL}\.msgmni/d"						\
+		-e "/${KERNEL}\.nchstats/d"						\
+		-e "/${KERNEL}\.netlivelocks/d"						\
+		-e "/${KERNEL}\.nfiles/d"						\
+		-e "/${KERNEL}\.nprocs/d"						\
+		-e "/${KERNEL}\.ns_last_pid/d"						\
+		-e "/${KERNEL}\.nthreads/d"						\
+		-e "/${KERNEL}\.numvnodes/d"						\
+		-e "/${KERNEL}\.openfiles/d"						\
+		-e "/${KERNEL}\.perf_event_max_sample_rate/d"				\
+		-e "/${KERNEL}\.pipe\.kvasize/d"					\
+		-e "/${KERNEL}\.printk/d"						\
+		-e "/${KERNEL}\.pty\.nr/d"						\
+		-e "/${KERNEL}\.[au]*random/d"						\
+		-e "/${KERNEL}\.rtsig-nr/d"						\
+		-e "/${KERNEL}\.sched_domain/d"						\
+		-e "/${KERNEL}\.spl\.vm\.availrmem/d"					\
+		-e "/${KERNEL}\.spl\.vm\.freemem/d"					\
+		-e "/${KERNEL}\.timecounter/d"						\
+		-e "/${KERNEL}\.threads-max/d"						\
+		-e "/${KERNEL}\.tkstat/d"						\
+		-e "/${KERNEL}\.boottime/d"						\
+		-e "/${KERNEL}\.tainted/d"						\
+		-e "/${KERNEL}\.tty[_\.]/d"						\
+		-e "/${KERNEL}\.uidinfo/d"						\
+		-e "s/^${KERNEL}\./fix:kernel:sysctl::${KERNEL}./p"			\
+			<${SYSCTL_DATA}								|
+	sort
+
+	echo "hlp:kernel:sysctl::The configuration files for sysctl are recorded in the system module."
+	echo "hlp:kernel:sysctl::Any kernel changes in these files will also be detected via the above data."
+	echo "hlp:kernel:sysctl::Direct sysctl kernel changes will not be detected via the configuration files in the system module."
+fi
+
+exit 0

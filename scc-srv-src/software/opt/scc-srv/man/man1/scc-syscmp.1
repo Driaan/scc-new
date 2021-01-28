@@ -1,0 +1,132 @@
+.TH scc-syscmp 1 "SCC-SRV" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-syscmp - compare parts of SCC snapshots
+
+.SH  RELEASE
+.nf
+
+	scc-srv	1.19.44
+
+.SH  SYNOPSIS
+.nf
+
+	scc-syscmp [ -l|--log <log> ] <class> <snapshot-1> <snapshot-2>
+
+.SH  DESCRIPTION
+.nf
+
+	According to a classfile, this program extracts a part of two 
+	snapshots and compares the data. This program uses scc-baseline
+	to extract data from the snapshots according to the classfile.
+	Each line of the resulting output is prefixed with the name of the
+	corresponding system.
+
+	Refer to the manual page (section 4) of scc for a detailed description of
+	the format of snapshots and class-files. 
+
+.SH  ARGUMENTS
+.nf
+
+	<class>         classification or file with classifications to be extracted
+	<snapshot-1>    snapshot to be compared
+	<snapshot-2>    snapshot to be compared
+
+.SH  OPTIONS
+.nf
+
+	-l|--log <log>  log sizes of extracted class-data from both snapshots
+	                in file <log>.
+
+.SH  DIAGNOSTICS
+.nf
+
+	This program writes the following message to stderr:
+
+	Syntax error, use: scc-syscmp [ -l|--log <log> ] <class>     \
+	        <snapshot-1> <snapshot-2>
+	A syntax error has been detected and reported.
+
+	scc-syscmp: Syntax error, missing argument for option: <option>
+	The argument for <option> is missing.
+
+	scc-syscmp: hostnames not found in snapshots
+	The program uses the filenames of the snapshots to determine the
+	hostnames of the systems.
+
+	scc-syscmp: non-existing or empty file(s): <snapshot-1> <snapshot-2>
+	The snapshots cannot be found or are empty.
+
+.SH  EXAMPLES
+.nf
+
+	To compare the boot-configuration of two HP-UX workstations, create
+	a class-file (named class_boot):
+
+		:boot:
+
+	Use the following command to compare the snapshots of the systems
+	c011 and c012:
+
+		scc-syscmp ./class_boot ./scc.c011.cur ./scc.c012.cur
+
+	We received the following output:
+
+c011:boot:config:/stand/bootconf::l /dev/dsk/c0t5d0
+c012:boot:config:/stand/bootconf::l  /dev/dsk/c0t5d0
+c012:boot:info::lvlnboot:       /dev/dsk/c0t6d0 (2/0/1.6.0)
+c012:boot:rc-file:/etc/rc.config.d/Dmiconfig::START_DMI=1
+c012:boot:rc-file:/etc/rc.config.d/Dmiconfig::DMI_IGNORECONFIGURECHECK=0
+c011:boot:rc-file:/etc/rc.config.d/namesvrs::NIS_CLIENT="1"
+c011:boot:rc-file:/etc/rc.config.d/namesvrs::NIS_DOMAIN="nis010"
+c011:boot:rc-file:/etc/rc.config.d/namesvrs::WAIT_FOR_NIS_SERVER="FALSE"
+c012:boot:rc-file:/etc/rc.config.d/namesvrs::NIS_CLIENT=1
+c012:boot:rc-file:/etc/rc.config.d/namesvrs::NIS_DOMAIN=nis010
+c012:boot:rc-file:/etc/rc.config.d/namesvrs::WAIT_FOR_NIS_SERVER=FALSE
+c012:boot:rc-file:/etc/rc.config.d/scrdaemon::SCR_DAEMON=1
+c011:boot:rc-file:/etc/rc.config.d/xfs::RUN_X_FONT_SERVER=1
+c012:boot:rc-file:/etc/rc.config.d/xfs::RUN_X_FONT_SERVER=0
+c012:boot:run level:/sbin/rc1.d::K395Dmisp -> /sbin/init.d/Dmisp
+c012:boot:run level:/sbin/rc2.d::S605Dmisp -> /sbin/init.d/Dmisp
+c011:boot:stable-storage::Autoboot is ON (enabled)
+c012:boot:stable-storage::Autoboot is OFF (disabled)
+
+	Apparently the two systems are not identical. Some differences involve
+	additional spaces or quotes, while others indicate different behavior
+	of the systems. It is up to the administrators to decide whether these
+	differences are desirable or indicate a lack of consistent 
+	administration.
+
+.SH  RETURN VALUE
+.nf
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+.SH  COPYRIGHT
+.nf
+
+	scc-syscmp is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+.SH  SEE ALSO
+.nf
+
+	scc-baseline(1), scc-changes(1), scc-debug(1), scc-pull(1), scc-realm(1),
+	scc-receive-mail(1), scc-rules(1), scc-setup(1), scc-smt(1), scc-summary(1),
+	scc-syscmp(1), scc-transfer(1), scc-update(1), scc-wrapper.cgi(1), scc.cgi(1),
+	scc-srv(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6217 $
+

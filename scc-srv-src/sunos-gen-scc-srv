@@ -1,0 +1,149 @@
+#!/bin/sh
+
+# Generate Solaris package to install scc-srv by means of pkgadd.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: sunos-gen-scc-srv 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install				pre/post install scripts
+#	software/opt/scc-srv		bin, doc and man
+#	software/var/opt/scc-srv	conf, data and newconfig
+#
+# After using this program, the directory contains one file:
+#
+#	scc-srv-1.19.44.sunos.pkg
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+exe="$(which pkgproto 2>/dev/null)"
+if [ ! -x "${exe}" ]
+then
+	echo "${ProgName}: cannot find pkgproto" >&2
+	exit 2
+fi
+
+uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+if [ "${uid}" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+chown -R root:root software
+
+VERSION=${1:-1.19.44}
+
+cat >pkginfo <<_EOF_
+PKG="scc-srv"
+VERSION="${VERSION}"
+NAME="System Configuration Collector Server"
+CATEGORY="application"
+CLASSES="none"
+ARCH="noarch"
+VENDOR="(c) Siem Korteweg"
+_EOF_
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+PKG=scc-srv-${VERSION}.sunos.pkg;	export PKG
+
+uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+if [ "${uid}" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+# The shell /bin/sh on Solaris systems does not provide the functionality we need.
+# Replace it with /bin/ksh
+find install software -type f            |
+while read f
+do
+	hdr=$(head -n 1 ${f})
+	if [ "${hdr}" = "#!/bin/sh" ]
+	then
+		cat <<-_X_	| ed -s ${f} 2>/dev/null | sed -e '/^?$/d'
+			1,$ s@^#!/bin/sh@#!/bin/ksh@
+			w
+			q
+		_X_
+
+	fi
+done
+
+mkdir spool
+
+(
+	cat <<-_X_
+		i pkginfo
+		i postinstall=install/postinstall
+		i preremove=install/preremove
+	_X_
+
+	# Do not alter permissions for default directories like /opt, /var and /var/opt.
+	# Ignore /opt/scc-srv and /var/opt/scc-srv to allow symbolic links for these directories.
+	# Do not bother in case of "relocation"
+	pkgproto software/opt/scc-srv=/opt/scc-srv software/var/opt/scc-srv=/var/opt/scc-srv		|
+	sed	-e '/\/opt /d'			\
+		-e '/\/var /d'			\
+		-e '/\/scc-srv /d'		\
+		-e 's/ 0600 / 0500 /g'		\
+		-e 's/root other/root sys/g'
+) >sunos-scc-srv.pkg
+
+pkgmk	-o				\
+	-d ./spool			\
+	-f sunos-scc-srv.pkg		\
+	-p sunos58`date '+%Y%m%d%H%M'`	\
+	-v ${VERSION}
+
+pkgtrans -n ./spool ${PKG} scc-srv
+
+mv spool/${PKG} .
+chmod 444 ${PKG}
+
+rm -rf install software spool sunos-scc-srv.pkg $(cat file_list)
+
+exit 0

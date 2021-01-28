@@ -1,0 +1,338 @@
+#!/bin/sh
+
+# Shell script to activate webinterface of SCC
+# Copyright (C) 2010-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-setup 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_WWW=${SCC_DATA}/www
+export SCC_TMP=/tmp
+
+export APACHE_RUNNING=""
+
+export SHELL=/bin/sh
+export LANG=C
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:/usr/pkg/bin:/usr/pkg/sbin:${SCC_BIN};		export PATH
+
+umask 077
+
+# Initialize the variables required to perform the setup of the webinterface:
+init()
+{
+	uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+	if [ "${uid}" != "0" ]
+	then
+		echo "${ProgName}: only root should run this program" >&2
+		exit 2
+	fi
+
+	export WWW_USER="${WWW_USER:-}"
+	export WWW_CONFIG="${WWW_CONFIG:-}"
+	export WWW_PATH="${WWW_PATH:-}"
+	export WWW_RESTART="${WWW_RESTART:-}"
+	export WWW_VERSION="${WWW_VERSION:-}"
+}
+
+# Assign defaults to the variables when they have no value.
+defaults()
+{
+	# Check and source the configuration file:
+	config_file=${SCC_CONF}/setup.conf
+	if [ -f "${config_file}" ]
+	then
+		. "${config_file}"
+	fi
+
+	if [ -z "${WWW_USER}" ]
+	then
+		export PROC_FILE="${SCC_TMP}/procs_$$"
+		case $(uname) in
+		*BSD)	ps -ajxww;;
+		*)	ps -ef;;
+		esac			|
+		cut -c1-300 >${PROC_FILE}
+
+		# Check some default usernames:
+		# - username should exist
+		# - user should run http/apache process(es)
+		for u in www-data webservd apache2 httpd www apache wwwrun nobody
+		do
+			id ${u} >/dev/null 2>/dev/null
+			if [ $? -eq 0 ]
+			then
+				WWW_USER="${u}"
+				grep "${u} .*[h]ttp" ${PROC_FILE} >/dev/null 2>/dev/null
+				if [ $? -eq 0 ]
+				then
+					APACHE_RUNNING="yes"
+					break
+				fi
+				grep "${u} .*[a]pache" ${PROC_FILE} >/dev/null 2>/dev/null
+				if [ $? -eq 0 ]
+				then
+					APACHE_RUNNING="yes"
+					break
+				fi
+			fi
+		done
+
+		rm -f ${PROC_FILE}
+	fi
+
+	if [ -z "${WWW_CONFIG}" ]
+	then
+		# Refer to: http://wiki.apache.org/httpd/DistrosDefaultLayout
+
+		for d in /etc/httpd/conf.d /etc/apache2/conf.d /etc/apache2/*/conf.d /usr/pkg/etc/httpd/ /etc/apache2/conf-available
+		do
+			if [ -d "${d}" ]
+			then
+				WWW_CONFIG="${d}"
+				break
+			fi
+		done
+	fi
+
+	if [ -z "${WWW_PATH}" ]
+	then
+		WWW_PATH="/scc"
+	fi
+
+	if [ -z "${WWW_RESTART}" ]
+	then
+		WWW_RESTART=$(which apachectl 2>/dev/null)
+		if [ ! -x "${WWW_RESTART}" ]
+		then
+			WWW_RESTART=$(locate apachectl 2>/dev/null | grep bin | head -n 1)
+			if [ ! -x "${WWW_RESTART}" ]
+			then
+				for dir in /usr/apache2/*/bin
+				do
+					if [ -x "${dir}/apachectl" ]
+					then
+						WWW_RESTART="${dir}/apachectl"
+						break
+					fi
+				done
+			fi
+		fi
+	fi
+
+	if [ -z "${WWW_VERSION}" ]
+	then
+		httpd="${WWW_RESTART%/*}/httpd"
+		if [ -x "${httpd}" ]
+		then
+			# 2.0.x => 20
+			# 2.2.x => 22
+			# 2.4.x => 24
+			WWW_VERSION="$(${httpd} -V				|
+					sed -n -e 's@Server version.*/@@p'	|
+					sed -e 's/[^0-9]//' -e 's/[^0-9].*//')"
+		fi
+		if [ -z "${WWW_VERSION}" ]
+		then
+			WWW_VERSION="$(${WWW_RESTART} -V			|
+					sed -n -e 's@Server version.*/@@p'	|
+					sed -e 's/[^0-9]//' -e 's/[^0-9].*//')"
+		fi
+	fi
+}
+
+# Show the values of the variables
+show()
+{
+	echo "WWW_USER   : ${WWW_USER}"
+	echo "WWW_CONFIG : ${WWW_CONFIG}"
+	echo "WWW_PATH   : ${WWW_PATH}"
+	echo "WWW_RESTART: ${WWW_RESTART}"
+	echo "WWW_VERSION: ${WWW_VERSION}"
+}
+
+# Check the contents of the variables.
+check_variables()
+{
+	result=0
+
+	if [ -z "${WWW_USER}" ]
+	then
+		echo "${ProgName}: missing variable WWW_USER" >&2
+		result=1
+	else
+		if [ -z "${APACHE_RUNNING}" ]
+		then
+			echo "${ProgName}: note that webserver is not running, user '${WWW_USER}' could be wrong" >&2
+		fi
+	fi
+
+	if [ -z "${WWW_CONFIG}" ]
+	then
+		echo "${ProgName}: missing variable WWW_CONFIG" >&2
+		result=1
+	else
+		if [ ! -d "${WWW_CONFIG}" ]
+		then
+			echo "${ProgName}: cannot access directory WWW_CONFIG: ${WWW_CONFIG}" >&2
+			result=1
+		fi
+	fi
+
+	if [ -z "${WWW_PATH}" ]
+	then
+		echo "${ProgName}: missing variable WWW_PATH" >&2
+		result=1
+	fi
+	case "${WWW_PATH}" in
+	/*)	;;
+	*)	WWW_PATH="/${WWW_PATH}"
+	esac
+
+	if [ -z "${WWW_RESTART}" ]
+	then
+		echo "${ProgName}: missing variable WWW_RESTART" >&2
+		result=1
+	fi
+	# Do not check whether WWW_RESTART is a file to enable use of: WWW_RESTART="service apache"
+
+	if [ -z "${WWW_VERSION}" ]
+	then
+		echo "${ProgName}: missing variable WWW_VERSION" >&2
+		result=1
+	fi
+
+	return ${result}
+}
+
+# Activate the configuration; assumes check_variables has been executed.
+activate()
+{
+	${SCC_BIN}/scc-update -d "${WWW_PATH}" -w ${WWW_USER} -f
+
+	if [ "${WWW_VERSION}" -lt 24 ]
+	then
+		cat <<-_X_
+			ScriptAliasMatch "^.*/([^/]*)/cgi-bin/scc-wrapper.cgi" "${SCC_WWW}/\$1/cgi-bin/scc-wrapper.cgi"
+
+			Alias ${WWW_PATH} ${SCC_DATA}/www
+
+			<Directory "${SCC_DATA}/www">
+				Options -Indexes +FollowSymLinks +ExecCGI +MultiViews
+				AllowOverride AuthConfig
+				Order allow,deny
+				allow from all
+			</Directory>
+		_X_
+	else
+		cat <<-_X_
+			ScriptAliasMatch "^.*/([^/]*)/cgi-bin/scc-wrapper.cgi" "${SCC_WWW}/\$1/cgi-bin/scc-wrapper.cgi"
+
+			Alias ${WWW_PATH} ${SCC_DATA}/www
+
+			<Directory "${SCC_DATA}/www">
+				Options -Indexes +FollowSymLinks +ExecCGI +MultiViews
+				AllowOverride AuthConfig
+				AllowOverride AuthConfig
+				Require all granted
+			</Directory>
+		_X_
+	fi >${WWW_CONFIG}/scc.conf
+	chmod 644 ${WWW_CONFIG}/scc.conf
+	if [ -x /usr/sbin/a2enconf ]
+	then
+		/usr/sbin/a2enconf scc.conf	# Debian: symlink from conf-available to conf-enabled
+	fi
+	if [ -x /usr/sbin/a2enmod ]
+	then
+		/usr/sbin/a2enmod cgi.load 2>/dev/null
+	fi
+
+	# errors reported during this restart should not be caused by us, so ignore them.
+	${WWW_RESTART} restart 2>/dev/null
+
+	echo "${ProgName}: please make sure that your firewall allows traffic for the webserver"
+}
+
+# Remove the configuration; assumes check_variables has been executed.
+remove()
+{
+	if [ -x /usr/sbin/a2disconf ]
+	then
+		/usr/sbin/a2disconf scc.conf	# Debian: symlink from conf-available to conf-enabled
+	fi
+
+	rm -f ${WWW_CONFIG}/scc.conf
+
+	# errors reported during this restart should not be caused by us, so ignore them.
+	${WWW_RESTART} restart 2>/dev/null
+}
+
+SYNTAX="Syntax error, use: ${ProgName} [ -a|--activate | -f|--file <file> | -p|--print | -r|--remove ]"
+
+init
+defaults
+action="print"
+
+case "X${1:-}" in
+
+X-f|X--file)		new_cfg="${2}"
+			if [ ! -x "${new_cfg}" ]
+			then
+				echo "${ProgName}: cannot source file ${new_cfg}" >&2
+				exit 2
+			fi
+			init
+			if [ "${new_cfg}" = "${new_cfg##*/}" ]
+			then
+				. ./${new_cfg}
+			else
+				. ${new_cfg}
+			fi
+			;;
+
+X-a|X--activate)	action="activate";;
+X-p|X--print|X)		action="print";;
+X-r|X--remove)		action="remove";;
+*)			echo "${SYNTAX}" >&2
+			exit 1
+			;;
+esac
+
+case "${action}" in
+activate)	check_variables && activate
+		;;
+print)		check_variables
+		show
+		;;
+remove)		check_variables && remove
+		;;
+esac
+
+exit 0

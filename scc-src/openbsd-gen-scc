@@ -1,0 +1,171 @@
+#!/bin/sh
+
+# Production of scc for OpenBSD.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: openbsd-gen-scc 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# Program relocate is used to change this default hierarchy into OpenBSD practices:
+#
+#	install					pre/post install scripts
+#	software/usr/local			bin and man
+#	software/usr/local/share/doc/scc	doc
+#	software/etc/scc			conf and newconfig
+#	software/usr/local/share/scc		data
+#
+# After using this program, the directory contains the file:
+#
+#	scc-1.26.73.OpenBSD.tgz
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+VERSION=${1:-1.26.73}
+
+my_sha()
+{
+	exe="$(which sha256sum 2>/dev/null)"
+	if [ -x "${exe}" ]
+	then
+		"${exe}" "${1}" | awk '{ print $1 }'
+	else
+		exe="$(which sha256 2>/dev/null)"
+		if [ -x "${exe}" ]
+		then
+			"${exe}" "${1}" | awk '{ print $4 }'
+		fi
+	fi
+}
+
+# Use separate sub directory scc for doc to avoid conflicts with scc-srv concerning CHANGELOG and COPYRIGHT files.
+./relocate	--conf		/etc/scc			\
+		--data		/usr/local/share/scc/data	\
+		--sw_bin	/usr/local/bin			\
+		--sw_doc	/usr/local/share/doc/scc	\
+		--sw_man	/usr/local/man			\
+		--ign ${ProgName}
+
+# This script should leave the working directory empty: collect all file names
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >remove_list
+echo remove_list >>remove_list
+
+PKG=scc-${VERSION}.tgz
+
+# Correct for the cwd /usr/local prefix.
+mv software/usr/local/* .
+
+# Config files are installed under /usr/local/share/examples/scc
+# Via the @sample mechanism they are copied to /etc/scc
+# We cannot use the --conf option of relocate for this as all installed scripts should contain the final path /etc/scc.
+mkdir -p share/examples
+mv software/etc/scc share/examples
+
+{
+	echo "scc collects configuration data from Unix/Linux/*BSD systems."
+	echo "Changes in the configuration are detected and added to a logbook."
+	echo ""
+	echo "Homepage:"
+	echo "https://sourceforge.net/projects/sysconfcollect"
+} >+DESC
+
+LIST="+CONTENTS"
+PKG_FILES="+CONTENTS +DESC"
+
+cat >${LIST} <<-_X_
+	@name scc-${VERSION}
+	@arch *
+	@owner root
+	@group wheel
+	+DESC
+	@sha $(my_sha ./+DESC)
+	@size $(ls -l ./+DESC | awk '{ print $5 }')
+	@unexec-update /usr/local/bin/scc-log --preinstall
+	@cwd /usr/local
+_X_
+
+# We should not tar directories, so we collect the names of files in a file for use with tar.
+>file_list
+for f in $(find bin -type f; find man -type f; find share/doc -type f)
+do
+	echo ${f}
+	echo "@sha $(my_sha ${f})"
+	echo "@size $(ls -l ${f} | awk '{ print $5 }')"
+
+	echo ${f} >>file_list
+done >>${LIST}
+
+cat >>${LIST} <<-_X_
+	share/example/scc/
+	@sample /etc/scc/
+	share/example/scc/newconfig/
+	@sample /etc/scc/newconfig/
+	@sample /etc/scc/conf
+_X_
+
+# Config files get in the correct directory by means of the @sample mechanism.
+for f in $(find share/examples -type f)
+do
+	echo ${f}
+	echo "@sha $(my_sha ${f})"
+	echo "@size $(ls -l ${f} | awk '{ print $5 }')"
+	echo "@sample $(echo "${f}" | sed -e "s@.*share/examples@/etc@")"
+
+	echo ${f} >>file_list
+done >>${LIST}
+
+cat >>${LIST} <<-_X_
+	@exec /usr/local/bin/scc-log --postinstall
+	@unexec-delete rm -rf /usr/local/share/examples/scc /usr/local/share/doc/scc /usr/local/share/scc
+_X_
+
+tar --format=ustar -z -cf ${PKG} ${PKG_FILES} $(cat file_list)
+
+rm -rf bin doc etc man share software $(cat file_list) file_list $(cat remove_list) +* install
+
+exit 0

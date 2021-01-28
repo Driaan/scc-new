@@ -1,0 +1,571 @@
+#!/bin/sh
+
+# Shell script maintain realms for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-realm 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_WWW=${SCC_DATA}/www
+export SCC_TMP=/tmp
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+export LANG=C
+
+export HTTPD_CONTEXT="httpd_sys_script_exec_t"
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};		export PATH
+if [ -d /usr/xpg4/bin ]
+then
+	PATH="/usr/xpg4/bin:${PATH}"
+fi
+
+SYNTAX="Syntax error, use: ${ProgName} [ -q|--quick ] [ -i|--index ] [ -b|--backup <file> ]
+				-a|--add |
+				-A|--archive <target> [ -w|--web ] |
+				-d|--delete |
+				-l|--systems [ -f|--fqdn ] |
+				-r|--rename <new_name>
+				[
+					-F|--file <file> |
+					-L|--list <list> |
+					-R|--realm <cp_realm>
+				]
+				<realm>"
+
+export SYSTEMS=${SCC_TMP}/systems_$$
+export TMP_SYSTEMS=${SCC_TMP}/tmp_systems_$$
+
+trap 'rm -f ${SYSTEMS} ${TMP_SYSTEMS} 2>/dev/null' 0
+trap "exit 2" 1 2 3 15
+
+# Keep the "prelude", generate references to the realm directories and keep the "afterlude".
+generate_index_file()
+{
+	cd ${SCC_WWW}
+
+	sed -n -e '1,/SCC_REALM_START/p' index.html >index.html.tmp
+
+	for dir in *
+	do
+		if [ -d "${dir}/cgi-bin" -a -d "${dir}/custom" ]
+		then
+			echo "<LI><A HREF=\"${dir}/index.html\">${dir} index</A></LI>" >>index.html.tmp
+		fi
+	done
+
+	sed -n -e '/SCC_REALM_END/,$p' index.html >>index.html.tmp
+
+	>index.html
+	cat index.html.tmp >>index.html
+	rm -f index.html.tmp
+}
+
+# Remove hosts (from stdin) from realm
+remove_hosts()
+{
+	realm="${1}"
+
+	while read sys
+	do
+		for suffix in cur html log log.html smt.html
+		do
+			rm -f "${realm}/scc.${sys}.${suffix}" 2>/dev/null
+		done
+		# Cleanup the possibly saved snapshots and logfiles.
+		rm -f "${realm}/scc.${sys}".cur.* "${realm}/scc.${sys}".log.*
+	
+	done
+}
+
+MISSING_OPT_ARG="${ProgName}: Syntax error, missing argument for option:"
+add=0
+delete=0
+list=0
+fqdn=""
+quick=0
+archive_dir=""
+html_files=""
+new_realm_name=""
+>${SYSTEMS}
+while [ $# -ge 1 ]
+do
+	case "${1}" in
+	-A|--archive)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			archive_dir="${2}"
+			shift 2;;
+
+	-b|--backup)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			cd ${SCC_WWW}
+			tar cf "${2}" custom */custom */scc-summary.data 2>/dev/null
+			exit $?;;
+
+	-F|--file)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			if [ ! -f "${2}" ]
+			then
+				echo "${ProgName}: unable to access '${2}' for ${1} option" >&2
+				exit 2
+			fi
+			sed	-e "/^#/d" -e "/^[ 	]*$/d" <"${2}" >>${SYSTEMS}
+			shift 2;;
+
+	-R|--realm)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			if [ ! -d "${SCC_WWW}/${2}" ]
+			then
+				echo "${ProgName}: unable to access '${2}' for ${1} option" >&2
+				exit 2
+			fi
+			ls "${SCC_WWW}/${2}"		|
+			sed -n	-e "s@^scc\.@@"	\
+				-e "s@\.cur\$@@p" >>${SYSTEMS}
+			shift 2;;
+
+	-L|--list)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			echo "${2}" | tr "," "\012" >>${SYSTEMS}
+			shift 2;;
+
+	-a|--add)	add=1
+			shift 1;;
+
+	-d|--delete)	delete=1
+			shift 1;;
+
+	-f|--fqdn)	fqdn="yes"
+			shift 1;;
+
+	-l|--systems)	list=1
+			shift 1;;
+
+	-r|--rename)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			new_realm_name="${2}"
+			if [ -d "${new_realm_name}" -o -f "${new_realm_name}" ]
+			then
+				echo "${ProgName}: cannot rename to existing '${new_realm_name}'" >&2
+				exit 2
+			fi
+			if [ "${new_realm_name}" != "${new_realm_name##*/}" ]
+			then
+				echo "${ProgName}: realm name should not contain '/': ${new_realm_name}" >&2
+				exit 2
+			fi
+			shift 2;;
+
+	-i|--index)	generate_index_file
+			exit 0;;
+
+	-q|--quick)	quick=1
+			shift 1;;
+
+	-w|--web)	html_files="yes"		# add html files to archive
+			shift 1;;
+
+	-*)		echo "${SYNTAX}" >&2
+			exit 1;;
+
+	*)		break;;
+
+	esac
+done
+
+if [ $# -ne 1 ]
+then
+	echo "${SYNTAX}" >&2
+	exit 1
+fi
+
+realm="${1}"
+
+if [ ${add} -eq 0 -a ${delete} -eq 0 -a "${list}" -eq 0 -a -z "${archive_dir}" -a -z "${new_realm_name}" ]
+then
+	echo "${SYNTAX}" >&2		# No action specified at all
+	exit 1
+fi
+
+if [ "${realm}" != "${realm##*/}" ]
+then
+	echo "${ProgName}: realm name should not contain '/': ${realm}" >&2
+	exit 2
+fi
+
+if [ -s "${SYSTEMS}" ]
+then
+	sort -u "${SYSTEMS}" >${TMP_SYSTEMS}
+	mv -f ${TMP_SYSTEMS} ${SYSTEMS}
+fi
+
+cd ${SCC_WWW} 2>/dev/null
+if [ $? -ne 0 ]
+then
+	echo "${ProgName}: unable to access realm base ${SCC_WWW}" >&2
+	exit 2
+fi
+
+if [ ${list} -eq 1 ]
+then
+	if [ -f "${realm}/scc-summary.data" ]
+	then
+		# Format of the input is: "general_data":<host>:<model>:<os>:<release>:<last_day>:<last_time>:<domain>:<runtime>:<size>:<virtualization>
+		awk -F: '{
+				if ( length( fqdn ) && length( $8 ) )
+				{
+					print $2 "." $8
+				}
+				else
+				{
+					print $2
+				}
+			}' fqdn="${fqdn}" "${realm}/scc-summary.data"
+	else
+		echo "${ProgName}: cannot access realm '${realm}'" >&2
+		exit 2
+	fi
+	exit 0
+fi
+
+if [ "${new_realm_name}" ]
+then
+	if [ ! -d "${realm}" ]
+	then
+		echo "${ProgName}: cannot access realm '${realm}'" >&2
+		exit 2
+	fi
+	if [ ! -d "${realm}/custom" -o ! -d "${realm}/cgi-bin" ]
+	then
+		echo "${ProgName}: directory '${realm}' exists in ${SCC_WWW} and is not a realm" >&2
+		exit 2
+	fi
+
+ 	mv "${realm}" "${new_realm_name}"
+	${SCC_BIN}/scc-realm -i				# Regenerate global index with realm list
+	${SCC_BIN}/scc-update -f "${new_realm_name}"	# Regenerate summaries for new realm
+	exit 0
+fi
+
+if [ ${add} -eq 1 ]
+then
+	if [ -d "${realm}" ]
+	then
+		template="${realm}"
+	elif [ -d All ]
+	then
+		template=All
+	else
+		template=custom
+	fi
+
+	if [ ! -d "${template}" ]
+	then
+		echo "${ProgName}: template directory '${template}' does not exist" >&2
+		exit 2
+	fi
+
+	set dummy $(ls -ld "${template}")
+	case "${2}" in
+	?r??r??r??*)	umask 222;;
+	?r??r??-??*)	umask 227;;
+	?r??-??-??*)	umask 277;;
+	?r??-??r??*)	umask 272;;
+	*)		umask 077;;
+	esac
+	new_owner_group="${4}:${5}"
+
+	if [ ! -d "${realm}" ]
+	then
+		# The realm does not yet exist, create it!
+		mkdir -p "${realm}"/custom 2>/dev/null
+		if [ ! -d "${realm}"/custom ]
+		then
+			echo "${ProgName}: unable to create directory '<realm>'" >&2
+			exit 2
+		fi
+		mkdir -p "${realm}"/cgi-bin
+
+		# Start with the same access restrictions as for the All realm.
+		if [ -f All/.htaccess ]
+		then
+			cp -p All/.htaccess "${realm}"/.htaccess
+		fi
+
+		cp -p ${SCC_BIN}/scc-wrapper.cgi "${realm}"/cgi-bin
+		ln -s ../../custom/scc-logo.png "${realm}"/custom/scc-logo.png
+		ln -s ../../custom/scc-realm.conf "${realm}"/custom/scc-realm.conf
+		if [ -f custom/style.css ]
+		then
+			ln -s ../../custom/style.css "${realm}"/custom/style.css
+		fi
+		if [ -f custom/favicon.ico ]
+		then
+			ln -s ../../custom/favicon.ico "${realm}"/custom/favicon.ico
+		fi
+		if [ -f custom/scc-auto-realm.conf ]
+		then
+			cp custom/scc-auto-realm.conf "${realm}"/custom/
+		fi
+
+		touch "${realm}/scc.log_date.csv" "${realm}/scc.log_host.csv"
+		touch "${realm}/scc-auto-realm-config.html"
+		touch "${realm}/scc-rules-config.html"
+		touch "${realm}/scc-smt-config.html"
+
+		chown -R "${new_owner_group}" "${realm}"
+
+		# Update the main index.html with the new realm.
+		generate_index_file
+
+		if [ -x /usr/sbin/semanage -a -x /sbin/restorecon ]
+		then
+			sestatus="$(sestatus 2>/dev/null | awk '{ print $3 }')"
+			if [ "${sestatus}" != "disabled" ]
+			then
+				# Add the selinux settings to survive a file system relabel (suggested by Jouk Hettema).
+				/usr/sbin/semanage fcontext --add --type ${HTTPD_CONTEXT} "${SCC_WWW}/${realm}/cgi-bin(/.*)?"
+
+				# Activate the settings:
+				/sbin/restorecon -R ${SCC_WWW}
+			fi
+		else
+			# During an upgrade, the Selinux context is reset.
+			/usr/bin/chcon -R system_u:object_r:${HTTPD_CONTEXT}:s0	${SCC_WWW}/${realm}/cgi-bin	2>/dev/null
+		fi
+	elif [ ! -d "${realm}/custom" -o ! -d "${realm}/cgi-bin" ]
+	then
+		echo "${ProgName}: directory '${realm}' exists in ${SCC_WWW} and is not a realm" >&2
+		exit 2
+	fi
+
+	# Any systems to add to the (created) realm?
+	if [ -s "${SYSTEMS}" ]
+	then
+		if [ "${realm}" = "All" ]
+		then
+			echo "${ProgName}: cannot add systems to realm 'All'" >&2
+			exit 2
+		fi
+
+		cd "${realm}"
+		while read sys
+		do
+			for suffix in cur html log log.html
+			do
+				if [ ! -f ../All/scc.${sys}.${suffix} ]
+				then
+					echo "${ProgName}: file All/scc.${sys}.${suffix} not found" >&2
+					break
+				else
+					ln -s ../All/scc.${sys}.${suffix} .
+					chown "${new_owner_group}" ../All/scc.${sys}.${suffix}
+				fi
+			done
+		done <${SYSTEMS}
+		cd "${SCC_WWW}"
+	fi
+
+	if [ ${quick} -eq 0 ]
+	then
+		${SCC_BIN}/scc-update -f "${realm}"
+	fi
+fi
+
+if [ -n "${archive_dir}" ]
+then
+	if [ ! -d "${realm}" ]
+	then
+		echo "${ProgName}: cannot access realm '${realm}'" >&2
+		exit 2
+	fi
+	if [ ! -d "${archive_dir}" ]
+	then
+		mkdir -p "${archive_dir}"
+		if [ ! -d "${archive_dir}" ]
+		then
+			echo "${ProgName}: unable to create directory '${archive_dir}'" >&2
+			exit 2
+		fi
+		# Create a file in the archive and check access via the SCC_WWW hierarchy.
+		touch "${archive_dir}/_$$_"
+		if [ -f "${SCC_WWW}/${archive_dir##*/}/_$$_" ]
+		then
+			rm -rf "${archive_dir}"
+			echo "${ProgName}: do not use subdirectory of ${SCC_WWW} for archiving" >&2
+			exit 2
+		fi
+		rm -f "${archive_dir}/_$$_"
+	fi
+	if [ -d "${archive_dir}/cgi-bin" -a -d "${archive_dir}/custom" ]
+	then
+		echo "${ProgName}: do not archive in realm '${realm}'" >&2
+		exit 2
+	fi
+
+	# Determine the types of files to archive.
+	suffix_list="cur log"
+	if [ -n "${html_files}" ]
+	then
+		suffix_list="${suffix_list} html log.html"
+	fi
+
+	# Copy the files from the realm to the archive directory:
+	cd "${archive_dir}"
+	if [ -s "${SYSTEMS}" ]
+	then
+		cat "${SYSTEMS}"			# Specific systems to archive
+	else
+		# no specific systems, archive the entire realm
+		ls  "${SCC_WWW}/${realm}"	|
+		sed -n	-e "s@^scc\.@@"	\
+			-e "s@\.cur\$@@p"
+	fi							|
+	while read sys
+	do
+		for suffix in ${suffix_list}
+		do
+			file="scc.${sys}.${suffix}"
+			if [ ! -f "${SCC_WWW}/${realm}/${file}" ]
+			then
+				echo "${ProgName}: file '${realm}/${file}' not found" >&2
+			else
+				rm -f "${file}"
+				cp "${SCC_WWW}/${realm}/${file}" "${file}"
+			fi
+		done
+	done
+	cd "${SCC_WWW}"
+
+	if [ -n "${html_files}" ]
+	then
+		# scc-summary generates html-files with absolute paths: <argument of -d option>/<deepest subdirectory of argument>
+		# As we want relative paths, we use a specific argument for the -d option and use this 
+		# later to change the absolute paths to relative paths.
+		delete_pattern="ReMovE_ThIs"
+		scc-summary -d "/${delete_pattern}" "${archive_dir}"
+		mkdir -p "${archive_dir}"/custom
+		for file in "${realm}/custom/"*
+		do
+			cp "${file}" "${archive_dir}/custom"
+		done
+		for file in "${archive_dir}"/*.html
+		do
+			# No help files, just point from logo to the index.html:
+			sed	-e "s@/${delete_pattern}/${archive_dir}/@@"		\
+				-e "s@/${delete_pattern}/${archive_dir##*/}/@@"		\
+				-e "s@/${delete_pattern}/scc-help/.*\.html@index.html@"	\
+					<"${file}" >"${file}".tmp
+			mv -f "${file}".tmp "${file}"
+		done
+
+		# Files from scc-summary we do not need:
+		rm -f scc-summary.class scc-summary.data
+
+		# Minimal index.html indicating the snapshot and logbook summaries.
+		cat >"${archive_dir}"/index.html <<-_X_
+			<!DOCTYPE HTML>
+			<HTML lang="en">
+			<HEAD>
+				<LINK HREF="custom/style.css" REL="stylesheet" TYPE="text/css">
+				<LINK HREF="custom/favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+				<TITLE>Archive in ${archive_dir}</TITLE>
+			</HEAD>
+			<BODY>
+				<A HREF="scc-summary-sys.html">Snapshots</A>
+				<BR>
+				<A HREF="scc-log-index.html">Logbooks</A>
+			</BODY>
+			</HTML>
+
+_X_
+		# The owner of the base directory of the scc-srv website will be the user of the webserver.
+		set dummy $(ls -ld "${SCC_WWW}/All")
+		html_user="${4}"
+		chown -R "${html_user}" "${archive_dir}"
+	fi
+fi
+
+if [ ${delete} -eq 1 ]
+then
+	if [ ! -d "${realm}" ]
+	then
+		echo "${ProgName}: attempt to delete (from) non-existent realm '${realm}'" >&2
+		exit 2
+	fi
+
+	# Any systems to delete from the realm?
+	if [ -s "${SYSTEMS}" ]
+	then
+		if [ "${realm}" = "All" ]
+		then
+			# Removing host(s) from realm All requires removal from other realms also to avoid dangling symlinks
+			for r in *
+			do
+				if [ ! -h "${r}" -a -d "${r}" -a -f "${r}/custom/scc-logo.png" -a -x "${r}/cgi-bin/scc-wrapper.cgi" ]
+				then
+					remove_hosts "${r}" <"${SYSTEMS}"
+				fi
+			done
+		else
+			remove_hosts "${realm}" <"${SYSTEMS}"
+		fi
+
+		if [ ${quick} -eq 0 ]
+		then
+			${SCC_BIN}/scc-update -f "${realm}"
+		fi
+	else
+		# No systems to delete, delete the realm itself
+		if [ "${realm}" = "All" ]
+		then
+			echo "${ProgName}: cannot delete realm 'All'" >&2
+			exit 2
+		fi
+
+		if [ -x /usr/sbin/semanage -a -x /sbin/restorecon ]
+		then
+			sestatus="$(sestatus 2>/dev/null | awk '{ print $3 }')"
+			if [ "${sestatus}" != "disabled" ]
+			then
+				# Delete the selinux settings to survive a file system relabel (suggested by Jouk Hettema).
+				/usr/sbin/semanage fcontext --delete --type ${HTTPD_CONTEXT} "${SCC_WWW}/${realm}/cgi-bin(/.*)?" 2>/dev/null
+
+				# Activate the settings:
+				/sbin/restorecon -R ${SCC_WWW}
+			fi
+		fi
+
+		rm -rf "${realm}"
+
+		# Regenerate the main index.html file
+		generate_index_file
+	fi
+fi
+
+exit 0

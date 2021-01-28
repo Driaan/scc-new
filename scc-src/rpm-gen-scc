@@ -1,0 +1,209 @@
+#!/bin/sh
+
+# Generate RPM-file to install scc by means of rpm.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: rpm-gen-scc 6302 2019-12-23 12:37:36Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# After using this program, the directory contains one file:
+#
+#	scc-<release>.noarch.rpm
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+exe="$(which rpmbuild 2>/dev/null)"
+if [ ! -x "${exe}" ]
+then
+	echo "${ProgName}: cannot find rpmbuild" >&2
+	exit 2
+fi
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+VERSION=${1:-1.26.73}
+
+rpm_version=${VERSION}
+rpm_patch=1
+
+umask 077
+
+# Usually a spec file contains entries %prep, %build and %install.
+# As the build system of SCC already provides a final file and directory hierarchy, these steps are omitted from the spec file.
+# We will clean all files except the generated rpm, avoiding the use of the clean script in the spec file.
+
+cat << "_X_" >scc.spec
+# Specification File to generate scc-rpm.
+
+%define _topdir		%(pwd)
+%define _builddir	%(pwd)/software
+%define	_packager	siemkorteweg (at) users.sourceforge.net
+
+Summary: System Configuration Collector
+# The Summary: line should be expanded to about here -----^
+Name: scc
+Version: 1.26.73
+Release: 1
+Group: Applications/System
+License: GPLv2+
+URL: https://sourceforge.net/projects/sysconfcollect
+Source: https://sourceforge.net/projects/sysconfcollect/files/scc/scc-1.26.73/scc-1.26.73.src.tar.gz
+BuildArchitectures: noarch
+Vendor: Siem Korteweg
+
+%description
+System Configuration Collector collects configuration data in a snapshot.
+Detected changes in the configuration are added to a logbook.
+
+%pretrans
+[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --pretrans 2>/dev/null >/dev/null	# ignore syntax message from older versions
+# exit 5 means that scc-log recognized the new (>1.21.100) option and indicated an active instance
+# any other exit code means we indicate rpm to continue with the install
+[ $? -ne 5 ] && exit 0
+exit 1
+
+%pre
+[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --preinstall
+exit 0
+
+%post
+[ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --postinstall
+exit 0
+
+%preun
+[ "${1}" = "0" ] && [ -x /opt/scc/bin/scc-log ] && /opt/scc/bin/scc-log --preremove
+exit 0
+
+%files
+%defattr(755,root,root)
+%dir /etc/opt/scc/
+%dir /etc/opt/scc/conf
+%dir /etc/opt/scc/newconfig
+%defattr(444,root,root)
+%config /etc/opt/scc/newconfig/*
+%defattr(711,root,root)
+%dir /opt/scc/
+%dir /opt/scc/bin/
+%dir /opt/scc/bin/scc_modules
+%defattr(500,root,root)
+/opt/scc/bin/scc
+/opt/scc/bin/scc-*
+/opt/scc/bin/scc_modules/*
+%defattr(755,root,root)
+%dir /opt/scc/doc/
+%defattr(444,root,root)
+%doc /opt/scc/doc/*
+%defattr(755,root,root)
+%dir /opt/scc/man/
+%dir /opt/scc/man/man1/
+%defattr(444,root,root)
+%doc /opt/scc/man/man1/*
+%defattr(755,root,root)
+%dir /opt/scc/man/man4/
+%dir /opt/scc/man/man5/
+%defattr(444,root,root)
+%doc /opt/scc/man/man4/scc.4.gz
+%doc /opt/scc/man/man5/scc.5.gz
+%defattr(755,root,root)
+%dir /var/opt/scc/
+%dir /var/opt/scc/data/
+%dir /var/opt/scc/data/plugin_data
+%dir /var/opt/scc/data/transfer
+
+%changelog
+* Mon Dec 23 2019 - siemkorteweg (at) users.sourceforge.net - 1.26.35-1
+- Add README to install and refer to this file after install
+- Several additions of collected data
+* Tue May 14 2019 - siemkorteweg (at) users.sourceforge.net - 1.25.35-1
+- Add bats tests
+- Change copyright and support email address
+- Extend collected data and reduce unwanted changes in logbook
+* Thu May 10 2018 - siemkorteweg (at) users.sourceforge.net - 1.24.240-1
+- Use new packaging method to transfer data to scc-srv. This requires at least release 1.18 of scc-srv.
+- Busybox diff is fully supported.
+- Many (vSphere) enhancements have been added.
+* Sun Jun 25 2017 - siemkorteweg (at) users.sourceforge.net - 1.23.185-1
+- Option handling has changed for scc, scc-log and scc-collect (-e and -S options).
+- Many extensions of collected data have been implemented.
+- Code has been cleaned to avoid messages and warnings of shellcheck.
+* Tue Dec 1 2015 - siemkorteweg (at) users.sourceforge.net - 1.21.110-1
+- In the general scripts, the option handling has been refactored and several processing enhancements have been implemented.
+- The collection of data has been extended and changed to avoid unimportant changes in the logbook.
+* Thu Jun 18 2015 - siemkorteweg (at) users.sourceforge.net - 1.20.125-1
+- Bugfix to correctly eliminatie non-printable characters from snapshot.
+* Wed Jun 10 2015 - siemkorteweg (at) users.sourceforge.net - 1.20.122-1
+- The collected configuration data has been extended with many items and environments, for example docker, LXD/LXC and OpenStack.
+- The generic spec file supports an install hierarchy adhering to FHS.
+* Thu Oct 30 2014 - siemkorteweg (at) users.sourceforge.net -
+- The production of the SCC software packages has been changed to facilitate customization.
+- SCC now runs correctly in a docker container.
+* Fri Jun 24 2011 - siemkorteweg (at) users.sourceforge.net -
+- Changes to satisfy rpmlint for Fedora and OpenSuSe.
+_X_
+
+for man_page in software/opt/scc/man/man?/*
+do
+	gzip ${man_page}
+done
+
+# Keep using md5: http://madhuscribblings.blogspot.nl/2013/03/rpm-error-failed-dependencies.html
+mkdir -p RPMS/noarch
+rpmbuild	--buildroot $(pwd)/software			\
+		-bb						\
+		--define _binary_filedigest_algorithm=md5	\
+		--define _binary_payload=1			\
+		scc.spec >/dev/null 2>/dev/null
+
+mv RPMS/noarch/scc-${rpm_version}-${rpm_patch}.noarch.rpm .
+chmod 444 ./scc-${rpm_version}-${rpm_patch}.noarch.rpm
+
+rm -rf software RPMS scc.spec
+rm -rf install $(cat file_list)
+
+exit 0

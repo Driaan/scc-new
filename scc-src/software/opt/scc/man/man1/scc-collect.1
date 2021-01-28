@@ -1,0 +1,208 @@
+.TH scc-collect 1 "SCC" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-collect - collect system configuration in a SCC-snapshot
+
+.SH  RELEASE
+.nf
+
+	scc	1.26.73
+
+.SH  SYNOPSIS
+.nf
+
+	scc-collect [ -a|--alternate <arg> ]
+	            [ -e|--extra <user_mod> ] [ -S|--selection <mod> ]
+	            [ -h|--help ] [ -i|--interactive ]
+
+.SH  DESCRIPTION
+.nf
+
+	This program collects configuration data from a system and writes
+	it to stdout as a SCC-snapshot. A snapshot is a file containing 
+	configuration data. Each line of configuration-data is prefixed with
+	a classification. Refer to scc(4) for a detailed description of the
+	format of the contents of a snapshot.
+
+	Part of the classification is an indicator whether the data is fixed 
+	or variable. This makes it possible to compare snapshots and report 
+	any difference in the configuration data that was supposed to be fixed.
+
+	The entire process of creating a new snapshot, comparing it with the
+	previous one and adding the differences to a logbook is done by 
+	scc-log(1).
+
+	The collection of configuration data is performed by means of 
+	modules, located in directory /opt/scc/bin/scc_modules. There are two
+	kinds of modules: system and user. The distinction is made by means
+	of the names: scc_9999_s_<name> and scc_9999_u_<name>. Where 9999
+	stands for a four digit number used to determine the order of the
+	execution of the modules. The _s_ and _u_ indicate the system and
+	user modules. When a system and user module use the same four-digit
+	number, the system module is executed first. System modules are 
+	distributed by scc. Each site can extend the functionality of SCC
+	by adding user modules.
+
+	When a user module is executed and the -i option is not used, the
+	output of the module is stored in a file that is added to the snapshot
+	for later calls of this script (to avoid changes in the logbook).
+	User module data is kept in /var/opt/scc/data/plugin_data/<module>.
+	The data of the first run of a user module is ignored when generating
+	the logbook (refer to scc-cmp).
+
+	When a user module requires additional arguments, the -a option
+	can be used. Note that each started user module is started with
+	these arguments.
+
+	When the code of a user module changes, scc-collect automatically
+	ignores any changes in the scc-data of this module on the next run
+	of the user-module. To test module scc_1234_u_abc, use the
+	following steps:
+
+	   - run all system modules and the user-module to catch changes:
+	     scc -e scc_1234_u_abc
+	   - change the user-module
+	   - test the user-module:
+	     scc-collect -i -e scc_1234_u_abc
+	   - rerun the system modules and the user-module and store the output:
+	     scc -e scc_1234_u_abc
+
+	Note: when you change a user-module without running it, you will
+	loose all changes (for the module) that will be made before the 
+	next run.
+
+	scc-collect and its modules use sensible defaults to avoid that 
+	many systems require a configuration file. When the defaults are
+	insufficient, copy /etc/opt/scc/newconfig/scc-localize to
+	/etc/opt/scc/conf/scc-localize and uncomment the required variables.
+	When the --no_conf_sub_dir option was used with the relocate script,
+	the copy is not required.
+
+.SH  ARGUMENTS
+.nf
+
+	None.
+
+.SH  OPTIONS
+.nf
+
+	-a|--alternative <arg>  Start each user module with argument <arg>.
+	-e|--extra <user_mod>   Run extra user module <user_mod>. Refer to the DESCRIPTION
+	                        section for a detailed description of modules.
+	                        <user_mod> can contain shell filename wildcards.
+	                        To find the matching modules, the program searches
+	                        for *<user_mod>* when checking user modules.
+	-S|--selection <mod>    Run selected (system or user) module(s).
+	                        Where <mod> can contain shell filename wildcards.
+	-h|--help               Display the syntax and exit.
+	-i|--interactive        Run the program interactively. Without this option,
+	                        the program does not run when stdin is a tty. The keep
+	                        file is not renewed as this invocation is not from scc-log.
+
+.SH  EXAMPLES
+.nf
+
+	To execute all user modules, specify:
+
+		scc-collect -i -e "scc_????_u_".
+
+.SH  EXTERNAL INFLUENCES
+.nf
+
+	The HP Support Tools Manager (stm) is not called when the environment
+	variable SCC_IGNORE_STM is set. During install by SD-UX, it is set
+	to avoid running stm.
+
+	RPM is locked during installation of SCC, ignore rpm during installs
+	of SCC. The install-scripts set the environment variable 
+	SCC_INSTALL_PHASE.
+
+	Use the environment variable SCC_PROFILING in scc-localize to add
+	timing data to the snapshot. This enables you to locate possible performance 
+	bottlenecks. The default value activates profiling and performance
+	data is added to the snapshot.
+	The profile data has classification: "stats:profiling::"
+
+	Use environment variable SCC_DATA to specify an alternative directory
+	for the SCC data files. Should be an absolute path.
+
+	Use environment variable SCC_DEBUG to run module(s) with set -x enabled.
+	This works by invoking scc-collect itself and not when it is called
+	via scc-log.
+
+.SH  DIAGNOSTICS
+.nf
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-collect [ -a|--alternate <arg> ] [ -e|--extra <user_mod> ]
+	            [ -h|--help ] [ -i|--interactive ]
+	A syntax error has been detected and reported.
+
+	scc-collect: Syntax error, missing argument for option <option>
+	The indicated option is missing argument(s).
+
+	scc-collect: use -i option to run interactive
+	Avoid immediately running all collection scripts interactively.
+	
+	scc-collect: non-executable module: <module>
+	Correct the permissions of the module in the directory
+	/opt/scc/bin/scc_modules.
+
+	scc-collect: missing data for module: <module>
+	The file /var/opt/scc/data/plugin_data/<module> is missing.
+	Run the module with the -m option to generate the datafile.
+	
+.SH  RETURN VALUE
+.nf
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 syntax error
+		2 runtime error
+
+.SH  COPYRIGHT
+.nf
+
+	scc-collect is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH,
+	2019 Siem Korteweg.
+
+.SH  FILES
+.nf
+
+	/opt/scc/bin/scc_modules - directory with modules
+		scc_utils - utilities for modules
+		scc_[0-9][0-9][0-9][0-9]_s_*
+		system modules, always executed
+		scc_[0-9][0-9][0-9][0-9]_u_*
+	        user modules, executed via --extra option
+	/var/opt/scc/data/plugin_data/<module> - output of user module
+	/var/opt/scc/data - directory for data files
+		scc.<hostname>.cur - current SCC-snapshot
+		scc.<hostname>.html - current SCC-snapshot in HTML-format
+		scc.<hostname>.old - previous SCC-snapshot
+		scc.<hostname>.new - new (temporary) SCC-snapshot
+		scc.<hostname>.log - logbook for changes in SCC-snapshot
+		scc.<hostname>.log.html - logbook in HTML-format
+		scc.<hostname>.keep - data kept from a previous run
+
+	/etc/opt/scc/conf/scc_local_* - specification for module scc_0640_s_local
+
+.SH  SEE ALSO
+.nf
+
+	scc(1), scc-cmp(1), scc-collect(1), scc-log(1), scc-log2html(1),
+	scc-plugin(1), scc-snap2html(1), scc(4), scc(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6298 $
+

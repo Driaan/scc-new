@@ -1,0 +1,172 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc 4 "SCC" </TITLE>
+</HEAD><BODY>
+<H1>scc(4)</H1>
+<PRE>
+
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+       scc - file formats used by SCC
+
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+       scc  1.26.73
+
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+       SCC  stores  configuration data from systems in flat files called snap-
+       shots. All configuration data is structured  by	prefixing  it  with  a
+       fixed-variable  indication and with a hierarchical classification.  The
+       indication, all elements of the classification  and  the	 configuration
+       data are separated by colons.
+
+       By  comparing two consecutive snapshots after selecting the fixed data,
+       we are able to maintain a logbook of a system.  Lines  in  the  logbook
+       also consist of colon separated fields.
+
+
+</PRE>
+<H2> SNAPSHOTS</H2>
+<PRE>
+       The contents of the file /var/adm/cron/cron.allow are stored in a snap-
+       shot in the following way:
+
+	  fix:software:cron:configuration::/var/adm/cron/cron.allow:root
+	  fix:software:cron:configuration::/var/adm/cron/cron.allow:adm
+	  fix:software:cron:configuration::/var/adm/cron/cron.allow:uucp
+
+
+       After the indicator "fix" for fixed data, there is at least  one	 level
+       of  hierarchical classifications of the remaining data. The classifica-
+       tion and the data are separated by two consecutive colons.
+
+       When this file is altered (uucp should not run cron-jobs), the  missing
+       line is reported in the logbook.	 The reported data contains the change
+       itself (uucp)  and  the	classification	of  the	 altered  data	(soft-
+       ware:cron:configuration::/var/adm/cron/cron.allow:).  Without the clas-
+       sification SCC only could have reported that a user has been removed.
+
+
+</PRE>
+<H2> CLASSIFICATIONS</H2>
+<PRE>
+       For some items help info is generated, that is  prefixed	 with  "hlp:".
+       During  the collection process, statistics are generated, that are pre-
+       fixed with "stats:".
+
+       The output of scc-collect is checked by scc-log. Any line that does not
+       start  with  "fix:",  "var:",  "hlp:"  or  "stats:"  is	prefixed  with
+       "fix:messages::", indicating unexpected output from one of the commands
+       used  by scc-collect.  As the html-file groups data per classification,
+       the original snapshot has to be inspected to locate the commands	 caus-
+       ing this output.
+
+       The snapshot is converted to a hierarchical menu. Therefore the follow-
+       ing combination of classifications cannot be used:
+
+	  fix:software:myprogram::
+	  fix:software:myprogram:config::
+
+
+       The first classification results in html-code to access "myprogram"  as
+       an option in the sub-menu "software".  The second classification should
+       result in html-code to access a	sub-menu  "myprogram"  containing  the
+       option "config".
+
+       It  is  the  responsibility  of the developer to ensure a correct menu-
+       structure by using the correct classifications in  scc-collect  and  in
+       the plugins.  This kind of errors is detected and reported in the snap-
+       shot by scc-collect.
+
+
+</PRE>
+<H2> LOGBOOK</H2>
+<PRE>
+       Two consecutive snapshots are compared using diff. The resulting output
+       is altered to indicate the old and the new configuration. When the user
+       uucp is removed from cron.allow, the following data  is	added  to  the
+       logbook:
+
+	  2001-09-12:11.18.46:result::different
+	  2001-09-12:11.18.46:remark::
+	  2001-09-12:11.18.46:count::1
+	  2001-09-12:11.18.46:previous date::2001-09-08
+	  2001-09-12:11.18.46:previous time::07.37.46
+	  2001-09-12:11.18.46:data::old::software:cron:configuration::
+	    /var/adm/cron/cron.allow:uucp
+
+       For clarity the last line has been folded.
+
+       Again we see colon separated fields. The first fields indicate the date
+       and time of the change. Then there is a classification of the remaining
+       fields, separated by two, consecutive colons from the differences.  The
+       classification is limited to: result,  remark,  count,  previous	 date,
+       previous time and data.
+
+       After  reporting	 the result and some administrivia, finally the actual
+       change is reported. The keyword old indicates that this data  was  only
+       present	in  the	 old snapshot. So it has been removed from the current
+       configuration of the system.
+
+       When a client is configured (via scc-localize) to use context diff, the
+       "old:"  and  "new:"  types of data are extended with the "ctx:" type to
+       indicate the contect of the difference. These lines do  not  count  for
+       the numner of detected changes.
+
+
+</PRE>
+<H2> KEEP-FILE</H2>
+<PRE>
+       The  keep-file is used to store data that is obtained from running pro-
+       cesses, that might not be running during the next run of scc.  To avoid
+       changes	in  the	 logbook  any time such a process temporarily does not
+       run, the obtained data is stored in a keep-file.	 scc-collect uses  the
+       data  in this file when the processes are not running.  Examples of the
+       data in the keep-file are apache-configuration data and rpm-data.   The
+       latter  data should be recorded in the keep-file as the rpm-database is
+       locked during installs and rpm does not return  any  data  when	it  is
+       queried during an install.
+
+       The format of the keep-file looks like the format of the snapshots.  It
+       consists of lines with colon-separated fields.  Leading fields are used
+       to  identify the data.  The contents of the keep-file are determined by
+       scc-collect.
+
+       The keep-file is removed during	the  installation  of  SCC  to	enable
+       upgrades of the format of this file. This results in the "feature" that
+       SCC is unable to record its own upgrade on a RPM-system.
+
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+       SCC is free software under the terms of the GNU General Public License.
+       Copyright (C) 2001-2004 Open Challenge B.V., 2004-2005 OpenEyeT Profes-
+       sional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+       <A HREF="scc.html">scc(1)</A>, <A HREF="scc-cmp.html">scc-cmp(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+       <A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-4.html">scc(4)</A>, <A HREF="scc-5.html">scc(5)</A>
+
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+       $Revision: 6216 $
+
+
+
+</PRE>
+</BODY></HTML>

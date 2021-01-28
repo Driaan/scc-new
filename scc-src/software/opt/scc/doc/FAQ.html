@@ -1,0 +1,315 @@
+<!DOCTYPE HTML>
+<HTML lang="en">
+	<HEAD>
+		<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+		<META NAME="description"	CONTENT="Frequently asked questions concerning System Configuration Collector.">
+		<META NAME="keywords"		CONTENT="SCC, System Configuration Collector, system configuration, configuration, configuration collector, logbook, FAQ">
+
+		<STYLE TYPE="text/css">
+.filename	{
+	font-style: italic;
+}
+
+.emphasis	{
+	font-weight: bold;
+}
+
+.question	{
+	font-style: italic;
+	font-weight: bold;
+}
+
+P.header	{
+	font-weight: bold;
+	font-size: 110%;
+}
+		</STYLE>
+		<LINK HREF="favicon.ico" REL="shortcut icon" TYPE="image/x-icon">
+		<TITLE>SCC client (Linux/Unix/BSD) FAQ</TITLE>
+	</HEAD>
+	<BODY>
+<TABLE style="margin: 0px auto; width:80%;">
+<TR><TD style="text-align:left;">
+
+		<H1>System Configuration Collector FAQ</H1>
+<P>
+<SPAN class="question">For which version of scc is this FAQ?</SPAN>
+<BR>
+Release: 1.26.73
+<BR>
+Copyright (C) 2014-2018 QNH.
+<BR>
+Copyright (C) 2019 Siem Korteweg.
+<BR>
+<BR>
+
+<SPAN class="question">What to do when I find a bug?</SPAN>
+<BR>
+Check the SVN repository at <A HREF="https://sourceforge.net/p/sysconfcollect/code/HEAD/tree/scc/trunk/">sourceforge</A>
+to find out whether the bug already has been fixed in the latest code.
+When that is not the case, please refer to the <A HREF="http://sysconfcollect.sourceforge.net/support.html">support</A> page of the website.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the rpm install fail with message: rpm is for a different operating system?</SPAN>
+<BR>
+The rpm is produced on a Linux system and therefore rpm 'complains' on systems with other operating systems.
+Use the --ignoreos option to install the rpm on a system with a different OS.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the rpm install fail with message: missing dependency /bin/sh?</SPAN>
+<BR>
+The install scripts of the rpms require /bin/sh and on systems where this in a symbolic link created in the postinstall of an rpm,
+it is not provided and the install fails.
+Use the --nodeps option to install the rpm in this case.
+Please use the --requires option to verify the requirements of the scc rpms.
+<BR>
+<BR>
+
+<SPAN class="question">What is the format of a snapshot?</SPAN>
+<BR>
+A snapshot consists of collected data where each line is prefixed with a hierarchical classification 
+that indicates the kind of data and whether the data is fixed ('fix') or variable ('var').
+The elements of the classification are separated by a colon and end with two consecutive colons.
+The contents of the file /var/adm/cron/cron.allow is recorded in the snapshot as:
+<PRE>
+   fix:software:cron:configuration::/var/adm/cron/cron.allow:root
+   fix:software:cron:configuration::/var/adm/cron/cron.allow:adm
+   fix:software:cron:configuration::/var/adm/cron/cron.allow:uucp
+</PRE>
+
+<SPAN class="question">How can I customize SCC?</SPAN>
+<BR>
+Obtain the software from the sourceforge SVN <A HREF="https://sourceforge.net/p/sysconfcollect/code/HEAD/tree/scc/trunk/">repository</A> 
+and refer to the README file in the development environments.
+<BR>
+To collect the contents of additional files on individual systems, consult module scc_0640_s_local and follow the instructions in the comments.
+To extend the collection of these additional files on all systems, customize the code and generate your own version of SCC.
+<BR>
+<BR>
+
+<SPAN class="question">Why is my Linux-distro not recognized?</SPAN>
+<BR>
+The recognition of a Linux-distro is based on a list of 'known' version/release-files in the scc_utils module.
+Distro's are only recognized by SCC when their version-file (like <SPAN class="filename">/etc/redhat-release</SPAN>) is added to this list.
+Several distros are based on other distros like Debian or RedHat.
+When the version-file of a distro is not known in SCC and the version-file of the base distro is known, SCC indicates the base distro.
+When your distro is not recognized, please send us the full path and contents of its version file and it will be added to SCC.
+<BR>
+<BR>
+
+<SPAN class="question">What are the differences in the software for all supported operating systems?</SPAN>
+<BR>
+All clients use the same code base to simplify software maintenance.
+On a limited number of places the software checks the operating system it is running on to determine specific actions.
+The generic code checks the existence of all configuration files and commands before they are used.
+<BR>
+<BR>
+
+<SPAN class="question">How are snapshots compared?</SPAN>
+<BR>
+To compare two snapshots (current and previous run), all data whose classification start with 'fix' is extracted into two temporary files.
+These two files are compared by means of diff and the output is processed to indicate to which snapshot (old or new) each reported line belongs.
+The differences are added to the logbook.
+<BR>
+<BR>
+
+<SPAN class="question">Why does the data from a module appear twice in the snapshot?</SPAN>
+<BR>
+This happens when you are modifying a module and kept a copy of the original module by appending some string to its name.
+The name of this file is considered a valid module name by scc-collect and it will execute the module, resulting in data from the original and modified module.
+To keep a copy of an original module, you better prefix the name with some string.
+<BR>
+<BR>
+
+<SPAN class="question">At what frequency should SCC run on the clients?</SPAN>
+<BR>
+In our experience SCC can easily run on a daily base.
+When you want to specifically mark certain changes caused by maintenance to be executed, you can run SCC prior and after your maintenance.
+With the latter run, you can specify the -c option to add a remark to the logbook.
+<BR>
+<BR>
+
+<SPAN class="question">How do I "randomize" running scc on many clients?</SPAN>
+<BR>
+When the -d or --delay option with scc or scc-pull is used, the software waits for a random number of seconds before collecting configuration data.
+The argument of this option specifies the maximum number of seconds to wait.
+<BR>
+<BR>
+
+<SPAN class="question">What does the message concerning rpm in first run mean?</SPAN>
+<BR>
+When SCC is installed by rpm, no rpm-data can be retrieved.
+The database of RPM is locked during installation and during the pre- and post-install this database cannot be queried.
+To avoid a list of changes on the second run of SCC, all rpm-changes are ignored when the previous snapshot does not contain any rpm-data and the new snapshot does contain rpm-data.
+This means that the (first) install of SCC by means of rpm is not recorded as a change in the logbook.
+<BR>
+<BR>
+
+<SPAN class="question">Why is my scc client hanging?</SPAN>
+<BR>
+Check the process hierarchy with the command "UNIX95= ps -Hef" and look for the scc processes.
+You could also check the most recent file in <SPAN class="filename">/tmp</SPAN> to determine the collected data at the moment of the hang.
+<BR>
+<BR>
+
+<SPAN class="question">Why does module x take much time?</SPAN>
+<BR>
+Run module X in debug mode via 
+<pre>
+export SCC_DEBUG=1; /opt/scc/bin/scc-collect -i -S X
+</pre>
+and notice when the data on stdout stalls.
+<BR>
+<BR>
+
+<SPAN class="question">Why does apache config data 'disappear' from the snapshot?</SPAN>
+<BR>
+Some data is hard to determine. 
+For example, Apache is installed in many ways/directories.
+To avoid a scan of the entire file system during each run of SCC, the install directory of Apache is determined from the process list.
+When Apache is down during a run of SCC, the install directory cannot determined and the Apache configuration will be missing in the snapshot.
+This results in differences to be reported in the logbook.
+To avoid this, the install directory of Apache is kept in a separate keep-file for the next runs of SCC.
+When Apache is down, SCC uses the Apache directory from the keep-file to determine the configuration.
+This does not go on indefinitely as the keepfile also contains the number of remaining runs that the data is kept.
+When this reaches 0, the corresponding data is removed from the keep-file and will no longer be part of the snapshot (until Apache is running during a run of SCC).
+<BR>
+<BR>
+
+<SPAN class="question">How is data collected?</SPAN>
+<BR>
+Data is collected by issuing system commands and by copying the contents of configuration files.
+All collected data is examined for variable and fixed data.
+All data is also extended with a hierarchical classification to indicate the origin of the data.
+<BR>
+<BR>
+
+<SPAN class="question">Can the collection be configured?</SPAN>
+<BR>
+The software uses sensible defaults to avoid that many systems require a manually customized configuration file.
+When the defaults are insufficient, copy the file <SPAN class="filename">/etc/opt/scc/newconfig/scc-localize</SPAN>
+to <SPAN class="filename">/etc/opt/scc/conf/scc-localize</SPAN> and uncomment the required variables.
+<BR>
+<BR>
+When scc cannot find required programs because they are installed in directories that are not part of
+our default PATH, change the contents of the variable SCC_PATH in this file (after copying the file).
+<BR>
+<BR>
+
+<SPAN class="question">Can SCC run without root permissions?</SPAN>
+<BR>
+Running in this mode will reduce the amount of data retrieved and requires non-default (non-system) directories for the software.
+Install for non-root users is only available in source package format.
+To install and run SCC in user mode, unpack the source distribution file, 
+use the relocation script to change the install and data directories of the software.
+Then generate the source package by means of src-gen-src and distribute and install the package (untar and call scc-install).
+<BR>
+<BR>
+
+<SPAN class="question">What do these 'messages' in the snapshot mean?</SPAN>
+<BR>
+An example is:
+<PRE>
+ messages::inspect scc.&lt;system&gt;.cur to determine cause of messages in system/user-modules
+ fix:messages::not enough fields in classification: fix:::/dev/mem: mmap: Bad address
+</PRE>
+SCC snapshots consist of lines of data preceded by their hierarchical classification.
+Most lines are produced by calling a program and adding the classification with sed.
+When the program produces data on stderr, this data is not handled by sed and therefore does not have the desired format.
+All data in the snapshot is checked for the classification and when it is missing, the first message is placed at the start of the snapshot and the stderr data is extended with the classification "fix:messages::" to match the required format.
+<BR>
+When this occurs, you can examine the code of the corresponding module and find out which program causes the stderr.
+This can either point to a wrong configuration on your system or on a defect in SCC.
+Please let us know when the latter is the case and we will fix the module.
+<BR>
+<BR>
+In some cases it can be difficult to locate the cause of a general message like 'file not found'. 
+In that case you can run module X in debug mode via:
+<pre>
+export SCC_DEBUG=1; /opt/scc/bin/scc-collect -i -S X &gt;mod.log
+</pre>
+<BR>
+<BR>
+
+<SPAN class="question">Is it possible to reduce the size of big snapshots?</SPAN>
+<BR>
+Copy file <SPAN class="filename">/etc/opt/scc/newconfig/scc-split.conf</SPAN> to <SPAN class="filename">/etc/opt/scc/conf/scc-split.conf</SPAN> and edit it.
+This will split the snapshot in parts based on the classifications of data.
+The file contains examples to place the data for each Oracle SID in a seperate snapshot (and logbook).
+The data from the additional "virtual" hosts is also sent to scc-srv.
+<BR>
+<BR>
+
+<SPAN class="question">What does it mean that there are too many changes?</SPAN>
+<BR>
+When scc-cmp detects that a new and an old snapshot differ too much in size or when there are more than 20.000 changes in the current run,
+it is likely that some error occurred during the collection of data.
+To avoid massive amounts of changes in the logbook, the following remark is added to the logbook:
+<PRE>
+Too many changes; reduced to # of lines per classification
+</PRE>
+and the number of changes per classification are recorded in the logbook.
+This enables you to find out which module caused the possible hiccup in the collection of the data.
+Note that correcting the hiccup will cause this situation to happen again as the next snapshot will contain much more data than the old snapshot.
+<BR>
+<BR>
+
+<SPAN class="question">Why is the logbook empty?</SPAN>
+<BR>
+On certain (small) distros program diff is missing and no differences can be determined and an empty logbook-file is produced.
+When this is transferred to the server-part of SCC, the newly arrived snapshot is compared with the one already present (provided scc-srv runs on a system with diff present).
+Note that is this case you have to send the data to the server after each run of SCC or some differences are lost.
+<BR>
+<BR>
+
+<SPAN class="question">How to upgrade SCC on systems without diff?</SPAN>
+<BR>
+Execute the following steps to upgrade SCC on systems without diff:
+
+<PRE>
+   - run scc and transfer data to scc-srv
+   - upgrade scc
+   - run scc with -n option to avoid data collection, but with transfer options
+</PRE>
+
+<SPAN class="question">Why does the logbook contain many changes after changing the order of the modules?</SPAN>
+<BR>
+When the order (number part of the name) changes, RPM will only remove the old name after the postinstall.
+This means that the postinstall run of SCC runs both the old and the new name and thus collect the corresponding data twice.
+The next run of SCC only runs the new module and the data from the old module is reported missing.
+You can correct this by running scc-log --reset after the install.
+Or the order of the modules should not be changed when customizing the code.
+<BR>
+<BR>
+
+<SPAN class="question">How can I transfer SCC data from clients to server?</SPAN>
+<BR>
+Basically there are three setups: push, pull and two-step.
+Refer to manual page scc(5) for more details.
+<BR>
+<BR>
+
+<SPAN class="question">Can you extend the collection of data by SCC?</SPAN>
+<BR>
+To extend the collection, we need the following items:
+<UL>
+<LI>full path of the command or configuration file</LI>
+<LI>options and arguments of the command</LI>
+<LI>comment character of the configuration file</LI>
+<LI>classification of the data in the snapshot (fix:hardware:XXX:: or fix:software:XXX::)</LI>
+<LI>indication whether data should be sorted to avoid changes in the logbook</LI>
+<LI>indication whether data should be tagged variable to avoid changes in the logbook</LI>
+</UL>
+<BR>
+<BR>
+
+<SPAN class="question">How do I remove scc from a system?</SPAN>
+<BR>
+Remove scc software, configuration and data via the delete/remove option from the package manager or (in case of source install) issue command "rm -rf /opt/scc /etc/opt/scc" /var/opt/scc.
+
+</TD></TR>
+</TABLE>
+</BODY>
+</HTML>

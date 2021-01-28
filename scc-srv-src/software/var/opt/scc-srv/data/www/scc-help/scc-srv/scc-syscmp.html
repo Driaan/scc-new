@@ -1,0 +1,148 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-syscmp</TITLE></HEAD><BODY>
+<H1>scc-syscmp(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-syscmp - compare parts of SCC snapshots
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-srv	1.19.44
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-syscmp [ -l|--log &lt;log&gt; ] &lt;class&gt; &lt;snapshot-1&gt; &lt;snapshot-2&gt;
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	According to a classfile, this program extracts a part of two 
+	snapshots and compares the data. This program uses scc-baseline
+	to extract data from the snapshots according to the classfile.
+	Each line of the resulting output is prefixed with the name of the
+	corresponding system.
+
+	Refer to the manual page (section 4) of scc for a detailed description of
+	the format of snapshots and class-files. 
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;class&gt;         classification or file with classifications to be extracted
+	&lt;snapshot-1&gt;    snapshot to be compared
+	&lt;snapshot-2&gt;    snapshot to be compared
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	-l|--log &lt;log&gt;  log sizes of extracted class-data from both snapshots
+	                in file &lt;log&gt;.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following message to stderr:
+
+	Syntax error, use: scc-syscmp [ -l|--log &lt;log&gt; ] &lt;class&gt;     \
+	        &lt;snapshot-1&gt; &lt;snapshot-2&gt;
+	A syntax error has been detected and reported.
+
+	scc-syscmp: Syntax error, missing argument for option: &lt;option&gt;
+	The argument for &lt;option&gt; is missing.
+
+	scc-syscmp: hostnames not found in snapshots
+	The program uses the filenames of the snapshots to determine the
+	hostnames of the systems.
+
+	scc-syscmp: non-existing or empty file(s): &lt;snapshot-1&gt; &lt;snapshot-2&gt;
+	The snapshots cannot be found or are empty.
+
+</PRE>
+<H2> EXAMPLES</H2>
+<PRE>
+
+	To compare the boot-configuration of two HP-UX workstations, create
+	a class-file (named class_boot):
+
+		:boot:
+
+	Use the following command to compare the snapshots of the systems
+	c011 and c012:
+
+		scc-syscmp ./class_boot ./scc.c011.cur ./scc.c012.cur
+
+	We received the following output:
+
+c011:boot:config:/stand/bootconf::l /dev/dsk/c0t5d0
+c012:boot:config:/stand/bootconf::l  /dev/dsk/c0t5d0
+c012:boot:info::lvlnboot:       /dev/dsk/c0t6d0 (2/0/1.6.0)
+c012:boot:rc-file:/etc/rc.config.d/Dmiconfig::START_DMI=1
+c012:boot:rc-file:/etc/rc.config.d/Dmiconfig::DMI_IGNORECONFIGURECHECK=0
+c011:boot:rc-file:/etc/rc.config.d/namesvrs::NIS_CLIENT="1"
+c011:boot:rc-file:/etc/rc.config.d/namesvrs::NIS_DOMAIN="nis010"
+c011:boot:rc-file:/etc/rc.config.d/namesvrs::WAIT_FOR_NIS_SERVER="FALSE"
+c012:boot:rc-file:/etc/rc.config.d/namesvrs::NIS_CLIENT=1
+c012:boot:rc-file:/etc/rc.config.d/namesvrs::NIS_DOMAIN=nis010
+c012:boot:rc-file:/etc/rc.config.d/namesvrs::WAIT_FOR_NIS_SERVER=FALSE
+c012:boot:rc-file:/etc/rc.config.d/scrdaemon::SCR_DAEMON=1
+c011:boot:rc-file:/etc/rc.config.d/xfs::RUN_X_FONT_SERVER=1
+c012:boot:rc-file:/etc/rc.config.d/xfs::RUN_X_FONT_SERVER=0
+c012:boot:run level:/sbin/rc1.d::K395Dmisp -&gt; /sbin/init.d/Dmisp
+c012:boot:run level:/sbin/rc2.d::S605Dmisp -&gt; /sbin/init.d/Dmisp
+c011:boot:stable-storage::Autoboot is ON (enabled)
+c012:boot:stable-storage::Autoboot is OFF (disabled)
+
+	Apparently the two systems are not identical. Some differences involve
+	additional spaces or quotes, while others indicate different behavior
+	of the systems. It is up to the administrators to decide whether these
+	differences are desirable or indicate a lack of consistent 
+	administration.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-syscmp is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+	<A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+	<A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+	<A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6217 $
+
+</PRE>
+</BODY></HTML>

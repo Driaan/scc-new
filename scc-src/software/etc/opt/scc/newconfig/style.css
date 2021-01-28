@@ -1,0 +1,69 @@
+/*
+ * Default style sheet for scc.
+ *
+ * SCC-release:	1.26.73
+ * ID:		$Id: style.css 6181 2018-05-27 15:20:12Z siemkorteweg $
+ */
+
+/*
+ * The following tag is used to specify the color of variable data in the snapshot.
+ * In previous versions the variable SCC_VAR_COLOR was used for this purpose.
+ */
+.scc_var {
+	color: purple;
+}
+
+/*
+ * The following tags are used to specify the colors of the lines with the changed entries in log file.
+ */
+.new {
+	color: blue;
+}
+
+.old {
+	color: red;
+}
+
+.ctx {
+	color: green;
+}
+
+table.SCC {
+	border-spacing: 0px;
+	background: #FFC0C0;
+	border: 0.1em solid black; 
+}
+table.SCC th {
+	text-align: left;
+	font-weight: normal;
+	padding: 0.1em 0.5em;
+}
+table.SCC td {
+	border: 0px solid black;
+	padding: 0.1em 0.5em;
+}
+/* Table heading: full red	*/
+table.SCC thead th {
+	text-align: center;
+	font-weight: bold;
+	background-color: red;
+	border-bottom: 1px solid black;
+	color: white;
+}
+
+/* Even rows, not emphasised (default background color of table)	*/
+
+/* Even rows, emphasised	*/
+table.SCC tr.Even_Emp {
+	background: #FFA0A0;
+} 
+
+/* Odd rows, not emphasised	*/
+table.SCC tr.Odd {
+	background: #FF8080;
+} 
+
+/* Odd rows, emphasised	*/
+table.SCC tr.Odd_Emp {
+	background: #FF6060;
+} 

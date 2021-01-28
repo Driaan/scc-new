@@ -1,0 +1,116 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD>
+	<META HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
+	<TITLE>Manpage of .TH scc-cmp 1 "SCC" </TITLE>
+</HEAD><BODY>
+<H1>scc-cmp(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-cmp - compare two SCC-snapshots
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc	1.25.35
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-cmp &lt;prev&gt; &lt;new&gt; &lt;remark&gt; &lt;ignore&gt;
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program compares the current and new snapshots, ignoring some
+	data by means of the sed-expressions &lt;ignore&gt;. The results of the
+	compare are written to stdout.
+
+	Do not signal all changes when new and previous snapshots are less
+	than 20% of each other or when the number of differences execeeds 20.000
+	lines. Reduce the differences to the count of all classes of the
+	differences.
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	&lt;prev&gt;          The snapshot of the previous run. Absence of this file
+	                indicates a (re)start.
+	&lt;new&gt;           The snapshot of the current run.
+	&lt;remark&gt;        Remark to be added to logbook.
+	&lt;ignore&gt;        File containing sed-statements ignoring certain data.
+	                An empty value is replaced by /dev/null.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	None.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-cmp &lt;prev&gt; &lt;new&gt; &lt;remark&gt; &lt;ignore&gt;
+	A syntax error has been detected and reported.
+
+	scc-cmp: cannot access file &lt;new&gt;
+	The new snapshot cannot be found.
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	This program is part of the SCC client, but is also used by the
+	SCC server.
+
+	This program will not work correctly when diff is absent. The SCC client checks
+	for this dependency before calling this program, the SCC server software not.
+
+	Use environment variable SCC_DATA to specify an alternative directory
+	for the SCC data files. Should be an absolute path.
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-cmp is free software under the terms of the GNU General Public
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH,
+	2019 Siem Korteweg.
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc.html">scc(1)</A>, <A HREF="scc-cmp.html">scc-cmp(1)</A>, <A HREF="scc-collect.html">scc-collect(1)</A>, <A HREF="scc-log.html">scc-log(1)</A>, <A HREF="scc-log2html.html">scc-log2html(1)</A>,
+	<A HREF="scc-plugin.html">scc-plugin(1)</A>, <A HREF="scc-snap2html.html">scc-snap2html(1)</A>, <A HREF="scc-4.html">scc(4)</A>, <A HREF="scc-5.html">scc(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6232 $
+
+</PRE>
+</BODY></HTML>

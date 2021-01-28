@@ -1,0 +1,2025 @@
+#!/bin/sh
+
+# Shell script to collect network data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0500_s_network 6301 2019-12-22 21:18:52Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+BSD=""
+if [ "${OS_NAME}" = "FreeBSD" -o "${OS_NAME}" = "NetBSD" -o "${OS_NAME}" = "OpenBSD" -o "${OS_NAME}" = "DragonFly" ]
+then
+	BSD="yes"
+fi
+
+# Get the alphabetic list of interfaces, output is:
+#
+# <ifc_name> <ifc_label> temporary/permanent
+#
+# The label is meant to avoid class conflicts for bond0 and bond0:0 (indicated by Michael Figiel).
+# Temporary (virtualization) interfaces are marked "var", permanent interfaces "fix".
+# Dummy network interfaces are ignored.
+#
+get_all_nw_interfaces()
+{
+	if [ -x /sbin/ip ]
+	then
+		# Translate into ifconfig output format.
+		/sbin/ip a	|
+		sed -e 's/^[0-9][0-9]*: *//'
+	elif [ -x /usr/sbin/ipadm ]
+	then
+		/usr/sbin/ipadm show-if -p -o IFNAME
+	else
+		ifconfig -a 2>/dev/null
+	fi									|
+	awk '/^[a-z]/ { print $1 }'						|
+	sed	-e 's/:$//'		\
+		-e 's/@bond.*//'						|
+	awk 	'		{
+					prefix = "fix"
+					label = $1; sub( ":", "_", label )
+				}
+		/docker/	{ prefix = "var" }
+		/dummy/		{ next }
+		/ppp/		{ prefix = "var" }
+		/tun/		{ prefix = "var" }
+		/vnet/		{ prefix = "var" }
+		/vnic/		{ prefix = "var" }
+		/veth/		{ prefix = "var" }
+				{ print $1, label, prefix }'			|
+	sort -u
+}
+
+# Get the configuration data of an network interface.
+# Argument is name of network interface, output is produced by /sbin/ip or ifconfig.
+get_ifc_data()
+{
+	if [ -x /sbin/ip ]
+	then
+		# Translate into ifconfig output format.
+		/sbin/ip addr show ${1:-foo} 2>/dev/null	|
+		sed -e 's/^[0-9][0-9]*: *//'
+	else
+		ifconfig ${1:-foo} 2>/dev/null
+	fi								|
+	sed	-e '/ [RT]X [bp]/d'	\
+		-e '/packets/d'		\
+		-e '/collisions/d'
+
+}
+
+# Get the DHCP lease data of an interface.
+# Arguments are the lease file and the name of the network interface, output are the options of the most recent lease.
+get_dhcp_lease_data()
+{
+	if [ -f "${1}" ]
+	then
+		# New leases are appended, collect the options of the most recent lease.
+		# In an LXD container the renewal and rebinding times were variable, ignore them.
+		awk	'/interface/	{ if ( $2 != match_ifc ) skip = 1 }
+			/^lease/	{ option_cnt = 0; next }
+			/option/	{ if ( skip == 0 ) option[ option_cnt++ ] = $0; next }
+			END		{
+						for ( i = 0; i < option_cnt; i++ )
+						{
+							print option[ i ]
+						}
+					}' <"${1}" match_ifc="\"${2:-}\";" 2>/dev/null	|
+		sed	-e '/renewal-time/d'	\
+			-e '/rebinding-time/d'						|
+		sort
+	fi
+}
+
+if [ -d /etc/avahi ]
+then
+	scc_check_file /etc/avahi/hosts "fix:network:avahi:/etc/avahi/hosts::" "#"
+	scc_check_file /etc/avahi/avahi-daemon.conf "fix:network:avahi:/etc/avahi/avahi-daemon.conf::" "#"
+	for s in /etc/avahi/services/*
+	do
+		scc_check_file "${s}" "fix:network:avahi:${s}::" "#"
+	done
+fi
+
+if [ -x /sbin/ifenslave ]
+then
+	busybox_check /sbin/ifenslave
+	if [ $? -eq 0 ]
+	then
+		/sbin/ifenslave -a 2>/dev/null				|
+		sed	-e "s/^/fix:network:bonding::/"		\
+			-e 's/^fix:\(.* on docker\)/var:\1/'	\
+			-e 's/^fix:\(.*SIOCGIFADDR\)/var:\1/'
+	fi
+fi
+
+if [ -x /usr/bin/what -a -f /usr/conf/lib/liblan.a ]
+then
+	what /usr/conf/lib/liblan.a					|
+	sed -e 's@^@fix:network:Core-lan /usr/conf/lib/liblan.a::@'
+fi
+
+for file in	\
+		/etc/conf.d/dhcpd		\
+		/etc/dhclient.conf		\
+		/etc/dhcpd.conf			\
+		/etc/dhcptab			\
+		/etc/dhcpd.interfaces		\
+		/etc/dhcpcd.ini			\
+		/etc/dhcprd.cnf			\
+		/etc/dhcpsd.cnf			\
+		/etc/dhcp/inittab		\
+		/etc/dhcp/*.conf		\
+		/etc/dhcpc/config
+do
+	scc_check_file "${file}" "fix:network:dhcp:${file}::" "#"
+done
+
+for dhcp_master_file in /etc/dhcpd.conf /etc/dhcp/dhcpd.conf
+do
+	if [ -f "${dhcp_master_file}" ]
+	then
+		# Indicated by Harry van Wiggen. Example of incude statement:
+		#include "/etc/dhcpd.master";
+		sed -n -e 's/^[ 	]*include//p' "${dhcp_master_file}"	|
+		sed	-e 's/"[ 	]*;[ 	]*$//'	\
+			-e 's/^[ 	]*"//'
+	fi
+done			|
+sort -u			|
+while read file
+do
+	scc_check_file "${file}" "fix:network:dhcp:${file}::" "#"
+done
+
+for file in	\
+		/etc/dnsmasq.conf		\
+		/etc/dnsmasq.d/*		\
+		/etc/resolv.dnsmasq		\
+		/etc/resolv.dmasq		\
+		/usr/local/etc/dnsmasq.conf
+do
+	scc_check_file "${file}" "fix:network:dns:dnsmasq:${file}::" "#"
+done
+if [ -f /etc/dnsmasq.conf ]
+then
+	sed -n -e 's/^resolv_file.*=[ 	]*//p' /etc/dnsmasq.conf	|
+	while read file
+	do
+		scc_check_file "${file}" "fix:network:dns:dnsmasq:${file}::" "#"
+	done
+fi
+
+# Tag the output of nslookup as variable. The nameserver is fixed data in the resolv.conf
+# and the ip-address of the host is recorded elsewhere. This avoids changes for a host using dhcp.
+ns=$(which nslookup 2>/dev/null)
+if [ -x "${ns}" ]
+then
+	nslookup "$(hostname)" 2>/dev/null			|
+	sed	-e '/^[ 	]*$/d'			\
+		-e '/authoritative answer/d'		\
+		-e 's/^/var:network:dns:nslookup::/'
+fi
+ns=$(which dig 2>/dev/null)
+if [ -x "${ns}" ]
+then
+	dig "${hostname}" +short 2>/dev/null	|
+	sed -e 's/^/var:network:dns:dig::/'
+fi
+
+if [ -d /etc/tinydns ]
+then
+	root_file=/etc/tinydns/env/ROOT
+	scc_check_file "${root_file}" "fix:network:dns:tinydns ${root_file}::" "#"
+	root_dir="$(cat "${root_file}" 2>/dev/null)"
+	if [ -d "${root_dir}" ]
+	then
+		for file in dhcp.conf static.conf
+		do
+			scc_check_file "${root_dir}/${file}" "fix:network:dns:tinydns ${root_dir}/${file}::" "#"
+		done
+	fi
+fi
+
+# When you change these labels, also change them in the named user-module!
+named_class="fix:network:dns:named"
+
+# Check the list of processes for a specific config file of named.
+# When the process is found without a file spec, the default file is used.
+awk '/s*bin\/[n]amed/	{
+				dir=""
+				file=""
+				# Look for the options specifying the directory and file.
+				for ( i = 1; i <= NF; i++ )
+				{
+					if ( $i ~ "^-t$" )
+					{
+						i++
+						dir = $i
+					}
+					if ( $i ~ "^-[bc]$" )
+					{
+						i++
+						file = $i
+					}
+				}
+				if ( file ~ "^/" )	# absolute path?
+				{
+					path = file
+				}
+				else
+				{
+					path = sprintf( "%s/%s", dir, file )
+				}
+
+				if ( length( path ) > 1 )
+				{
+					print path
+				}
+			}' ${PROC_FILE} >${TMP1_FILE}
+
+if [ -s "${TMP1_FILE}" ]
+then
+	echo "${named_class}:general::status:	active"
+fi
+
+if [ ! -s "${TMP1_FILE}" ]
+then
+	# Look for the default location:
+	if [ -f /etc/named.conf ]
+	then
+		echo /etc/named.conf
+	elif [ -f /etc/named/named.conf ]
+	then
+		echo /etc/named/named.conf
+	fi >>"${TMP1_FILE}"
+fi
+
+scc_keep "network:named" 5 <${TMP1_FILE}		|
+while read named_conf
+do
+	if [ -d "${named_conf}" ]		# Only -t option with named?
+	then
+		for file in /var/named/named.conf /etc/named.conf /var/named/etc/named.conf
+		do
+			if [ -f "${named_conf}/${file}" ]
+			then
+				named_conf="$( echo "${named_conf}/${file}" | sed -e 's@//@/@g')"
+				break
+			fi
+		done
+	elif [ ! -f "${named_conf}" ]		# Nothing soo far?
+	then
+		# Determine the default config file for named.
+		for file in /var/named/named.conf /etc/named.conf /var/named/etc/named.conf
+		do
+			if [ -f "$file}" ]
+			then
+				named_conf=${file}
+				break
+			fi
+		done
+	fi
+
+	# To collect the detailled DNS-data, activate the named user-module by using the -e option of scc.
+	scc_check_file "${named_conf}" "${named_class}:config ${named_conf}::" "#"
+done
+
+named_exe=$(which named 2>/dev/null)
+if [ -x "${named_exe}" ]
+then
+	named_version="$(${named_exe} -v 2>/dev/null)"
+	if [ -n "${named_version}" ]
+	then
+		echo "${named_class}:general::version:	${named_version}"
+	else
+		what "${named_exe}"		|
+		grep "named"			|
+		sed	-e '/named:$/d'				\
+			-e "s/^/${named_class}:general::version:	/"
+	fi
+fi
+
+scc_check_file "/etc/rndc.conf" "${named_class}:config /etc/rndc.conf::" "#"
+
+for file in		\
+		/etc/bgpd.conf			\
+		/etc/binld.cnf			\
+		/etc/bootptab			\
+		/etc/conman.conf		\
+		/etc/conf.d/net			\
+		/etc/defaultdomain		\
+		/etc/defaultrouter		\
+		/etc/dlpi.conf			\
+		/etc/dvmrpd.conf		\
+		/etc/ethers			\
+		/etc/eth0mode			\
+		/etc/firewall.conf		\
+		/etc/gateways			\
+		/etc/gai.conf			\
+		/etc/host.conf			\
+		/etc/hostapd.conf		\
+		/etc/hosts			\
+		/etc/hosts.lpd			\
+		/etc/hostmibd.conf		\
+		/etc/hosts.equiv		\
+		/etc/idmapd.conf		\
+		/etc/ifaccess.conf		\
+		/etc/ifaliases			\
+		/etc/ifp.conf			\
+		/etc/ifp6.conf			\
+		/etc/ifstated.conf		\
+		/etc/iftab			\
+		/etc/ipf/ipf.conf		\
+		/etc/opt/ipf/ipf.conf		\
+		/etc/ipnat.conf			\
+		/etc/ipsec.conf			\
+		/etc/isp.conf			\
+		/etc/libnet.cfg			\
+		/etc/mactab			\
+		/etc/mib.defs			\
+		/etc/mrouted.conf		\
+		/etc/myname			\
+		/etc/mygate			\
+		/etc/netconfig			\
+		/etc/netgroup			\
+		/etc/netmasks			\
+		/etc/netsvc.conf		\
+		/etc/nettlgen.conf		\
+		/etc/network/interfaces		\
+		/etc/network/options		\
+		/etc/network.conf		\
+		/etc/networks			\
+		/etc/nsswitch.conf		\
+		/etc/nscd.conf			\
+		/etc/nslcd.conf			\
+		/etc/ospfd.conf			\
+		/etc/policyd.conf		\
+		/etc/ppp/chap-secrets		\
+		/etc/ppp/ioptions		\
+		/etc/ppp/options		\
+		/etc/ppp/pap-secrets		\
+		/etc/ppp/peers/pppoe		\
+		/etc/ppp/resolv.conf		\
+		/etc/pppoed.conf		\
+		/etc/protocols			\
+		/etc/pxed.cnf			\
+		/etc/binld.cnf			\
+		/etc/rcdialout.conf		\
+		/etc/rbootd.conf		\
+		/etc/ripd.conf			\
+		/etc/route.conf			\
+		/etc/routes			\
+		/etc/rpc			\
+		/etc/rpld.conf			\
+		/etc/rsh.allow			\
+		/etc/rsvpd.conf			\
+		/etc/rsyncd.conf		\
+		/etc/slip.hosts			\
+		/etc/smpppd.conf		\
+		/etc/snmpd.peers		\
+		/etc/sysconfig/network/config	\
+		/etc/sysctl.cfg			\
+		/etc/svc.conf			\
+		/etc/telnet.conf		\
+		/etc/xtiso.conf			\
+		/etc/wgetrc			\
+		/etc/wvdial.conf		\
+		/var/adm/inetd.sec
+do
+	scc_check_file "${file}" "fix:network:file:${file}::" "#"
+
+	if [ ${IS_NIS_MASTER} -eq 1 -a "${NIS_DATA_DIR}" != "/etc" ]
+	then
+		nis_file="${NIS_DATA_DIR}/$(basename ${file})"
+		scc_check_file "${nis_file}" "fix:network:file:${nis_file}::" "#"
+	fi
+done
+
+# Border Gateway Protocol Daemon
+bgpd_conf=$(sed -n -e 's/.*bgpd .*-f *//p' ${PROC_FILE})
+bgpd_conf=${bgpd_conf%% *}
+bgpd_conf=${bgpd_conf:-/etc/bgpd.conf}		# Default config file.
+scc_check_file "${bgpd_conf}" "fix:network:file:${bgpd_conf}::" "#"
+
+if [ -f /etc/notrouter ]
+then
+	echo "fix:network:file:/etc/notrouter::1"
+fi
+
+if [ ! -h /etc/hosts ]
+then
+	scc_check_file /etc/inet/hosts "fix:network:file:/etc/inet/hosts::" "#"
+fi
+
+sun_snmp_file=""
+if [ "${OS_NAME}" = "SunOS" ]
+then
+	dir=$(sed -n -e 's/.*snmpdx .*-c *//p' ${PROC_FILE})
+	dir=${dir%% *}
+	dir=${dir:-/etc/snmp/conf}
+	sun_snmp_file=${dir}/snmpd.conf
+
+	for f in mibiisa.reg mibiisa.rsrc snmpdx.reg snmpdx.rsrc snmpdx.acl
+	do
+		scc_check_file "${dir}/${f}" "fix:network:file:${dir}/${f}::" "#"
+	done
+fi
+
+if [ -f /etc/resolv.conf ]
+then
+	awk '/^#/	{
+				next
+			 }
+		/^[ 	]*$/	{
+				next
+			 }
+			{
+				printf( "fix:network:file:/etc/resolv.conf::%04d:	%s\n",
+					( 1 + i++ ), $0 )
+			}' /etc/resolv.conf
+fi
+
+# Avoid the clear-text community-names to appear in the snapshots.
+rm -f ${TMP1_FILE}
+for file in     /etc/snmpd.conf ${sun_snmp_file}	\
+		/etc/snmp/snmpd.conf			\
+                /etc/SnmpAgent.d/snmpd.conf
+do
+        if [ ! -f ${file} -o -h ${file} ]
+        then
+                continue
+        fi
+
+	prefix="fix:network:file:${file}::"
+	# Communitynames are sensitive information, therefore we crypt them.
+	sed	-e '/^#/d'			\
+		-e 's/[ 	]*#.*//'	\
+		-e '/^[ 	]*$/d' ${file}			|
+	while read key data
+	do
+		case "${key}" in
+		trap-community)	echo "${prefix}${key}	${data}";;
+		*community*)	if [ -n "${data}" ]
+				then
+					echo "${prefix}${key}	$(echo "${key} ${data}" | scc_crypt )"
+				else
+					echo "${prefix}${key}	# No access"
+				fi;;
+		*)		echo "${prefix}${key}	${data}";;
+		esac
+	done
+done
+
+scc_check_file /etc/services "fix:network:file:/etc/services::" "#"		|
+if [ "${OS_NAME}" = "Minix" ]
+then
+	sort +1 -2 -n
+else
+	sort -k 2n
+fi
+
+if [ ${IS_NIS_MASTER} -eq 1 -a "${NIS_DATA_DIR}" != "/etc" ]
+then
+	scc_check_file "${NIS_DATA_DIR}/services" "fix:network:file:${NIS_DATA_DIR}/services::" "#"
+fi
+
+for file in	/etc/ftp-banner			\
+		/etc/ftpaccess			\
+		/etc/ftpchroot			\
+		/etc/ftpconversions		\
+		/etc/ftpgroups			\
+		/etc/ftphosts			\
+		/etc/ftpusers			\
+		/etc/ftpwelcome			\
+		/etc/ftpd/ftpusers		\
+		/etc/proftpd.conf		\
+		/etc/ftpd.conf			\
+		/etc/lftp.conf			\
+		/etc/vsftpd.conf		\
+		/etc/vsftpd.user_list		\
+		/etc/vsftpd.ftpusers		\
+		/etc/vsftpd/chroot_list		\
+		/etc/vsftpd/user_list		\
+		/etc/vsftpd/ftpusers		\
+		/etc/vsftpd/vsftpd.conf		\
+		/etc/iptos			\
+		/usr/local/etc/proftpd.conf
+do
+	scc_check_file "${file}" "fix:network:ftp:${file}::" "#"
+done
+
+# In case the default config file for vsftpd is not used:
+{
+	sed -n -e '/.*server_args.*-f[ 	]*//p' /etc/xinetd.d/vsftp* 2>/dev/null
+	sed -n -e '/.*vsftpd.*vsftpd[ 	]*.*-f[ 	]*//p' /etc/inetd.conf 2>/dev/null
+}					|
+while read file remainder
+do
+	scc_check_file "${file}" "fix:network:ftp:${file}::" "#"
+done
+
+if [ -x /sbin/gabconfig ]
+then
+	class="fix:network:GAB"
+
+	gabconfig -v 2>/dev/null	|
+	sed -e "s/^/${class}::version   : /"
+
+	gabconfig -e 2>/dev/null	|
+	sed -e "s/^/${class}::kernel tunables   : /"
+
+	gabconfig -l 2>/dev/null	|
+	sed -e "s/^/${class}::driver config     : /"
+
+	gabconfig -a 2>/dev/null	|
+	sed -e "s/^/${class}::port membership   : /"
+fi
+
+lines="$(grep -c "[g]ated" ${PROC_FILE})"
+if [ ${lines} -ge 1 ]
+then
+	echo "fix:network:gated::status:	active"
+else
+	echo "fix:network:gated::status:	inactive"
+fi
+scc_check_file /etc/gated.conf "fix:network:gated::/etc/gated.conf:	" "#"
+
+# Interface data, AIX, BSD*, HP-UX, SunOS, others (Linux):
+if [ "${OS_NAME}" = "AIX" ]
+then
+	# Contributed by Doug Probst.
+	ifconfig -l		|
+	tr " " "\012"		|
+	while read ifc remainder
+	do
+		ifconfig ${ifc}			|
+		sed -e "s/^/fix:network:interface:${ifc}:ifconfig::/"
+
+		lsattr -E -l ${ifc}		|
+		sed -e "s/^/fix:network:interface:${ifc}:lsattr::/"
+	done
+
+elif [ "${BSD}" ]
+then
+	get_all_nw_interfaces			|
+	while read ifc_name ifc_label prefix
+	do
+		dhcp_lease_file="$(ls -tr /var/db/dhclient.leases.${ifc_name} /var/db/dhcpcd-${ifc_name}.lease 2>/dev/null | tail -n 1)"
+		ifcfg_prefix="${prefix}"
+		if [ -f "${dhcp_lease_file}" ]
+		then
+			ifcfg_prefix="var"
+		fi
+
+		get_ifc_data "${ifc_name}"		|
+		sed -e "s/^/${ifcfg_prefix}:network:interface:${ifc_label}:ifconfig::/"
+
+		# The following data is fixed for DHCP interfaces.
+		# Use the prefix indicating permanent/temporary interfaces.
+		get_dhcp_lease_data "${dhcp_lease_file}" "${ifc_name}"	|
+		sed -e "s/^/${prefix}:network:interface:${ifc_label}:dhcp lease options::/"
+	done
+
+elif [ "${OS_NAME}" = "HP-UX" ]
+then
+	/usr/sbin/lanscan -v					|
+	sed -e 's/^/fix:network:interface:lanscan::/'
+
+	# Catch the differences between 10.20 and 11.x
+	# The "L" is to handle virtual network cards that are defined upon two or more physical cards (indicated by Frank Tore Johansen)
+	/usr/sbin/lanscan								|
+	awk '/NameUnit/			{ i=7; next }
+		/NamePPA/		{ i=6; next }
+		/^[0-9L].* ETHER /	{ sub( "^[^0-9]*", "", $i ); print $5, $i }'	|
+	sort										|
+	while read lan nmid remainder
+	do
+		ifconfig ${lan} 2>&1						|
+		sed	-e "s/ifconfig: no such interface/not configured/"	\
+			-e "s/^/fix:network:interface:${lan}:ifconfig::/"
+
+		# Show all the IP-addresses of the interface.
+		# Remove the statistics.
+		netstat -in -I ${lan} 2>/dev/null					|
+		sed	-e 's/Ipkts.*//'				\
+			-e 's/  *[- 0-9]*$//'				\
+			-e "s/^/fix:network:interface:${lan}:netstat::/"
+
+		lanadmin -g ${nmid} 2>/dev/null >${TMP1_FILE}
+		if [ $? -ne 0 ]
+		then
+			lanadmin -ams ${nmid}				|
+			sed -e "s/^/fix:network:interface:${lan}:lanadmin::/"
+		else
+			label="network:interface:${lan}:lanadmin::"
+			awk	'/^PPA/		{ print f $0; }
+				/^Description/	{ print f $0; }
+				/^Type/		{ print f $0; }
+				/^MTU/		{ print f $0; }
+				/^Speed/	{ print f $0; }
+				/^Station/	{ print f $0; }
+				/Status/	{ print v $0; }'	\
+					f="fix:${label}"		\
+					v="var:${label}"		\
+					${TMP1_FILE}
+		fi
+		rm -f ${TMP1_FILE}
+	done
+
+elif [ "${OS_NAME}" = "SunOS" ]
+then
+	{
+		# When zones are used on Solaris10, additional "interfaces" appear.
+		# Tag these interfaces variable to avoid changes in the logbook.
+		if [ -x /usr/sbin/zoneadm ]
+		then
+			# TODO: check systems with ipadm and zones
+			ifconfig -a		|
+			awk	'/^[^ 	]/		{ ifc=$1; next }
+				/^[ 	]*zone /	{ print "zone " ifc }'
+		fi
+
+		if [ -x /usr/sbin/ipadm ]
+		then
+			/usr/sbin/ipadm show-addr 2>/dev/null	|
+			awk	'/dhcp/ { sub( "/.*", "" ); print "dhcp", $1; }'
+		else
+			get_all_nw_interfaces			|
+			while read ifc ifc_label prefix
+			do
+				ifconfig ${ifc} 2>/dev/null | grep DHCP >/dev/null
+				if [ $? -eq 0 ]
+				then
+					echo "dhcp ${ifc}:"
+				fi
+			done
+		fi
+
+		# Adjust the output, add the interface name to the classification.
+		# Data of PPP-connections is tagged variable.
+		# TODO: check ipadm show-addr output with subsequent processing.
+		ifconfig -a			|
+		sed -e 's/ index *[0-9].*//'
+	}				|
+	awk	'/^zone/	{ var[ $2 ] = 1; next }
+		/^dhcp/		{ var[ $2 ] = 1; next }
+		/^[^ 	]/	{
+					prefix="fix"
+					for ( x in var )
+					{
+						if ( x == $1 )
+						{
+							prefix="var"
+						}
+					}
+					ifc = $1;		# qfe1: or qfe1:1: for vitual interfaces
+					sub( ":$", "", ifc )
+					gsub( ":", "_", ifc );	# qfe1: or qfe1_1:
+					if ( ifc ~ "ppp" )
+					{
+						prefix="var"
+					}
+				}
+				{ print prefix ":network:interface:" ifc ":ifconfig::" $0; }'
+
+	> ${TMP2_FILE}
+	get_all_nw_interfaces			|
+	while read ifc ifc_label prefix
+	do
+		# Avoid class conflicts for qfe1 and qfe1:1 (virtual interface).
+		label="${ifc}"
+		if [ "${ifc}" != "${ifc%:*}" ]
+		then
+			label="${ifc%:*}_${ifc#*:}"
+		fi
+		scc_check_file "/etc/hostname.${ifc}" "fix:network:interface:${label}:/etc/hostname.${ifc}::" "#"
+		
+		if [ "${label}" != "${ifc}" ]
+		then
+			continue	# Do not collect additional parameters for virtual interfaces
+		fi
+
+		# Extract additional parameters from the interface.
+		if_type=${ifc%[0-9]*}
+		ndd /dev/${ifc} "?" 2>/dev/null	|
+		sed	-e '/^?/d'	\
+			-e '/write only/d'		|
+		sort >${TMP1_FILE}
+
+		# Check the amount of data in this file, some drivers (like "le") do
+		# not support requesting settings with ndd.
+		# Ignore dman type of interfaces as their instance cannot be set (indicated by Nico van Royen).
+		if [ "$(wc -l <${TMP1_FILE})" -gt 1 -a "${if_type}" != "dman" ]
+		then
+			case "${if_type}" in
+			*ppp*)	prefix="var";;
+			*)	prefix="fix";;
+			esac
+			while read parm remainder
+			do
+				ndd -get /dev/${ifc} ${parm} 2>/dev/null	|
+				sed -e "s/^/${prefix}:network:interface:${ifc}:parm::${parm}:/"
+			done <${TMP1_FILE}
+
+		fi
+		rm -f ${TMP1_FILE}
+
+		# Collect all interface types that are in use.
+		echo "${if_type}" >>${TMP2_FILE}
+	done
+
+	# Check the system-wide default settings for each type of interface.
+	sort -u <${TMP2_FILE}			|
+	while read if_type
+	do
+		if [ "${if_type}" ]
+		then
+			config_file="/kernel/drv/${if_type}.conf"
+			scc_check_file "${config_file}" "fix:network:interface:${config_file}::" "#"
+		fi
+	done
+	rm -f ${TMP2_FILE}
+
+elif [ "${OS_NAME}" = "VMkernel" -a -x /bin/esxcli ]
+then
+
+	# vsphere specific networking data:
+	# get physical interfaces
+	/bin/esxcli network nic list		|
+	awk	'{
+			if ( NR > 2 )
+			{
+				printf( "fix:network:interface:%s:nic list::%s\n", $1, $0 )
+			}
+		}'
+
+	/bin/esxcli --formatter=csv --format-param=fields="Name" network nic list	|
+	sed -e 's/,//' -e '/^Name/d'							|
+	while read nic
+	do
+		/bin/esxcli network nic get -n ${nic}			|
+		sed -e "s/^/fix:network:interface:${nic}:settings::/"
+
+		/bin/esxcli network nic ring preset get -n ${nic}	|
+		sed -e "s/^/fix:network:interface:${nic}:ring buffer::preset:/"
+
+		/bin/esxcli network nic ring current get -n ${nic}	|
+		sed -e "s/^/var:network:interface:${nic}:ring buffer::current:/"
+	done
+
+	/bin/esxcli network nic sg get     |
+	awk	'{
+			if ( NR > 2 )
+			{
+				printf( "fix:network:interface:%s:scatter-gather::%s\n", $1, $0 )
+			}
+		}'
+
+	# Get logical interfaces
+	/bin/esxcli network ip interface list		|
+	awk '/^[^ ]/	{ ifc=$1; next }
+			{ printf( "fix:network:interface:%s:settings::%s\n", ifc, $0 ) }'
+
+	/bin/esxcli network ip interface ipv4 get	|
+	awk '{ if ( NR > 2 ) { printf( "fix:network:interface:%s:ipv4::%s\n", $1, $0 ) } }'
+
+	/bin/esxcli network ip interface ipv6 get	|
+	awk '{ if ( NR > 2 ) { printf( "fix:network:interface:%s:ipv6::%s\n", $1, $0 ) } }'
+
+	/bin/esxcli --formatter=csv --format-param=fields="Name" network ip interface list	|
+	sed -e 's/,//' -e '/^Name/d'								|
+	while read ifc
+	do
+		/bin/esxcli network ip interface tag get -i ${ifc}	|
+		sed -e "s/^/fix:network:interface:${ifc}:tag::/"
+
+		/bin/esxcli network multicast group list		|
+		awk	'{
+				if ( NR <= 2 )		# header?
+				{
+					printf( "fix:network:interface:%s:multicast::%s\n", i, $0 )
+					next
+				}
+				if ( $2 == i )		# interface data?
+				{
+					printf( "fix:network:interface:%s:multicast::%s\n", i, $0 )
+				}
+			}' i=${ifc}
+	done
+
+	/bin/esxcli network ip get		|
+	sed -e 's/^/fix:network:setting::/'
+
+else
+
+	get_all_nw_interfaces			|
+	while read ifc_name ifc_label prefix
+	do
+		dhcp_lease_file="$(ls -tr	/var/lib/dhclient/dhclient-${ifc_name}.leases		\
+						/var/lib/dhcp/dhclient.${ifc_name}.leases		\
+						/var/lib/dhcpcd/dhcpcd-${ifc_name}.lease		\
+						/var/lib/dhcp/dhclient-.*-${ifc_name}.lease		\
+						/var/lib/dhcp/dhclient.${ifc_name}.leases		\
+						/var/lib/NetworkManager/dhclient-*-${ifc_name}.lease	\
+						/run/udhcpc-${ifc_name}.conf				\
+							2>/dev/null						|
+					tail -n 1)"
+		ifcfg_prefix="${prefix}"
+		if [ -f "${dhcp_lease_file}" ]
+		then
+			ifcfg_prefix="var"
+		else
+			for file in /var/state/dhcp/dhclient.leases /var/lib/dhcp/dhclient.leases
+			do
+				grep "interface.*${ifc_name}\"" ${file} >/dev/null 2>/dev/null
+				if [ $? -eq 0 ]
+				then
+					grep "dhclient.*${ifc_name}" ${PROC_FILE} >/dev/null 2>/dev/null
+					if [ $? -eq 0 ]
+					then
+						dhcp_lease_file="${file}"
+						ifcfg_prefix="var"
+						break
+					fi
+				fi
+			done
+		fi
+
+		get_ifc_data "${ifc_name}"								|
+		sed	-e "s/^/${ifcfg_prefix}:network:interface:${ifc_label}:ifconfig::/"	\
+			-e "s/^fix:\(.*valid_lft.*sec\)/var:\1/"
+
+		# The following data is fixed for DHCP interfaces.
+		# Use the prefix indicating permanent/temporary interfaces.
+		get_dhcp_lease_data "${dhcp_lease_file}" "${ifc_name}"			|
+		sed -e "s/^/${prefix}:network:interface:${ifc_label}:dhcp lease options::/"
+
+		ifc_file=/etc/sysconfig/network-scripts/ifcfg-${ifc_name}
+		scc_check_file "${ifc_file}" "${prefix}:network:interface:${ifc_label}:ifcfg script::" "#"	|
+		sort -f												|
+		sed -e '/LAST_CONNECT=/d'
+
+		scc_check_file "/etc/sysconfig/network/ifcfg-${ifc_name}" "${prefix}:network:interface:${ifc_name}:ifcfg script::" "#"	|
+		sed	-e 's/"password"\.*\=\.*/### ERASED PASSWORD ###/'	\
+			-e 's/"WIRELESS_KEY"\.*\=\.*/### ERASED PASSWORD ###/'
+
+		scc_check_file /etc/dhcpc/dhcpcd-${ifc_name}.info "${prefix}:network:interface:${ifc_label}:dhcpcd-${ifc_name}.info::" "#"	|
+		sed	-e 's/fix:\(.*IPADDR=\)/var:\1/'	\
+			-e 's/fix:\(.*LEASEDFROM.*=\)/var:\1/'
+
+		for file in	/etc/sysconfig/network-scripts/route-${ifc_name}.*		\
+				/etc/sysconfig/network-scripts/rule-${ifc_name}.*		\
+				/etc/net/ifaces/${ifc_name}/*					\
+				/etc/sysconfig/nics/${ifc_name}					\
+				/etc/sysconfig/interfaces/ifcfg-${ifc_name}			\
+				/etc/sysconfig/network-devices/ifconfig.${ifc_name}/dhcpcd	\
+				/etc/network.d/interface.${ifc_name}				\
+				/etc/sysconfig/network-devices/ifconfig.${ifc_name}/ipv4	\
+				/etc/resolv.conf-${ifc_name}.sv					\
+				/etc/dhcpc/dhcpcd-${ifc_name}.info				\
+				/var/lib/NetworkManager/dhclient-${ifc_name}.conf
+		do
+			scc_check_file "${file}" "${prefix}:network:interface:${ifc_label}:${file##*/} script::" "#"
+		done
+
+		if [ -x /usr/sbin/ethtool ]
+		then
+			/usr/sbin/ethtool ${ifc_name} 2>/dev/null						|
+			sed -e "s/^/${prefix}:network:interface:${ifc_label}:ethtool::/"
+
+			# The first parameters (Pre-set maximums) are fixed (except for temporary interfaces), current hardware settings vary.
+			/usr/sbin/ethtool -g ${ifc_name} 2>/dev/null						|
+			awk	'/[Cc]urrent /	{ prefix = "var" }         
+						{
+							# Ignore header line to avoid 'header-only' data for interfaces without ring-buffers.
+							if ( NR > 1 )
+							{
+								printf( "%s:network:interface:%s:ring parameters::%s\n", prefix, label, $0 )
+							}
+						}' prefix="${prefix}" label="${ifc_label}"
+
+			/usr/sbin/ethtool -i ${ifc_name} 2>/dev/null						|
+			sed -e "s/^/${prefix}:network:interface:${ifc_label}:driver::/"
+
+			/usr/sbin/ethtool -k ${ifc_name} 2>/dev/null						|
+			sed -e "s/^/${prefix}:network:interface:${ifc_label}:offload::/"			|
+			sed	-e "s/fix:\(.*tx-scatter-gather-fraglist\)/var:\1/"	\
+				-e "s/fix:\(.*:udp-fragmentation-offload\)/var:\1/"
+
+			/usr/sbin/ethtool -S ${ifc_name} 2>/dev/null						|
+			sed -e "s/^/var:network:interface:${ifc_label}:statistics::/"
+
+		elif [ -x /sbin/mii-tool ]
+		then
+			# Deprecated, so ethtool has priority.
+			/sbin/mii-tool -v ${ifc_name} 2>/dev/null						|
+			sed -e "s/^/${prefix}:network:interface:${ifc_label}:mii-tool::/"
+		fi
+
+		if [ -x /sbin/ip ]
+		then
+			/sbin/ip maddr show ${ifc_name} 2>/dev/null					|
+			sed	-e "s/^[0-9]*://"	\
+				-e "s/^[ 	]*/${prefix}:network:interface:${ifc_label}:maddr::/"	|
+			sort
+		fi
+
+		if [ -x /sbin/ifstatus-dhcp ]
+		then
+			/sbin/ifstatus-dhcp "${ifc_name}" 2>/dev/null	|
+			awk	'		{ prefix="fix"; }
+				/IPADDR/	{ prefix="var"; }
+						{
+							printf( "%s:network:interface:%s:DHCP::%s\n", prefix, i, $0 )
+						}' i="${ifc_name}"
+		fi
+
+		if [ -x /usr/sbin/brctl ]
+		then
+			/usr/sbin/brctl show ${ifc_name} 2>/dev/null				|
+			awk	'{
+					if ( NF <= 3 )				# No interfaces on bridge
+					{
+						prefix = "var"
+					}
+					printf( "%s:network:interface:%s:brctl::%s\n", prefix, name, $0 )
+				}' name="${ifc_label}" prefix="${prefix}"
+		fi
+
+	done	# loop over all interfaces
+
+fi	# select OS for interface data
+
+absent_keep_label="cdp:absent"
+
+get_cdp_data()
+{
+	max_interval="70"		# by default every 60 seconds an CDP packet is broadcasted
+	sleep_interval="5"
+
+	ifc="${1}"
+
+	# Sniff in non-promiscuous mode to avoid capturing non-multicast packets.
+	snif_pattern='ether[20:2]=0x2000 and ether[0] & 1 = 1'
+	if [ -x "${tcpdump_exe}" ]
+	then
+		tcpdump_options="-i ${ifc} -v -s 1500 -c 1"
+		if [ -x "${timeout_exe}" ]
+		then
+			${timeout_exe} ${max_interval} ${tcpdump_exe} ${tcpdump_options} "${snif_pattern}" >${TMP1_FILE}  2>/dev/null
+		else
+			${tcpdump_exe} ${tcpdump_options} "${snif_pattern}" >${TMP1_FILE} 2>/dev/null &
+
+			total_wait=0
+			while [ ${total_wait} -le ${max_interval} -a ! -s ${TMP1_FILE} ]
+			do
+				sleep ${sleep_interval}
+				total_wait=$(( total_wait + sleep_interval ))
+			done
+			sleep 1
+
+			if [ ! -s ${TMP1_FILE} ]	# no packet received
+			then
+				kill $! 2>/dev/null
+			fi
+		fi
+
+		sed -e '/^$/d' <${TMP1_FILE} >${TMP2_FILE}
+		if [ ! -s ${TMP2_FILE} ]	# no packet received
+		then
+			echo "${absent_keep_label}:${ifc}" >>${SCC_KEEP_NEW}		# avoid waiting for packet for next runs, assuming interface is then still not connected.
+		else
+			sed	-e 's/^[ 	]*//'				\
+				-e 's/, length: [0-9]* bytes:/:/'		\
+				-e '/checksum/d'				\
+				-e '/not decoded/d'				\
+				-e '/^0x/d'					\
+				-e "s/^/fix:network:interface:${ifc}:cdp::/"	\
+					<${TMP2_FILE}
+		fi
+
+		rm -f ${TMP1_FILE} ${TMP2_FILE}
+	elif [ -x "${snoop_exe}" ]
+	then
+		snoop_options="-P -d ${ifc} -x0 -s 1500 -c 1"
+		if [ -x "${timeout_exe}" ]
+		then
+			${timeout_exe} ${max_interval} ${snoop_exe} ${snoop_options} "${snif_pattern}" >${TMP1_FILE} 2>/dev/null
+		else
+			${snoop_exe} ${snoop_options} "${snif_pattern}" >${TMP1_FILE} 2>/dev/null &
+
+			total_wait=0
+			while [ ${total_wait} -le ${max_interval} -a ! -s ${TMP1_FILE} ]
+			do
+				sleep ${sleep_interval}
+				total_wait=$(( total_wait + sleep_interval ))
+			done
+			sleep 1
+
+			if [ ! -s ${TMP1_FILE} ]	# no packet received
+			then
+				kill $! 2>/dev/null
+			fi
+		fi
+
+		sed -e '/^$/d' <${TMP1_FILE} >${TMP2_FILE}
+		if [ ! -s ${TMP2_FILE} ]	# no packet received
+		then
+			echo "${absent_keep_label}:${ifc}" >>${SCC_KEEP_NEW}		# avoid waiting for packet for next runs, assuming interface is then still not connected.
+		else
+			awk "function hex2dec( s ) {
+						for ( i = 0; i < 10; i++ )
+						{
+							conversion[ i ] = i + 0
+						}
+						conversion[ \"a\" ] = 10 + 0
+						conversion[ \"b\" ] = 11 + 0
+						conversion[ \"c\" ] = 12 + 0
+						conversion[ \"d\" ] = 13 + 0
+						conversion[ \"e\" ] = 14 + 0
+						conversion[ \"f\" ] = 15 + 0
+						dec = 0
+						for ( i = 1; i <= length( s ); i++ )
+						{
+							dec = ( 16 * dec ) + conversion[ substr( s, i, 1 ) ]
+						}
+
+						return( dec )
+					}"'/^[ 	]*[0-9]*:/ {
+								# No processing (yet) collect all hex data.
+								for ( i = 2; ( i < NF ) && ( i <= 9 ) && ( length( $i ) == 4 || length( $i ) == 2 ) ; i++ )
+								{
+									hex_data=sprintf( "%s%s", hex_data, $i )
+								}
+							}
+				END	{
+						h_offset = 1 + ( 26 * 2 )
+						while ( h_offset < length( hex_data ) )
+						{
+							type = substr( hex_data, h_offset, 4 );			# 2 byte type: 4 bytes in hex
+							len = hex2dec( substr( hex_data, h_offset + 4, 4 ) );	# 2 byte length: 4 bytes in hex, includes type and length
+
+							data = substr( hex_data, h_offset + 8, ( len - 4 ) * 2 )
+							data_s = ""
+							for ( j = 1; j <= length( data ); j += 2 )
+								data_s = sprintf( "%s%c", data_s, hex2dec( substr( data, j, 2 ) ) )
+
+							     if ( type == "0001" ) {	printf(    "device-id: (0x%s): %s\n", type, data_s );		}
+							else if ( type == "0003" ) {	printf(      "port-id: (0x%s): %s\n", type, data_s );		}
+							else if ( type == "0004" ) {	printf( "capabilities: (0x%s): 0x%s\n", type, data );		}
+							else if ( type == "0005" ) { 	printf(      "version: (0x%s): %s\n", type, data_s );		}
+							else if ( type == "0006" ) { 	printf(     "platform: (0x%s): %s\n", type, data_s );		}
+							else if ( type == "000a" ) {	printf(         "vlan: (0x%s): %d\n", type, hex2dec( data ) ); 	}
+							else if ( type == "000b" ) {	printf(       "duplex: (0x%s): %d\n", type, hex2dec( data ) );	}
+							else if ( type == "0011" ) { 	printf(          "MTU: (0x%s): %d\n", type, hex2dec( data ) );	}
+							else if ( type == "0014" ) { 	printf(  "system name: (0x%s): %s\n", type, data_s );		}
+							else if ( type == "0017" ) { 	printf(     "location: (0x%s): %s\n", type, data_s );		}
+							#else { printf( "skip: type (0x%s), length (%d), data (%s)\n", type, len, data ); }
+
+							h_offset += ( 2 * len )
+						}
+					}' ${TMP2_FILE}		|
+			sed -e "s/^/fix:network:interface:${ifc}:cdp::/"
+		fi
+
+		rm -f ${TMP1_FILE} ${TMP2_FILE}
+	fi	|
+	sed	-e 's/^fix:\(.*::Duplex\)/var:\1/'	\
+		-e 's/^fix:\(.*::duplex\)/var:\1/'	\
+		-e 's/^fix:\(.*::MTU\)/var:\1/'		\
+		-e 's/^fix:\(.*::mtu\)/var:\1/'		\
+		-e 's/^fix:\(.*::VLAN\)/var:\1/'	\
+		-e 's/^fix:\(.*::vlan\)/var:\1/'
+}
+
+# Use Cisco Discovery Protocol to obtain data from connected Cisco devices
+snoop_exe="$(which snoop 2>/dev/null)"
+tcpdump_exe="$(which tcpdump 2>/dev/null)"
+virtualization="$(grep "^fix:general::virtualization:" ${SCC_KEEP_NEW} 2>/dev/null | grep -v "physical")"
+if [ "${SCC_IGNORE_CDP:-no}" != "yes" -a -z "${virtualization}" -a "${snoop_exe}${tcpdump_exe}" ]
+then
+	timeout_exe="$(which timeout 2>/dev/null)"
+
+	if [ -x /usr/sbin/dladm ]
+	then
+		( /usr/sbin/dladm show-phys 2>/dev/null; /usr/sbin/dladm show-dev 2>/dev/null )	|
+		sed	-e '/usb/d'	\
+			-e '/vsw/d'								|
+		awk '/up/	{ print $1 }'							|
+		sort -u
+	else
+		get_all_nw_interfaces			|
+		awk	'/^lo/	{ next }
+			/bond/	{ next }
+			/aggr/	{ next }
+			/enc/	{ next }
+			/pflog/	{ next }
+			/fix$/	{ print $1 }'
+	fi	|
+	while read ifc
+	do
+		# register in the keep file when no cdp packet is received and then ignore CDP on all next runs
+		# until the postinstall of a new version.
+		absent=""
+		if [ "${SCC_INSTALL_PHASE}" != "postinstall" ]
+		then
+			absent="$(grep "${absent_keep_label}:${ifc}$" ${SCC_KEEP_CONFIG} 2>/dev/null)"
+		fi
+		if [ "${absent}" ]
+		then
+			echo "${absent_keep_label}:${ifc}" >>${SCC_KEEP_NEW}
+		else
+			get_cdp_data ${ifc}
+		fi
+	done
+fi
+
+if [ -x /usr/sbin/ipaddrsel ]
+then
+	/usr/sbin/ipaddrsel				|
+	sort -k 2n					|
+	sed -e 's/^/fix:network:IPV6:ipaddrsel::/'
+fi
+
+if [ -x /usr/sbin/ipadm ]
+then
+	/usr/sbin/ipadm show-prop 2>/dev/null			|
+	sed	-e 's/^ *//'	\
+		-e 's/ *$//'					|
+	awk	'/,$/		{ printf( "%s", $0 ); next }
+		/^PROTO/	{ if ( NR > 1 ) next }
+				{ print }'			|
+	sed -e 's/^/fix:network:ipadmin show-prop::/'
+fi
+
+if [ -x /usr/sbin/inetadm ]
+then
+	# Output of inetadm:
+	#enabled   online         svc:/network/fs/tcp6:default
+	/usr/sbin/inetadm 2>/dev/null			|
+	awk '/svc:/ { print $3 }'			|
+	sort						|
+	while read entry
+	do
+		label=${entry#svc:/}
+		/usr/sbin/inetadm -l "${entry}" 2>/dev/null	|
+		sed	-e "s@^@${label}:	@"	\
+			-e "s@:@::@"			\
+			-e "s@/@:@"				|
+		sed -e "s/^/fix:network:inetadm:/"
+	done
+fi
+
+if [ -f /etc/inetd.conf -o -f /var/run/inetd.conf ]
+then
+	# During removal and (re)installation of software, services are
+	# removed from this file and added at the end. To avoid reporting,
+	# we sort the file. Special consideration with continuation lines.
+	sed	-e '/^#/d'		\
+		-e '/^[ 	]*$/d' /etc/inetd.conf /var/run/inetd.conf 2>/dev/null		|
+	awk '{
+			if ( length( prev_service ) > 0 )
+			{
+				printf( "%s_%08d ", prev_service, counter )
+				counter++
+			}
+			print
+		}
+	/\\$/	{
+			if ( length( prev_service ) == 0 )
+			{
+				prev_service = $1
+			}
+			next
+		}
+		{
+			prev_service = ""
+			counter = 0
+		}'						|
+	sort 							|
+	sed	-e 's/^[a-zA-Z][a-zA-Z]*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] //'	\
+		-e 's@^@fix:network:internet service daemon:/etc/inetd.conf::@'
+fi
+
+if [ -f /etc/xinetd.conf ]
+then
+	scc_check_file /etc/xinetd.conf "fix:network:internet service daemon:/etc/xinetd.conf::" "#"
+
+	dir=$(sed -n -e 's/^includedir  *//p' /etc/xinetd.conf)
+	if [ -z "${dir}" ]
+	then
+		dir=/etc/xinetd.d
+	fi
+	for f in ${dir}/*
+	do
+		scc_check_file "${f}" "fix:network:internet service daemon:${f}::" "#"
+	done
+fi
+
+if [ -x /usr/bin/lsipc ]
+then
+	/usr/bin/lsipc -m 2>/dev/null			|
+	sed	-e '/^ *$/d'		\
+		-e 's/^/var:network:lsipc::shared-memory:	/'
+
+	/usr/bin/lsipc -q 2>/dev/null			|
+	sed	-e '/^ *$/d'		\
+		-e 's/^/var:network:lsipc::message-queue:	/'
+
+	/usr/bin/lsipc -s 2>/dev/null			|
+	sed	-e '/^ *$/d'		\
+		-e 's/^/var:network:lsipc::semaphores:		/'
+elif [ -x /usr/bin/ipcs ]
+then
+	# The output of ipcs changes frequently. Treat it as variable.
+
+	extra_options=""
+	if [ "${OS_NAME}" = "HP-UX" -o "${OS_NAME}" = "SunOS" ]
+	then
+		extra_options="-a"
+	fi
+
+	ipcs -m ${extra_options}			|
+	sed	-e '/^ *$/d'		\
+		-e 's/^/var:network:ipcs::shared-memory:	/'
+
+	ipcs -q ${extra_options}			|
+	sed	-e '/^ *$/d'		\
+		-e 's/^/var:network:ipcs::message-queue:	/'
+
+	ipcs -s ${extra_options}			|
+	sed	-e '/^ *$/d'		\
+		-e 's/^/var:network:ipcs::semaphores:		/'
+fi
+
+for file in /etc/iproute2/*
+do
+	scc_check_file "${file}" "fix:network:iproute2:${file}::" "#"
+done
+
+if [ -d /proc/sys/net/ipv4 ]
+then
+	(
+		cd /proc/sys/net/ipv4
+
+		for p in icmp ip tcp
+		do
+			for f in ${p}*
+			do
+				name="${f##*/}"		# basename
+				# Avoid the overhead of the function scc_check_file.
+				sed -e "s/^/fix:network:ipv4:${p}::${name}:	/" "${f}" 2>/dev/null	|
+				sed	-e '/ip_always_defrag/d'	\
+					-e '/fastopen_key/d'
+			done
+		done
+
+		# We prefer sysctl to obtain the following data.
+		if [ -d conf -a ! -x /sbin/sysctl ]
+		then
+			cd conf
+			for if in */*
+			do
+				interface="${if%/*}"	# dirname
+				name="${if##*/}"	# basename
+				# Avoid the overhead of the function scc_check_file.
+				sed -e "s/^/fix:network:ipv4:/proc/sys/net/ipv4:${interface}::${name}:	/" "${if}" 2>/dev/null
+			done
+		fi
+	)
+fi
+
+if [ -d /etc/net ]
+then
+	for d in ticlts ticots ticotsord
+	do
+		for f in hosts services
+		do
+			scc_check_file "/etc/net/${d}/${f}" "fix:network:loopback:/etc/net/${d}/${f}::" "#"
+		done
+	done
+fi
+
+if [ -x /usr/bin/ndd -o -x /usr/sbin/ndd ]
+then
+	for d in arp icmp icmp6 ip ip6 tcp tcp6 udp udp6
+	do
+		if [ ! -r /dev/${d} ]
+		then
+			continue
+		fi
+
+		ndd -get /dev/${d} "?" 2>/dev/null		|
+		sed	-e "/write only/d"		\
+			-e "/arp_cache_report/d"	\
+			-e "s/[ (].*//"			\
+			-e "/status/d"			\
+			-e "/stats$/d"			\
+			-e "/hash/d"			\
+			-e "/ip_always_defrag/d"	\
+			-e "/fastopen_key/d"		\
+			-e "/pullups$/d"		\
+			-e "/^?/d"				|
+		while read parm remainder
+		do
+			case "${parm}" in
+			*ppp*)	prefix="var";;
+			*)	prefix="fix";;
+			esac
+			ndd -get /dev/${d} ${parm} 2>&1	|
+			sed -e "s/^/${prefix}:network:ndd:${d}::${parm}:	/"
+		done
+
+	done
+fi
+
+if [ -x /usr/contrib/bin/nettune ]
+then
+	/usr/contrib/bin/nettune -l 2>/dev/null		|
+	sed -e 's/^/fix:network:nettune::/'
+fi
+
+if [ -x /usr/sbin/nfso ]
+then
+	/usr/sbin/nfso -a 2>/dev/null			|
+	sed -e 's/^/fix:network:NFS:nfso::/'
+fi
+
+# Maarten de Boer and Nico van Royen provided some NIS-background.
+is_slave_server=0
+if [ ${IS_NIS_MASTER} -eq 0 ]
+then
+	is_slave_server="$(grep -l ypserv ${PROC_FILE} >/dev/null 2>/dev/null; echo $(( 1 - $? )) )"
+else
+	echo "fix:network:NIS:general::data-directory:		${NIS_DATA_DIR}"
+fi
+
+NIS_DOMAIN=""
+dn=$(which domainname 2>/dev/null)
+if [ -x "${dn}" ]
+then
+	NIS_DOMAIN="$(domainname 2>/dev/null)"
+fi
+NIS_MASTER=""
+if [ ${IS_NIS_CLIENT:-0} -eq 1 -o ${is_slave_server} -eq 1 ]
+then
+	NIS_MASTER="$(ypwhich 2>/dev/null)"
+fi
+echo "fix:network:NIS:general::domain:		${NIS_DOMAIN}"
+echo "var:network:NIS:general::binding:		${NIS_MASTER}"
+
+echo "fix:network:NIS:general::is-master-server:	${IS_NIS_MASTER}"
+echo "fix:network:NIS:general::is-slave-server:		${is_slave_server}"
+echo "fix:network:NIS:general::is-client:		${IS_NIS_CLIENT:-0}"
+
+scc_check_file "/var/yp/binding/${NIS_DOMAIN}/ypservers" "fix:network:NIS:binding ${NIS_DOMAIN} ypservers::" "#"
+scc_check_file /etc/yp.conf "fix:network:NIS:binding /etc/yp.conf::" "#"
+scc_check_file /var/yp/securenets "fix:network:NIS:/var/yp/securenets::" "#"
+
+if [ -f /etc/publickey ]
+then
+	# Ignore comment and blank lines. Also erase the private key.
+	sed	-e '/^#/d'		\
+		-e '/^[ 	]*$/d'	\
+		-e 's/:.*//'		\
+		-e 's@^@fix:network:NIS:/etc/publickey::@' /etc/publickey
+fi
+
+if [ -x /usr/bin/ypwhich ]
+then
+	ypwhich -x 2>/dev/null		|
+	sed -e 's/^/var:network:NIS:nicknames::/'
+
+	if [ ${IS_NIS_CLIENT:-0} -gt 0 -o ${is_slave_server} -gt 0 ]
+	then
+		ypwhich -m 2>/dev/null		|
+		sed -e 's/^/var:network:NIS:maps::/'
+	fi
+fi
+
+config=""
+key=""
+if [ -f /etc/rc.config.d/netdaemons ]
+then
+	. /etc/rc.config.d/netdaemons
+	if [ "${XNTPD_ARGS}" != "" ]
+	then
+		config=$(echo "${XNTPD_ARGS}" | sed -e 's/.*-c[ ]*//' -e 's/ .*//')
+		key=$(echo "${XNTPD_ARGS}" | sed -e 's/.*-k[ ]*//' -e 's/ .*//')
+	fi
+else
+	config="$(sed -n -e 's/.*xntpd.* -c[ ]*//p' ${PROC_FILE})"
+	config="${config% *}"
+fi
+if [ ! -f "${config}" ]
+then
+	if [ -f /etc/ntp.conf ]
+	then
+		config=/etc/ntp.conf
+	elif [ -f /etc/inet/ntp.conf ]
+	then
+		config=/etc/inet/ntp.conf
+	else
+		config=""
+	fi
+fi
+if [ "${config}" != "" ]
+then
+	scc_check_file "${config}" "fix:network:ntp:${config}::" "#"
+
+	if [ ! -f "${key}" ]
+	then
+		key=$(awk '/^keys/ { print $2 }' ${config})
+	fi
+
+	if [ "${key}" ]
+	then
+		scc_check_file "${key}" "fix:network:ntp:${key}::" "#"
+	fi
+fi
+scc_check_file /etc/ntp/ntpservers	"fix:network:ntp:/etc/ntp/ntpservers::"	"#"
+scc_check_file /etc/ntp/keys		"fix:network:ntp:/etc/ntp/keys::"	"#"
+if [ -x /usr/sbin/ntpq ]
+then
+	ntpq -p 2>/dev/null			|
+	sed -e 's/^/var:network:ntp:ntpq::/'
+fi
+
+for f in /etc/nwam/*conf /etc/nwam/*/*conf /etc/nwam/*/*/*conf
+do
+	scc_check_file "${f}" "fix:network:nwam:${f}::" "#"
+done
+
+# Contributed by Bill Dietrich
+scc_check_file /etc/openvpn/update-resolv-conf "fix:network:openvpn:/etc/openvpn/update-resolv-conf::" "#"
+if [ -x /usr/sbin/openvpn ]
+then
+	/usr/sbin/openvpn --show-gateway 2>&1	|
+	sed -n -e 's/^.*ROUTE/fix:network:openvpn:default gateway::ROUTE/p'
+fi
+protonvpn="$(which protonvpn-cli 2>/dev/null)"
+if [ -x "${protonvpn}" ]
+then
+	"${protonvpn}" -status 2>/dev/null		|
+	sed -e 's/^/var:network:protonvpn-cli::/'
+fi
+
+if [ -x /usr/sbin/pmadm ]
+then
+	/usr/sbin/pmadm -l 2>/dev/null		|
+	sed -e 's/^/fix:network:pmadm::/'
+fi
+
+if [ -x "$(which netstat 2>/dev/null)" -o -x /sbin/ss ]
+then
+	# Record ports that are listened on. Select only the name and ports that are
+	# present in the file /etc/services.
+	sed	-e '/^[ 	]*$/d'	\
+		-e '/^#/d'		\
+		-e 's@/.*@@'		\
+			/etc/services 2>/dev/null	|
+	awk '{ if ( NF == 2 ) print }' >${TMP1_FILE}
+
+	if [ -x /sbin/ss ]
+	then
+		/sbin/ss -ltnu 2>/dev/null		|
+		awk '/LISTEN/ { print "ss", $0 }'
+	else
+		netstat -an 2>/dev/null
+	fi	|
+	awk	'/ss/			{ i=6; work=1 }		# ss tcp    LISTEN     0      128                    *:22                    *:*
+		/^tcp.*LISTEN *$/	{ i=4; work=1 }		# tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN
+		/^ .*LISTEN *$/		{ i=1; work=1 }		# 
+			{
+				if ( ! work )
+				{
+					next
+				}
+				cnt=split( $i, parts, ":" )
+				if ( cnt > 1 )
+				{
+					print parts[ cnt ]
+				}
+				else
+				{
+					cnt=split( $i, parts, "." )
+					print parts[ 2 ]
+				}
+				work=0
+			}'			|
+	sort -u					|
+	awk '{
+		if ( NF == 2 )
+		{
+			# Format: <name> <id>
+			service[ $2 ] = $1
+		}
+		else
+		{
+			# Format: <id>
+			if ( length( service[ $1 ] ) > 0 )
+			{
+				if ( $1 < 1000 )
+				{
+					print "fix", service[ $1 ], $1
+				}
+				else
+				{
+					print "var", service[ $1 ], $1
+				}
+			}
+			else
+			{
+				print "var", $1, $1
+			}
+		}
+	}' ${TMP1_FILE} -			|
+	sort -k 3n				|
+	sed	-e 's/^fix /fix:network:ports::/'	\
+		-e 's/^var /var:network:ports::/'
+
+	rm -f ${TMP1_FILE}
+fi				# if [ -x "${netstat_exe}" ]
+
+for file in	/etc/sockd.conf			\
+		/etc/socks.conf			\
+		/etc/opt/socks/sockd.conf	\
+		/etc/opt/socks/socks.conf
+do
+	scc_check_file "${file}" "fix:network:proxy:${file}::" "#"
+done
+
+# Alexander Fuchs indicated that logbooks of systems connected to networks with many ICMP redirects
+# suffer from many "changes". By default it is usefull to treat the routing data as fixed data (except
+# dynamic routes). Optionally we will treat all route data as variable. 
+# Edit scc-localize to change the default setting of this variable.
+netstat_exe="$(which netstat 2>/dev/null)"
+prefix="fix"
+if [ "${SCC_VAR_ROUTE_DATA:-}" = "yes" ]
+then
+	prefix="var"
+fi
+
+if [ "${OS_NAME}" = "AIX" ]
+then
+	# Contributed by Doug Probst.
+	netstat -nr 2> /dev/null	|
+	awk	'{
+			if ( NF < 8 )
+			{
+				print "fix:network:route::" $0
+			}
+			else
+			{ 
+				p="fix"
+				if ( $3 ~ "D" )
+				{
+					p="var"
+				}
+				printf( "%s:network:route::%s:%s:%s:%s:%s:%s:%s:%s\n",
+					p, $1, $2, $3, $6, $7, $8, $9, $10 )
+			} 
+		}'
+
+elif [ "${BSD}" ]
+then
+	netstat -rl 2>/dev/null			|
+	awk	'{
+			if ( NF < 6 )
+			{
+				print "fix:network:route::" $0
+			}
+			else
+			{
+				p="fix"
+				if ( $3 ~ "D" || $3 ~ "M" || $3 ~ "c" || $3 ~ "W" )	# Dynamic, Modified, cloned, Was cloned
+				{
+					p="var"
+				}
+				printf( "%s:network:route::%s:%s:%s:%s:%s\n", p, $1, $2, $3, $6, $7 )
+			}
+		}'
+
+elif [ "${OS_NAME}" = "Haiku" ]
+then
+	route					|
+	sed -e 's/^/fix:network:route::/'
+
+elif [ "${OS_NAME}" = "HP-UX" ]
+then
+	netstat -rv 2>/dev/null				|
+	awk '/^Routing tables/	{
+					print
+					next
+				}
+		/^[ 	]/	{
+					if ( NF == 1 )
+					{
+						# Netmask does not fit: continuation 
+						# line with only netmask.
+						printf( "%s ", $0 )
+						offset++
+						next
+					}
+
+					if ( offset == 1 )
+					{
+						# Destination was on previous line
+						print $1, $2, $(NF-1), $NF
+					}
+					else
+					{
+						# Destination and netmask were on
+						# previous line(s)
+						print $1, $(NF-1), $NF
+					}
+					next
+				}
+				{
+					if ( NF < 3 )
+					{
+						# Destination and/or netmask do not
+						# fit into the column. Remainder follows
+						# on next line.
+						printf( "%s ", $0 )
+						offset=NF
+					}
+					else
+					{
+						print $1, $2, $3, $(NF-1), $NF
+					}
+				}'		|
+	awk '{
+		p="fix"
+		if ( $3 ~ "D" )
+		{
+			p="var"
+		}
+		printf( "%s:network:route::%s:%s:%s:%s\n", p, $1, $2, $3, $4 )
+	}'
+
+elif [ "${OS_NAME}" = "OSF1" ]
+then
+	netstat -rv 2>&1		|
+	awk '{
+		p="fix"
+		if ( NF < 8 )
+		{
+			print "fix:network:route::" $0
+		}
+		else
+		{
+			if ( $3 ~ "D" )
+			{
+				p="var"
+			}
+			printf( "%s:network:route::%s:%s:%s:%s:%s\n",
+				p, $1, $2, $3, $6, $7 )
+		}
+	}'
+
+elif [ "${OS_NAME}" = "SunOS" ]
+then
+	# Example data:
+	#IRE Table: IPv4
+	#  Destination             Mask           Gateway          Device  MTU  Ref Flg  Out  In/Fwd
+	#-------------------- --------------- -------------------- ------ ----- --- --- ----- ------
+	#default              0.0.0.0         192.168.0.1          e1000g0  1500   2 UG       6      0
+	#openindiana          255.255.255.255 openindiana          lo0     8232   6 UH     128    128
+	#192.168.0.0          255.255.255.0   192.168.0.20         e1000g0  1500   4 U       46      0
+	#192.168.56.0         255.255.255.0   192.168.56.101       e1000g1  1500   2 U        0      0
+	#
+	#IRE Table: IPv6
+	#  Destination/Mask            Gateway                    If    MTU  Ref Flags  Out   In/Fwd
+	#--------------------------- --------------------------- ----- ----- --- ----- ------ ------
+	#openindiana                 openindiana                 lo0    8252   2 UH         0      0
+	#fe80::/10                   fe80::a00:27ff:feee:9388    e1000g1  1500   2 U          0      0
+	#fe80::/10                   fe80::a00:27ff:fe24:cb7d    e1000g0  1500   2 U          0      0
+
+	netstat -nrv 2>/dev/null				|
+	awk '/^---/	{ next }
+		{
+			# Dynamic routes are treated as variable, not fixed config items
+			p="fix"
+			if ( NF == 10 )
+			{
+				if ( ( $8 ~ "D" ) || ( $4 ~ "ppp" ) )
+				{
+					p="var"
+				}
+				printf( "%s:network:route::%s:%s:%s:%s:%s:%s\n",
+					p, $1, $2, $3, $4, $5, $8 )
+			}
+			else if ( NF == 9 )
+			{
+				if ( $7 ~ "D" )
+				{
+					p="var"
+				}
+				printf( "%s:network:route::%s:%s:%s:%s:%s\n",
+					p, $1, $2, $3, $4, $7 )
+			}
+			else if ( NF > 0 )
+			{
+				printf( "fix:network:route::%s:%s:%s:%s:%s\n",
+					$1, $2, $3, $4, $6 )
+			}
+		}'
+
+elif [ "${OS_NAME}" = "VMkernel" -a -x /bin/esxcli ]
+then
+	/bin/esxcli network ip route ipv4 list	|
+	sed -e "s/^/fix:network:route::/"
+
+elif [ -x "${netstat_exe}" ]
+then
+	busybox_check netstat
+	if [ $? -ne 0 ]
+	then
+		netstat -nr 2>/dev/null				# No -v options available.
+	else
+		netstat -nrv 2>/dev/null
+	fi						|
+	awk '{
+		p="fix"
+		if ( NF < 6 )
+		{
+			print "fix:network:route::" $0
+		}
+		else
+		{
+			if ( $4 ~ "D" )
+			{
+				p="var"
+			}
+			printf( "%s:network:route::%s:%s:%s:%s:%s:%s\n",
+				p, $1, $2, $3, $4, $(NF-1), $NF )
+		}
+	}'
+elif [ -x /sbin/route ]
+then
+	# Example data:
+	#Kernel IP routing table
+	#Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+	#192.168.0.0     0.0.0.0         255.255.255.0   U     0      0        0 eth0
+	#169.254.0.0     0.0.0.0         255.255.0.0     U     1002   0        0 eth0
+	#0.0.0.0         192.168.0.1     0.0.0.0         UG    0      0        0 eth0
+	/sbin/route -n 2>/dev/null			|
+	awk	'{
+			p="fix"
+			if ( NF < 8 )
+			{
+				print p ":" class "::" $0
+			}
+			else
+			{
+				if ( $4 ~ "D" )
+				{
+					p="var"
+				}
+				printf( "%s:%s::%s %s %s %s %s %s\n", p, class, $1, $2, $3, $4, $5, $NF )
+			}
+		}' class="network:netstat-route"
+elif [ -x /sbin/ip ]
+then
+	# Example data:
+	#192.168.0.0/24 dev eth0  proto kernel  scope link  src 192.168.0.13 
+	#192.168.56.0/24 dev eth1  proto kernel  scope link  src 192.168.56.102 
+	#169.254.0.0/16 dev eth0  scope link  metric 1002 
+	#169.254.0.0/16 dev eth1  scope link  metric 1003 
+	#default via 192.168.0.1 dev eth0 
+	/sbin/ip route 2>/dev/null		|
+	sed	-e 's/ src .*//'	\
+		-e 's/^/fix:network:route::/'
+
+fi				|
+tr "[:upper:]" "[:lower:]"	|
+sed -e "s/^fix:/${prefix}:/"
+
+rpc=$(which rpcinfo 2>/dev/null)
+if [ -x "${rpc}" ]
+then
+	rpcinfo -p 2>/dev/null		|
+	awk '/^ *[0-9][0-9]*/ {
+			# Ignore the ports without name
+			if ( NF <= 4 )
+			{
+				next
+			}
+		}
+		{
+			print $1, $2, $3, $5
+		}'			|
+	sort -n				|
+	sed -e 's/^/fix:network:rpcinfo::/'
+fi
+
+# Service Location Protocol
+for file in slp.conf slp.reg slp.spi
+do
+	sed	-e 's/[#;].*//'		\
+		-e '/^[ 	]*$/d'	\
+		-e "s@^@fix:network:slp:/etc/${file}::@" /etc/${file} 2>/dev/null
+done
+for file in /etc/slp.reg.d/*
+do
+	scc_check_file "${file}" "fix:network:slp:/etc/slp.reg.d:${file##*/}::" "#"
+done
+
+if [ -x /usr/sbin/strinfo ]
+then
+	# Ignore the address at the end of the line to avoid unwanted changes in the logbook after a reboot.
+	# Sample data:
+	#Device: 'echo', dcookie 0x18, flags: 0x24, str 0xc0213748
+	/usr/sbin/strinfo -m 2>/dev/null	|
+	sed	-e 's/ 0x[^ 	]*$//'	\
+		-e 's/^/fix:network:strinfo::/'	|
+	sort
+fi
+
+if [ -x /sbin/sysctl ]
+then
+	# Record the sed-commands in ${TMP1_FILE} that are used to delete/modify variable data from sysctl.
+	{
+		echo "/^net\\.ip.*\\.ip_\\./d"
+		echo "/^net\\.ip.*\\.ip_\\./d"
+		echo "/^net\\.inet\\.tcp\\.pcbcount/d"
+		echo "/^net\\.inet\\.tcp\\.state_count/d"
+		echo "/^net\\.isr\\./d"
+		echo "/^net\\.inet\\.flowtable\\.free_checks/d"
+		echo "/^net\\.inet\\.flowtable\\.frees/d"
+		echo "/^net\\.inet\\.flowtable\\.hist/d"
+		echo "/^net\\.inet\\.flowtable\\.lookups/d"
+		echo "/^net\\.inet\\.flowtable\\.misses/d"
+		echo "/^net\\.ipv[46]\\.conf\\.vnet/d"
+		echo "/^net\\.ipv[46]\\.neigh\\.vnet/d"
+		echo "/ip_always_defrag/d"
+		echo "/hostcache.count/d"
+		echo "/fastopen_key/d"
+		echo "/net\\.link\\.ether\\.restore_hdr/d"
+		echo "/_conntrack_count/d"			# Indicated by Anthony Caetano
+	} >${TMP1_FILE}
+
+	if [ -f /proc/net/dev ]
+	then
+		# Determine the interfaces and extend the sed-script to remove all the
+		# interface specific output of sysctl. These settings are recorded by ndd.
+		awk -F: '{
+				if ( NF > 1 )
+				{
+					sub( "  *", "", $1 )
+					printf( "/^net\\..*\\.%s\\./d\n", $1 )
+				}
+			}' /proc/net/dev >>${TMP1_FILE}
+	fi
+
+	sed -f ${TMP1_FILE} <${SYSCTL_DATA}				|
+	sed -n -e "s/^net\./fix:network:sysctl::net./p"			|
+	sed -e 's/fix:\(.*\)netdev_rss_key/var:\1netdev_rss_key/'	|
+	sort
+
+	echo "hlp:network:sysctl::The configuration files for sysctl are recorded in the system module."
+	echo "hlp:network:sysctl::Any network changes in these files will also be detected via the above data."
+	echo "hlp:network:sysctl::Direct sysctl network changes will not be detected via the configuration files in the system module."
+fi
+rm -f ${TMP1_FILE}
+
+for file in /etc/vpnc.conf /etc/vpnc/*.conf
+do
+	scc_check_file "${file}" "fix:network:vpnc:${file##*/}::" "#"		|
+	sed	-e 's/ secret .*/ secret REMOVED/'	\
+		-e 's/ password .*/ password REMOVED/'
+done
+
+ls /dev/x25* 2>/dev/null | grep x25 >/dev/null 2>&1
+if [ -d /etc/x25 -a $? -eq 0 ]
+then
+	if [ -f /etc/rc.config.d/acc ]
+	then
+		. /etc/rc.config.d/acc
+
+		if [ "${START_ZCOM}" = 1 ]
+		then
+			echo "fix:network:x25-mux:config::status:	active"
+
+			# The variabele ${X25INIT_FILE} contains the name of the file that
+			# contains the names of the configuration-files with the names of the
+			# device files. Obvious.
+			init_file="${X25INIT_FILE}"
+			file=$(awk '/-c/ { print $3 }' ${init_file})
+			dev=$(awk '/^device/ { print $2 }' ${file})
+			rm -f ${TMP1_FILE}
+			for d in ${dev}
+			do
+				if [ -n "${d}" ]
+				then
+					if [ ! -f ${TMP1_FILE} ]
+					then
+						/usr/sbin/x25stat -d ${dev} -c 2>&1		|
+						sed	-e '/Programatic Access Name/d'			\
+							-e '/^ *$/d'					\
+							-e '/Packet type.*TX.*RX/,/-* X.25 CONFIG -*/d'	\
+							-e 's/^/fix:network:x25-mux:config::/'
+						touch ${TMP1_FILE}
+					fi
+
+					/usr/sbin/x25stat -d ${dev} -c 2>&1		|
+					sed -n	-e '/Programatic Access Name/p'		|
+					sed	-e 's/.*: //'			\
+						-e "s/^/fix:network:x25-mux:${d}::access:	/"
+				fi
+			done
+		else
+			echo "fix:network:x25-mux:config::status:	inactive"
+		fi
+	else
+		/usr/sbin/x25stat -c 2>&1	|
+		sed -e 's/^/fix:network:x25:data::/'
+
+		/usr/sbin/x25stat -a 2>&1	|
+		sed -e 's/^/fix:network:x25:ipmap::/'
+	fi
+fi
+
+if [ -f /etc/snet_info ]
+then
+	scc_check_file /etc/snet_info "fix:network:x25:/etc/snet_info::" "#"
+
+	(
+		cfg="$(grep "^X25CONFIGFILES=" /etc/snet_info | tail -n 1)"
+		eval "${cfg}"			# set X25CONFIGFILES
+		X25CONFIGFILES=${X25CONFIGFILES:=/etc/opt/SUNWconn/x25}
+
+		for f in	${X25CONFIGFILES}/ipconf	\
+				${X25CONFIGFILES}/netconf	\
+				${X25CONFIGFILES}/config/link_config_0*.cfg
+		do
+			scc_check_file "${f}" "fix:network:x25:${f##*/}::" "#"
+		done
+	)
+fi
+
+if [ -x /usr/bin/windscribe ]
+then
+	/usr/bin/windscribe status 2>&1				|
+	sed -e 's/^/var:network:windscribe status::/'
+
+	/usr/bin/windscribe firewall </dev/null 2>&1		|
+	sed -n -e 's/^\(.*Firewall mode\)/var:network:windscribe firewall::\1/p'
+fi
+
+if [ -x /sbin/iwconfig ]
+then
+	/sbin/iwconfig 2>/dev/null			|
+	sed	-e '/no wireless extensions/d'	\
+		-e '/^[ 	]*$/d'		\
+		-e 's/^/var:network:wireless iwconfig::/'
+
+	# Use iwlist to get additional data from the interfaces.
+fi
+
+exit 0

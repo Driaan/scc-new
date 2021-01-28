@@ -1,0 +1,453 @@
+#!/bin/sh
+
+# Shell script to collect configuration data for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc-collect 6298 2019-12-20 21:26:19Z siemkorteweg $
+
+
+set -u
+
+ProgName=${0##*/};			export ProgName
+
+export SCC_BIN=/opt/scc/bin
+export SCC_DATA=${SCC_DATA:-/var/opt/scc/data}
+export SCC_TMP=/tmp
+export SCC_CONF=/etc/opt/scc/conf
+
+case "${SCC_DATA}" in
+/*)	;;
+*)	echo "${ProgName}: alternative SCC_DATA (${SCC_DATA}) should be an absolute path" >&2
+	exit 2;;
+esac
+
+# Perform the security settings before calling any program.
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:/usr/lib:${SCC_BIN};	export PATH
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# Indicate the directory for temporary files.
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+
+umask 022
+[ ! -d ${SCC_DATA} ] && mkdir -p ${SCC_DATA} 2>/dev/null
+[ ! -d ${SCC_DATA}/plugin_data ] && mkdir -p ${SCC_DATA}/plugin_data 2>/dev/null
+umask 077
+[ ! -d ${SCC_TMP} ] && mkdir -p ${SCC_TMP} 2>/dev/null
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+cd ${SCC_TMP}
+
+# Now we can start:
+export ODMDIR="${ODMDIR:-}"
+export SCC_PROFILING="${SCC_PROFILING:-yes}"
+export SCC_IGNORE_STM="${SCC_IGNORE_STM:-}"
+export SCC_INSTALL_PHASE="${SCC_INSTALL_PHASE:-}"
+export SCC_INSTALL_METHOD="${SCC_INSTALL_METHOD:-}"
+
+random="$(get_RANDOM)"
+export TMP1_FILE=${SCC_TMP}/scc_collect1_$$_${random}
+export TMP2_FILE=${SCC_TMP}/scc_collect2_$$_${random}
+export TMP3_FILE=${SCC_TMP}/scc_collect3_$$_${random}
+export PROC_FILE=${SCC_TMP}/scc_ps_$$_${random}
+export SYSCTL_DATA=${SCC_TMP}/scc_sysctl_$$_${random}
+
+# Unset this variable when it is empty to avoid default (UTC).
+if [ -z "${TZ:-}" ]
+then
+	unset TZ
+fi
+
+CMD_LINE="${ProgName} [ -h|--help ] [ -a|--alternative <arg> ] [ -e|--extra <user_mod> ] [ -S|--selection <mod> ] [ -i|--interactive ]"
+SYNTAX_ERROR="Syntax error, use: ${CMD_LINE}"
+
+MISSING_OPT_ARG="${ProgName}: Syntax error, missing argument for option:"
+args=""
+interactive=0
+user_module=""
+select_module=""
+while [ $# -gt 0 ]
+do
+	case "${1}" in
+	-a|--alternative)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+				args="${2}"
+				shift 2
+				;;
+	-e|--extra)		# Empty is permitted, missing not
+				[ -z "${2:-}" ] && [ "${2+defined}" != "defined" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+				scc_check_option_single "-e" "${user_module}"
+				user_module="${2:-}"
+				shift 2
+				;;
+	-S|--selection)		# Empty is permitted, missing not
+				[ -z "${2:-}" ] && [ "${2+defined}" != "defined" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+				scc_check_option_single "-S" "${select_module}"
+				select_module="${2:-}"
+				shift 2
+				;;
+	-h|--help)		echo "${CMD_LINE}"
+				scc_documentation
+				exit 0
+				;;
+	-i|--interactive)	interactive=1
+				# ensure that sysctl data is present, by default collected by general module and used by others
+				get_sysctl_data >${SYSCTL_DATA}
+				shift 1
+				;;
+	*)			echo "${SYNTAX_ERROR}" >&2
+				exit 1
+				;;
+	esac
+done
+
+[ -r ${SCC_CONF}/scc-localize ] && . ${SCC_CONF}/scc-localize
+
+tty="$(which tty 2>/dev/null)"
+if [ -x "${tty}" -a ${interactive} -eq 0 ]
+then
+	# Ignore output and message for ttylinux.
+	if tty -s >/dev/null 2>/dev/null
+	then
+		echo "${ProgName}: use -i option to run interactive" >&2
+		exit 2
+	fi
+fi
+
+# Some commands adjust the width of their output according to COLUMNS, unset
+# this variable to avoid differences in the snapshots.
+export COLUMNS=300		# always use the same width.
+unset LINES
+unset DISPLAY
+
+OS_NAME=$(uname -s)
+hostname_exe="$(which hostname 2>/dev/null)"
+if [ -x "${hostname_exe}" ]
+then
+	hostname=$(hostname 2>/dev/null)
+else
+	hostname=${HOSTNAME:-}
+fi
+if [ -z "${hostname}" ]
+then
+	hostname="empty"		# same value as in scc and scc-log
+fi
+HOSTNAME=${hostname%%.*}
+export OS_NAME hostname HOSTNAME
+
+scc_linux_distro		# Set SCC_LINUX_DISTRO to the proper value.
+
+if [ -z "${SCC_KEEP_CONFIG:-}" ]
+then
+	SCC_KEEP_CONFIG=${SCC_DATA}/scc.${HOSTNAME}.keep
+fi
+if [ -z "${SCC_KEEP_NEW:-}" ]		# specified during tests with bats
+then
+	SCC_KEEP_NEW=${SCC_TMP}/scc.keep_$$_${random}
+	rm -f ${SCC_KEEP_NEW}
+fi
+touch ${SCC_KEEP_NEW} ${SCC_KEEP_CONFIG}
+export SCC_KEEP_CONFIG SCC_KEEP_NEW
+
+new_keep_version="keep_file_version:1.2"
+keep_version=$(grep "^${new_keep_version}$" ${SCC_KEEP_CONFIG} 2>/dev/null)
+if [ "${keep_version}" != "${new_keep_version}" ]
+then
+	# The version of the keep-file does not match with the version
+	# used by scc-collect. This means that the file has been written
+	# by an incompatible version of scc-collect. Erase the keep-file.
+	>${SCC_KEEP_CONFIG}
+fi
+echo "${new_keep_version}" >>${SCC_KEEP_NEW}
+
+if [ "${SCC_INSTALL_PHASE}" -a -z "${SCC_INSTALL_METHOD}" ]
+then
+	echo "pkgmngt:locked_database" >>${SCC_KEEP_NEW}	# Refer to scc-log for rationale
+fi
+
+trap 'rm -f ${TMP1_FILE} ${TMP2_FILE} ${TMP3_FILE} ${PROC_FILE} ${SYSCTL_DATA} ${SCC_KEEP_NEW}' 0
+trap "exit 2" 1 2 3 15
+
+# Store the current processes for later use.
+# Reduce the length of the lines.
+# On some systems java code is part of the output, resulting in lines exceeding 2KB and errors from grep.
+# Indicated by Doug Probst and Mattijs de Ruijter.
+case "${OS_NAME}" in
+*BSD)	ps -ajxww -o user,pid,ppid,state,pri,%cpu,%mem,vsz,rss,tty,start,time,command	|
+	cut -c1-300 >${PROC_FILE}
+	;;
+
+OSF1)	ps axww -o user,pid,ppid,state,pri,%cpu,%mem,vsz,rss,tty,start,time,command	|
+	cut -c1-300 >${PROC_FILE}
+	;;
+
+AIX)	ps -Af										|
+	cut -c1-300 >${PROC_FILE}
+	;;
+
+Haiku)	ps >${PROC_FILE}
+	;;
+
+VMkernel)	/bin/ps -T -P -c -g -j -s -t -Z		|
+	cut -c1-300 >${PROC_FILE}
+	;;
+
+*)	# Try to collect the process hierarchy.
+	busybox_check ps
+	if [ $? -ne 0 ]
+	then
+		busybox_ps				|
+		cut -c 1-300 >${PROC_FILE}
+	else
+		UNIX95= ps -Hef 2>/dev/null		|
+		cut -c1-300 >${PROC_FILE}
+		if [ "$(wc -l <$PROC_FILE)" -lt 10 ]			# Not supported?
+		then
+			ps -ef 2>/dev/null			|
+			cut -c1-300 >${PROC_FILE}
+		fi
+	fi
+	;;
+esac
+
+IS_NIS_MASTER=0;		export IS_NIS_MASTER
+NIS_DATA_DIR="";		export NIS_DATA_DIR
+grep -l ypxfrd ${PROC_FILE} >/dev/null 2>/dev/null
+if [ $? -eq 0 ]
+then
+	IS_NIS_MASTER=1
+	NIS_DATA_DIR=$(grep "^[ 	]*DIR" /var/yp/Makefile 2>/dev/null	|
+			tail -n 1						|
+			sed -e 's/^[ 	]*DIR[ 	]*=[ 	]*//' -e 's/[ 	].*//')
+	if [ ! -d "${NIS_DATA_DIR}" ]
+	then
+		NIS_DATA_DIR=/etc
+	fi
+fi
+IS_NIS_CLIENT=0;			export IS_NIS_CLIENT
+grep -l ypbind ${PROC_FILE} >/dev/null 2>/dev/null
+if [ $? -eq 0 ]
+then
+	if [ -x /usr/bin/svcs ]
+	then
+		/usr/bin/svcs nis/client 2>/dev/null | grep -l online >/dev/null
+		if [ $? -eq 0 ]
+		then
+			IS_NIS_CLIENT=1
+		fi
+	else
+		IS_NIS_CLIENT=1
+	fi
+fi
+
+# Not part of scc-utils as it should not be called by the modules.
+scc_crypt_init()
+{
+	# Get the crypt-key from the keep-config-file, otherwise initialize.
+
+	scc_keep_crypt_tag="scc-crypt-key"
+
+	export crypt_key=$(sed -n -e "s@^${scc_keep_crypt_tag}:@@p" ${SCC_KEEP_CONFIG} 2>/dev/null)
+	if [ ! -n "${crypt_key}" ]
+	then
+		r1="$(get_RANDOM)"
+		sleep 1			# when ${RANDOM} is empty, we use the seconds, wait to make r1 != r2
+		r2="$(get_RANDOM)"
+		crypt_key="${r1}${r2}"
+	fi
+	echo "${scc_keep_crypt_tag}:${crypt_key}" >>${SCC_KEEP_NEW}
+
+	return 0
+}
+
+# run module scc-module
+run_module()
+{
+	scc_module="${1}"
+
+	[ ${SCC_PROFILING} ] && scc_timing "${scc_module}:start of module"
+
+	case "${SCC_MODULE}" in
+	scc_[0-9][0-9][0-9][0-9]_s_*)	# scc system module
+					./"${scc_module}" </dev/null 2>&1
+					;;
+	*)				# scc user module with optional arguments
+
+					# Surround the data with these tags and checksum. When a module is changed,
+					# scc-log detects this and removes the data of the module from the current and 
+					# new snapshot before comparing them. This makes it possible to update
+					# modules without changes reported in the logbook.
+					checksum="$(sed -e '/^[ 	]*#/d'	\
+							-e '/^[ 	]*$/d' ${SCC_MODULE}	| scc_checksum)"
+
+					echo "var:MoDuLe:start::${SCC_MODULE}:${checksum}"
+					./"${scc_module}" ${args} </dev/null 2>&1
+					echo "var:MoDuLe:end::${SCC_MODULE}:"
+					;;
+	esac
+
+	[ ${SCC_PROFILING} ] && scc_timing "${scc_module}:end of module"
+}
+
+now=$(date '+%H.%M.%S')
+hour=${now%%.*}
+hour=${hour#0}	# avoid 'octal' arithmetic
+min=${now%.*}
+min=${min#*.}
+min=${min#0}	# avoid 'octal' arithmetic
+sec=${now##*.}
+sec=${sec#0}	# avoid 'octal' arithmetic
+
+tick_prev=$(( sec + ( 60 * min ) + ( 3600 * hour ) ));		export tick_prev
+total_time=0;							export total_time
+
+# For several commands we need to know the name of the HP-UX kernel.
+if [ -x /usr/sbin/kmpath ]
+then
+	# This is only available for HP-UX 11.*
+	HPUX_KERNEL="$(/usr/sbin/kmpath 2>/dev/null)"
+fi
+HPUX_KERNEL=${HPUX_KERNEL:-/stand/vmunix}
+export HPUX_KERNEL
+
+# The adb-command, used to retrieve settings from the kernel, uses two sets of format strings.
+# Indicated by Harry van Wiggen.
+if [ "${OS_NAME}" = "HP-UX" ]
+then
+	export HPUX_ADB_STRING_FORMAT="S"
+	export HPUX_ADB_NMBR_FORMAT="D"
+	value="$(echo "boot_string/${HPUX_ADB_STRING_FORMAT}"	|
+		/usr/bin/adb "${HPUX_KERNEL}" /dev/kmem 2>/dev/null)"
+	if [ -z "${value}" ]
+	then
+		HPUX_ADB_STRING_FORMAT="ls"
+		HPUX_ADB_NMBR_FORMAT="ld"
+	fi
+fi
+
+# Edit scc-localize to change the default setting of this variable.
+if [ -z "${MAX_SYS_ACCOUNT_ID:-}" ]
+then
+	MAX_SYS_ACCOUNT_ID=500
+	if [ "${OS_NAME}" = "HP-UX" -o "${OS_NAME}" = "SunOS" ]
+	then
+		MAX_SYS_ACCOUNT_ID=100		# check logins(1)
+	fi
+fi
+export MAX_SYS_ACCOUNT_ID
+
+scc_crypt_init
+
+##	START: GENERAL
+[ ${SCC_PROFILING} ] && scc_timing "scc-collect:start of run"
+
+SCC_MODULE="";					export SCC_MODULE
+SCC_RELEASE="1.26.73";			export SCC_RELEASE
+(
+	cd ${SCC_BIN}/scc_modules
+	for SCC_MODULE in scc_[0-9][0-9][0-9][0-9]_[su]_*
+	do
+		if [ -x "${SCC_MODULE}" ]
+		then
+			case "${SCC_MODULE}" in
+			scc_*~)		continue;;		# Ignore (vim) copies.
+			esac
+
+			echo "moduleSTART:${SCC_MODULE}" >>${SCC_KEEP_NEW}
+			module_has_run=0
+
+			rm -f ${TMP1_FILE} ${TMP2_FILE} ${TMP3_FILE}
+
+
+			case "${SCC_MODULE}" in
+			scc_[0-9][0-9][0-9][0-9]_s_*)		# scc system module
+				if [ -z "${select_module}" ]
+				then
+					run_module "${SCC_MODULE}"
+					module_has_run=1
+				else
+					case "${SCC_MODULE}" in
+					*${select_module}*)	run_module "${SCC_MODULE}"
+								module_has_run=1;;
+					esac
+				fi
+				;;
+
+			scc_[0-9][0-9][0-9][0-9]_u_*)		# scc user module
+				run_module=""
+				if [ "${user_module}" ]
+				then
+					case "${SCC_MODULE}" in
+					*${user_module}*)	run_module="yes";;
+					esac
+				fi
+				if [ "${select_module}" ]
+				then
+					case "${SCC_MODULE}" in
+					*${select_module}*)	run_module="yes";;
+					esac
+				fi
+				if [ ${run_module} ]
+				then
+					module_has_run=1
+					if [ ${interactive} -eq 1 ]
+					then
+						run_module "${SCC_MODULE}"
+					else
+						run_module "${SCC_MODULE}"	|
+						tee "${SCC_DATA}/plugin_data/${SCC_MODULE}"
+					fi
+				fi
+				;;
+			esac
+
+			if [ ${module_has_run} -eq 0 ]
+			then
+				# The module has not run: use the data from its last run
+				# This data will contain the time of the last run of the user module
+				cat "${SCC_DATA}/plugin_data/${SCC_MODULE}" 2>/dev/null
+			fi
+			echo "moduleEND:${SCC_MODULE}" >>${SCC_KEEP_NEW}
+		else
+			echo "fix:messages::non-executable module: ${SCC_MODULE}"
+		fi	# if [ -x "${SCC_MODULE}" ]
+	done	# for SCC_MODULE in scc_[0-9][0-9][0-9][0-9]_[su]_*
+)
+
+##	END
+[ ${SCC_PROFILING} ] && scc_timing "scc-collect:end of run"
+
+if [ ${interactive} -eq 0 ]
+then
+	mv ${SCC_KEEP_NEW} ${SCC_KEEP_CONFIG}
+fi
+
+exit 0

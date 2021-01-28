@@ -1,0 +1,1008 @@
+#!/bin/sh
+
+# Shell script to collect system data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0900_s_system 6284 2019-11-10 20:54:52Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+if [ -d /etc/abrt ]
+then
+	for file in /etc/abrt/*conf /etc/abrt/*/*conf
+	do
+		scc_check_file "${file}" "fix:system:abrt:${file}::" "#"
+	done
+fi
+
+if [ -d /etc/apport ]
+then
+	for file in /etc/apport/crashdb.conf /etc/apport/blacklist.d/*
+	do
+		scc_check_file "${file}" "fix:system:apport:${file}::" "#"
+	done
+fi
+
+# Make sure to show only data for symbolic links (indicated by Paul te Vaanholt).
+ls -l /etc/alternatives 2>/dev/null			|
+sed -n -e 's@^.* \([^ 	][^ 	]*\) -> @fix:system:/etc/alternatives::\1 -> @p'
+
+if [ -x /usr/sbin/audevent ]
+then
+	/usr/sbin/audevent				|
+	sed -e 's/^/fix:system:audevent::/'
+fi
+
+for file in	/etc/audit/auditd.conf	\
+		/etc/audit/audit.rules	\
+		/etc/auditd.conf	\
+		/etc/audit.rules
+do
+	scc_check_file "${file}" "fix:system:audit:${file}::" "#"
+done
+
+for file in /etc/binfmt.d/*.conf
+do
+	scc_check_file "${file}" "fix:system:binfmt:${file}::" "#"
+done
+
+if [ -x /sbin/crashconf ]
+then
+	/sbin/crashconf		|
+	awk '/^$/		{ next }
+		/^DEVICE/	{ fixed=1;	}
+				{
+					if ( fixed )
+					{
+						print "fix:system:crashconf::" $0
+					}
+					else
+					{
+						print "var:system:crashconf::" $0
+					}
+				}'
+fi
+
+if [ -x /usr/bin/crle ]
+then
+	/usr/bin/crle 2>/dev/null	|
+	sed -e 's/^/fix:system:crle::/'
+fi
+
+for file in /etc/cups/*.conf /etc/cups/*.convs /etc/cups/*.types 
+do
+	# Ignore the subscriptions file as it contains variable data:
+	case "${file##*/}" in
+	subscriptions.conf)	;;
+	*)			scc_check_file "${file}" "fix:system:CUPS:${file}::" "#"
+	esac
+done
+
+for file in /etc/cgconfig.conf /etc/cgrules.conf /etc/cgsnapshot_blacklist.conf /etc/cgred.conf
+do
+	scc_check_file "${file}" "fix:system:cgroups:${file}::" "#"
+done
+
+scc_check_file /etc/coreadm.conf "fix:system:/etc/coreadm.conf::" "#"
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli system coredump file get	|
+	sed -e 's/^/fix:system:coredump::/'
+fi
+
+if [ -x /usr/sbin/datadm ]
+then
+	/usr/sbin/datadm -v 2>/dev/null		|
+	sed -e 's/^/fix:system:datadm::/'
+fi
+
+if [ -x /usr/bin/dircolors ]
+then
+	/usr/bin/dircolors --print-database 2>/dev/null			|
+	sed	-e '/^#/d'			\
+		-e 's/^/fix:system:dircolors::/'
+fi
+
+if [ -d /etc/saf ]
+then
+	for file in $(find /etc/saf -type f | grep -v "/_pid" | sort )
+	do
+		scc_check_file "${file}" "fix:system:saf:${file}::" "#"
+	done
+fi
+
+scc_check_file /etc/dumpadm.conf "fix:system:/etc/dumpadm.conf::" "#"
+
+scc_check_file /etc/debconf.conf "fix:system:debconf:/etc/debconf.conf::" "#"
+
+if [ -x /usr/bin/debconf-get-selections ]
+then
+	/usr/bin/debconf-get-selections --installer 2>/dev/null		|
+	sed -e 's/^/fix:system:debconf:debconf-get-selections::/'
+fi
+
+for file in /etc/dbus-1/*.conf /etc/dbus-1/system.d/*.conf
+do
+	scc_check_file --xml "${file}" "fix:system:dbus:${file}::" 
+done
+
+dmesg_exe="$(which dmesg 2>/dev/null)"
+if [ -x "${dmesg_exe}" ]
+then
+	# Avoid binary characters in snapshot and logbook.
+	# Ingore vnet messages bloating the logging
+	"${dmesg_exe}" 2>/dev/null				|
+	strings							|
+	grep -v "vnet[0-9]"					|
+	sed -e "s/^/var:system:log:dmesg::/"
+fi
+
+if [ -d /etc/endian ]
+then
+	for file in /etc/endian/*.conf
+	do
+		scc_check_file "${file}" "fix:system:endian:${file}::" "#"
+	done
+fi
+
+if [ -x /usr/bin/gconftool-2 ]
+then
+	/usr/bin/gconftool-2 -R /system 2>/dev/null	|
+	sed -e 's/^/fix:system:gconftool-2::/'
+fi
+
+if [ -x /usr/bin/nlsadm ]
+then
+	/usr/bin/nlsadm get-system-locale 2>/dev/null	|
+	sed -e 's/^/fix:system:locale::/'
+fi
+
+scc_check_file /etc/shutdownlog "var:system:log:/etc/shutdownlog::" "#"
+
+for file in					\
+		/etc/bashrc			\
+		/etc/bash.bashrc		\
+		/etc/dt/config/Xaccess		\
+		/usr/dt/config/Xaccess		\
+		/etc/environment		\
+		/etc/issue.net			\
+		/etc/.login			\
+		/etc/login.access		\
+		/etc/login.conf			\
+		/etc/login.defs			\
+		/etc/profile			\
+		/etc/profile.local		\
+		/etc/profile.d/*		\
+		/etc/shells			\
+		/etc/csh.cshrc			\
+		/etc/csh.login			\
+		/etc/csh.logout			\
+		/etc/ksh.kshrc			\
+		/etc/changelist			\
+		/etc/wsconsctl.conf
+do
+	scc_check_file "${file}" "fix:system:login:${file}::" "#"
+done
+
+# This file tends to contain contains variable data like load, memory usage and uptime.
+scc_check_file "/etc/motd" "var:system:login:/etc/motd::" "#"
+
+scc_check_file "/etc/nologin" "fix:system:login:/etc/nologin::" "#"
+
+# The /etc/issue file on VectorLinux contains a picture and variable load data: ignore the file.
+# On GoboLinux this file contains variable properties of the system: ignore
+# On pardus this file contains escape characters.
+if [ "${SCC_LINUX_DISTRO}" != "vector" -a "${SCC_LINUX_DISTRO}" != "GoboLinux" -a "${SCC_LINUX_DISTRO}" != "Pardus" ]
+then
+	scc_check_file "/etc/issue" "fix:system:login:/etc/issue::" "#"
+fi
+
+if [ -d /etc/env.d ]
+then
+	find /etc/env.d -type f 2>/dev/null		|
+	sort						|
+	while read file
+	do
+		scc_check_file "${file}" "fix:system:variables:${file}::" "#"
+	done
+fi
+
+scc_check_file /etc/HOSTNAME "fix:system:host:/etc/HOSTNAME::" "#"
+scc_check_file /etc/hostname "fix:system:host:/etc/hostname::" "#"
+scc_check_file /etc/mailname "fix:system:host:/etc/mailname::" "#"
+scc_check_file /etc/hoststated.conf "fix:system:host:/etc/hoststated.conf::" "#"
+scc_check_file /etc/afs/afsd.conf "fix:system:host:/etc/afs/afsd.conf::" "#"
+
+# Often /etc/logingroup is a symbolic link to /etc/group. Check whether these files differ to determine
+# incorporating /etc/logingroup in the snapshot.
+file="/etc/logingroup"
+if [ -f ${file} -a "$(cmp -s ${file} /etc/group 2>/dev/null; echo $?)" -eq 1 ]
+then
+	# All group-members must be on a single line. Split the line and sort
+	# the data for better overview. This also enables us to compare systems
+	# where users were added in different order to this file.
+	awk -F: '{
+		if ( length( $4 ) == 0 )
+		{
+			printf( "%s::%s:%s:%s:\n", p, $1, $2, $3  )
+		}
+		else
+		{
+			cnt = split( $4, parts, "," )
+			for ( i = 1; i <= cnt; i++ )
+			{
+				printf( "%s::%s:%s:%s:%s\n", p, $1, $2, $3, parts[ i ] )
+			}
+		}
+	}' p="fix:system:login:${file}" ${file}		|
+	sort
+fi
+
+if [ -x /bin/lsactdef ]
+then
+	# Display action definitions:
+	/bin/lsactdef -x	|
+	sed -e 's/"//g'		|
+	sort			|
+	while read class
+	do
+		lsactdef -t -c ${class}		|
+		sed -e "s${sed_sep}^${sed_sep}fix:system:lsactdef:${class}::${sed_sep}"
+	done
+fi
+
+if [ -x /bin/lscondition ]
+then
+	# Sample output:
+	#"condition" <state>
+	# Options: -x (no heading), -D (delimiter)
+	/bin/lscondition -x -D "|"	|
+	sed	-e 's/"|".*//'	\
+		-e 's/"//'		|
+	sort				|
+	while read cond
+	do
+		/bin/lscondition "${cond}"	|
+		sed -e "s@^@fix:system:lscondition:${cond}::@"
+	done
+fi
+
+scc_check_file /etc/man.config "fix:system:man::/etc/man.config:	" "#"
+scc_check_file /etc/man.conf "fix:system:man::/etc/man.conf:	" "#"
+scc_check_file /usr/share/man/man.cf "fix:system:man::/usr/share/man/man.cf:	" "#"
+
+for f in PATH MANPATH SHLIB_PATH
+do
+	if [ -s /etc/${f} ]
+	then
+		sed	-e '/^#/d'	\
+			-e '/^[ 	]*$/d' /etc/${f}	|
+		tr ":" "\012"					|
+		sed -e "s@^@fix:system:path::/etc/${f}:	@"
+	fi
+done
+scc_check_file /etc/manpath.config "fix:system:path::/etc/manpath.config:	" "#"
+
+scc_check_file /etc/nixos/configuration.nix "fix:system:/etc/nixos/configuration.nix::" "#"
+
+# Add the processes as variabele data.
+sed -e 's/^/var:system:processes::/' ${PROC_FILE}
+var_class="var:system:process hierarchy"
+if [ -x /usr/proc/bin/ptree ]
+then
+	# Solaris cannot provide hierarchy with ps.
+	/usr/proc/bin/ptree 2>/dev/null			|
+	cut -c1-300					|
+	sed -e "s/^/${var_class}::ptree	/"
+fi
+
+if [ -x /usr/bin/proctree ]
+then
+	# AIX cannot provide hierarchy with ps.
+	/usr/bin/proctree				|
+	cut -c1-300					|
+	sed -e "s/^/${var_class}::proctree	/"
+fi
+
+scc_check_file /etc/qconfig "fix:system:qconfig::" "*"
+
+for file in /etc/rwtab /etc/rwtab.d/*
+do
+	scc_check_file "${file}" "fix:system:readonly exceptions:${file}::" "#"
+done
+
+if [ -x /usr/sbin/needrestart ]
+then
+	/usr/sbin/needrestart -r l 2>&1	|
+	sed -e 's/^/var:system:needrestart::/'
+elif [ -x /usr/bin/needs-restarting ]
+then
+	/usr/bin/needs-restarting 2>&1	|
+	sed -e 's/^/var:system:needs-restarting::/'
+fi
+
+# AppArmor
+if [ -d /sys/kernel/security/apparmor ]
+then
+	for f in /sys/kernel/security/apparmor/control/*
+	do
+		if [ -f ${f} ]
+		then
+			echo "fix:system:security:apparmor:configuration:general::${f##*/}	: $(cat "${f}")"
+		fi
+	done
+
+	scc_check_file /sys/kernel/security/profiles "fix:system:security:apparmor:configuration:general::" "#"	|
+	sort
+fi
+
+if [ -x /usr/sbin/aa-status ]
+then
+	# Number of processes with profiles can change, therefore variable data.
+	# Processes in complain/enforce/... mode are reported with their (variable) PID, erase the PID
+	/usr/sbin/aa-status 2>&1										|
+	awk	'/process/	{ print "var:system:security:apparmor:configuration:aa-status::" $0; next }
+				{ print "fix:system:security:apparmor:configuration:aa-status::" $0; next }'	|
+	sed	-e 's/^fix:\(.*[ 	]*([0-9][0-9]*)[ 	]*\)$/var:\1/'
+fi
+if [ -d /etc/apparmor ]
+then
+	for file in	logprof.conf	\
+			reports.conf	\
+			reports.crontab	\
+			subdomain.conf
+	do
+		scc_check_file "/etc/apparmor/${file}" "fix:system:security:apparmor:configuration:/etc/apparmor/${file}::" "#"
+	done
+fi
+for dir in /etc/apparmor.d /etc/subdomain.d
+do
+	if [ -d ${dir} ]
+	then
+		# Ignore the cache directory as it contains variable files.
+		find ${dir} -type f					|
+		grep -v "/cache/"					|
+		sort							|
+		while read file
+		do
+			if [ -f "${file}" ]
+			then
+				# To preserve the #include statements, we cannot use scc_check_file.
+				sed	-n						\
+					-e '/^[ 	]*#include/p'			\
+					-e '/^[ 	]*#/d'				\
+					-e '/^[ 	]*$/d'				\
+					-e '/.*/p'					\
+						<${file} 2>/dev/null						|
+				sed	-e "s@^@fix:system:security:apparmor:profiles:${file}::@"
+			fi
+		done
+	fi
+done
+
+if [ -x /usr/bin/encrypt ]
+then
+	/usr/bin/encrypt -l 2>/dev/null		|
+	sed -e 's/^/fix:system:security:encrypt algorithms::/'
+fi
+
+# On some systems /etc/security is a file, on others a directory. 
+# To simplify the code, we handle the file-case first.
+# Indicated by Doug Probst.
+scc_check_file "/etc/security" "fix:system:security:/etc/security::" "#"
+for f in				\
+		/etc/checksecurity.conf	\
+		/etc/doprc		\
+		/etc/fam.conf		\
+		/etc/fbtab		\
+		/etc/freshclam.conf	\
+		/etc/identd.conf	\
+		/etc/logindevperm	\
+		/etc/limits		\
+		/etc/op.conf		\
+		/etc/op.d/*.conf	\
+		/etc/permissions*	\
+		/etc/privgroup		\
+		/etc/securetty		\
+		/etc/securettys		\
+		/etc/security.conf	\
+		/etc/sia/matrix.conf	\
+		/etc/sssd/*.conf	\
+		/etc/ttyaction		\
+		/etc/ttys		\
+		/etc/user_attr		\
+		/etc/usertty		\
+		/tcb/files/auth/system/default
+do
+	if [ -d ${f} ]
+	then
+		for g in ${f}/*
+		do
+			scc_check_file "${g}" "fix:system:security:${g}::" "#"
+		done
+	else
+		scc_check_file "${f}" "fix:system:security:${f}::" "#"
+	fi
+done
+
+if [ -d /etc/security ]
+then
+	if [ "${OS_NAME}" = "AIX" ]
+	then
+		# On AIX this directory contains files that change when users are added and log on to the system.
+		# Record the contents of a limited set of files:
+		for file in .profile acl environ priv ldap/ldap.cfg ldap/sectoldif.cfg
+		do
+			scc_check_file /etc/security/${file} "fix:system:security:/etc/security/${file}::" "#"
+		done
+		for file in limits login.cfg pwdalg.cfg roles smitacl.group smitacl.user smitacl.roles
+		do
+			if [ -f /etc/security/${file} ]
+			then
+				sed	-e '/^*/d'		\
+					-e '/^$/d'		\
+						/etc/security/${file}		|
+				awk	'/^[^ 	]/	{ stanza = $1; next }
+							{ print stanza $0 }'	|
+				sed -e "s@^@fix:system:security:/etc/security/${file}::@"
+			fi
+		done
+	else
+		for entry in /etc/security/*
+		do
+			if [ -d "${entry}" ]
+			then
+				for file in ${entry}/*
+				do
+					scc_check_file "${file}" "fix:system:security:${file}::" "#"
+				done
+			else
+				scc_check_file "${entry}" "fix:system:security:${entry}::" "#"
+			fi
+		done
+	fi
+fi
+
+if [ -x /usr/bin/fpm ]
+then
+	# File Permission Manager.
+	for level in default low medium high
+	do
+		/usr/bin/fpm -p -l ${level} 2>/dev/null		|
+		sort -k 3					|
+		sed -n -e "s@^chmod@fix:system:security:/usr/bin/fpm:${level}::chmod@p"
+	done
+fi
+
+if [ -x /bin/lsauthent ]
+then
+	/bin/lsauthent						|
+	sed -e 's/^/fix:system:security:lsauthent::/'
+fi
+
+scc_check_file "/etc/mtree/special" "fix:system:security:/etc/mtree/special::" "#"
+
+if [ -d /usr/lib/security ]
+then
+	ls -l /usr/lib/security					|
+	grep -v methods.cfg					|
+	scc_ls							|
+	sed -e 's@^@fix:system:security:/usr/lib/security::@'
+fi
+scc_check_file /usr/lib/security/methods.cfg "fix:system:security:/usr/lib/security/methods.cfg::" "*"
+
+# The contents of these file changes often. The order of systems changes.
+for file in /etc/krb5.conf /etc/krb.conf /etc/krb5/krb5.conf
+do
+	if [ ! -h "${file}" ]
+	then
+		scc_check_file "${file}" "var:system:security:Kerberos:${file}::"		"#"
+	fi
+done
+scc_check_file /etc/krb5.realms		"fix:system:security:Kerberos:/etc/krb.realms::"		"#"
+scc_check_file /etc/krb5/krb5_cfg_type	"fix:system:security:Kerberos:/etc/krb5/krb5_cfg_type::"	"#"
+
+for klist in /usr/kerberos/bin/klist /usr/krb5/bin/klist /usr/bin/klist
+do
+	if [ -x ${klist} ]
+	then
+		for keytab in /etc/krb5.keytab /etc/krb5/krb5.keytab /etc/krb5kdc/kadm5.keytab /var/krb5/krb5kdc/kadm5.keytab
+		do
+			if [ ! -h ${keytab} -a -f ${keytab} ]
+			then
+				# Display the version/type of encryption, timestamps and the principals
+				${klist} -t -e -k ${keytab} 2>/dev/null		|
+				sed -e "s@^@fix:system:security:Kerberos:${keytab}::@"
+			fi
+		done
+
+		break		# stop after first klist found.
+	fi
+done
+for dir in /etc/krb5kdc /var/krb5/krb5kdc /var/kerberos/krb5kdc
+do
+	if [ -d ${dir} ]
+	then
+		scc_check_file ${dir}/kdc.conf		"fix:system:security:Kerberos:${dir}/kdc.conf::" "#"
+		scc_check_file ${dir}/kadm5.acl		"fix:system:security:Kerberos:${dir}/kadm5.acl::" "#"
+
+		# Remove the checksum of bind password.
+		scc_check_file ${dir}/.kdc_ldap_data	"fix:system:security:Kerberos:${dir}/.kdc_ldap_data::" "#"	|
+		sed -e '/bind_dn_pw/d'
+	fi
+done
+
+for dir in /etc /etc/portsentry
+do
+	scc_check_file "${dir}/portsentry.conf" "fix:system:security:${dir}/portsentry.conf::" "#"
+done
+
+# SElinux
+if [ -x /usr/sbin/sestatus ]
+then
+	# sestatus also displays the booleans, but in a less pleasant format.
+	# Ignore the booleans from sestatus and use getsebool to display the values of the booleans.
+	/usr/sbin/sestatus					|
+	sed	-e '/booleans/,$d'	\
+		-e '/^$/d'		\
+		-e 's/^/fix:system:security:selinux:sestatus::/'
+fi
+scc_check_file /etc/selinux/config		"fix:system:security:selinux:/etc/selinux/config::" "#"
+scc_check_file /etc/selinux/restorecond.conf	"fix:system:security:selinux:/etc/selinux/restorecond.conf::" "#"
+scc_check_file /etc/selinux/semanage.conf	"fix:system:security:selinux:/etc/selinux/semanage.conf::" "#"
+scc_check_file /etc/sestatus.conf		"fix:system:security:selinux:/etc/sestatus.conf::" "#"
+
+if [ -x /usr/sbin/semanage ]
+then
+	for object in boolean interface login module node port user
+	do
+		/usr/sbin/semanage ${object} -l 2>/dev/null		|
+		sed -e "s/^/fix:system:security:selinux:${object}::/"
+	done
+
+	/usr/sbin/semanage -o - 2>/dev/null				|
+	sed -e 's/^/fix:system:security:selinux:customizations::/'
+else
+	if [ -x /usr/sbin/getsebool ]
+	then
+		/usr/sbin/getsebool -a 2>/dev/null			|
+		sed -e 's/^/fix:system:security:selinux:getsebool::/'
+	fi
+
+	if [ -x /usr/sbin/semodule ]
+	then
+		/usr/sbin/semodule -l 2>/dev/null		|
+		sed -e 's/^/fix:system:security:selinux:installed modules::/'
+	fi
+fi
+
+scc_check_file /etc/ld.so.conf "fix:system:ld:/etc/ld.so.conf::" "#"
+for file in /etc/ld.so.conf.d/*
+do
+	scc_check_file "${file}" "fix:system:ld:${file}::" "#"
+done
+
+if [ -x /sbin/ldconfig ]
+then
+	case "${OS_NAME}" in
+	DragonFly|*BSD)	/sbin/ldconfig -v -r 2>/dev/null				|
+			sed -n -e 's/^[ 	]*[0-9][0-9]*:-//p'			|
+			awk	'{
+					# Format of data is:
+					# <lib> => <abs_path_of_object>
+					lib = $1
+					dir = $3
+					sub( "/[^/][^/]*$", "", dir )
+					obj = $3
+					sub( ".*/", "", obj )
+					printf( "%s:%s::%s => %s\n", l, dir, lib, obj )
+				}' l="fix:system:ld:ldconfig"				|
+			sort
+			;;
+	*)		/sbin/ldconfig -vNX 2>/dev/null	|
+			awk '/^	/	{
+						printf( "%s:%s::%s\n", l, dir, $0 )
+						next
+					}
+					{
+						dir = $1
+						if ( NF > 1 )
+						{
+							$1 = "	"
+							printf( "%s:%s::%s\n", l, dir, $0 )
+						}
+					}' l="fix:system:ld:ldconfig"		|
+			sed -e 's/:	//'		|
+			sort
+			;;
+	esac
+fi
+
+if [ -x /usr/bin/pkg-config ]
+then
+	pc_path="$(/usr/bin/pkg-config --variable pc_path pkg-config 2>/dev/null | sed -e 's/.*://')"
+	if [ ! -d "${pc_path}" ]
+	then
+		pc_path=/usr/share/pkgconfig
+	fi
+	for file in ${pc_path}/*pc
+	do
+		scc_check_file "${file}" "fix:system:pkg-config:${file}::" "#"
+	done
+fi
+
+for file in /etc/prelink.conf /etc/prelink.conf.d/*
+do
+	scc_check_file "${file}" "fix:system:ld:${file}::" "#"
+done
+
+scc_check_file /etc/hosts.allow "fix:system:security:/etc/hosts.allow::" "#"
+scc_check_file /etc/hosts.deny "fix:system:security:/etc/hosts.deny::" "#"
+
+if [ -x /usr/sbin/pluginviewer ]
+then
+	while read option type
+	do
+		/usr/sbin/pluginviewer -${option} 2>/dev/null		|
+		sed -e "s/^/fix:system:security:SASL plugins:${type}::/"
+	done <<- _X_
+		a auxprop
+		c client
+		s server
+	_X_
+fi
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli network firewall get	|
+	sed -e "s/^/fix:system:security:vsphere firewall:status::/"
+ 
+	class="fix:system:security:vsphere firewall:rulesets"
+	fields="Name,Enabled"
+
+	echo "${class}::${fields}"
+
+	/bin/esxcli	--formatter=csv				\
+			--format-param=fields="${fields}"	\
+			network firewall ruleset  list			|
+	sed	-e "/^${fields}/d"				\
+		-e "s/^/${class}::/"				\
+		-e "s/^fix:\(.*:esxupdate,\)/var:\1/"			|
+	sort -f
+
+	/bin/esxcli network firewall ruleset rule list	|
+	sed -e "s/^/fix:system:security:vsphere firewall:rules::/"
+fi
+
+for file in /etc/setuptool.d/* /usr/share/setuptool/setuptool.d/*
+do
+	scc_check_file "${file}" "fix:system:setup:${file}::" "#"
+done
+
+if [ -x /usr/bin/getconf ]
+then
+	for c in POSIX_VERSION POSIX2_VERSION XOPEN_VERSION
+	do
+		echo "fix:system:standards::${c}:	$(/usr/bin/getconf ${c} 2>/dev/null)"
+	done
+
+	echo "fix:system:GNU_LIBC_VERSION::$(/usr/bin/getconf GNU_LIBC_VERSION 2>/dev/null)"
+fi
+
+if [ -f /etc/smt.conf ]
+then
+	sed	-e 's/^NUPass.*/NUPass=*REMOVED*/'					\
+		-e 's/^pass.*/pass=*REMOVED*/'						\
+		-e 's/^ProxyUser.*/ProxyUser=*REMOVED*/'				\
+		-e 's/^mailServerPassword.*/mailServerPassword=*REMOVED*/'		\
+		-e 's/^credentials.*/credentials=*REMOVED*/'				\
+		-e 's@^@fix:system:Subscription Management Tool:/etc/smt/conf::@'	\
+			/etc/smt.conf
+fi
+
+if [ -d /etc/smt.d ]
+then
+	find /etc/smt/.d -type f				|
+	sort							|
+	while read file
+	do
+		scc_check_file "${file}" "fix:system:Subscription Management Tool:${file}::" "#"
+	done
+fi
+
+# Further candidates are the commands:
+# smt-catalogs
+# smt-catalogs -o
+# smt-list-registrations
+# smt-list-products
+# Check the output of these commands for variable data.
+
+if [ "${OS_NAME}" = "FreeBSD" -o "${OS_NAME}" = "DragonFly" ]
+then
+	swapinfo -k 2>/dev/null		|
+	awk	'{
+			# Show device, size and type
+			print "fix:system:swapinfo::" $1, $2, $NF
+		}'
+
+elif [ "${OS_NAME}" = "NetBSD" -o "${OS_NAME}" = "OpenBSD" ]
+then
+	swapctl -lk 2>/dev/null		|
+	awk	'{
+			# Show device and size, type and priority`
+			print "fix:system:swapinfo::" $1, $2, $NF
+		}'
+
+elif [ -x /usr/sbin/swapinfo ]
+then
+	# HP-UX
+	# Actual swap-usage is not fixed. Remove this info from the output.
+	HDR=$(/usr/sbin/swapinfo 2>/dev/null | grep -i "^TYPE")
+	start_var=$(echo "${HDR}" | sed -e 's/ *USED.*//' | wc -c | sed -e 's/^[ 	]*//')
+	stop_var=$(echo "${HDR}" | sed -e 's/ *RESERVE.*//' | wc -c | sed -e 's/^[ 	]*//')
+
+	/usr/sbin/swapinfo			|
+	cut -c1-${start_var},${stop_var}-100	|
+	sed -e 's/^/fix:system:swapinfo::/'
+elif [ -x /usr/sbin/lsps ]
+then
+	# AIX also has /usr/sbin/swap, so put AIX in front of SunOS.
+	/usr/sbin/lsps -a -c 2>/dev/null		|
+	awk -F:	'{
+			printf( "var:system:swap lsps pag info::" )
+			for ( i = 1; i <= NF; i ++ )
+			{
+				if ( i != ( NF - 3 ) )
+				{
+					printf( "%-15s", $i )
+				}
+			}
+			print ""
+		}'
+elif [ -x /usr/sbin/swap ]
+then
+	# SunOS
+	HDR=$(/usr/sbin/swap -l 2>/dev/null | grep "^swapfile")
+	start_var=$(echo "${HDR}" | sed -e 's/ blocks.*//' | wc -c | sed -e 's/^[ 	]*//')
+
+	/usr/sbin/swap -l 2>/dev/null		|
+	cut -c1-${start_var}			|
+	sed -e 's/^/fix:system:swap::/'
+elif [ -x /sbin/swapon ]
+then
+	if [ "${OS_NAME}" = "OSF1" ]
+	then
+		#Swap partition /dev/rz8b:
+		#    Allocated space:        99568 pages (777MB)
+		#    In-use space:            3083 pages (  3%)
+		#    Free space:             96485 pages ( 96%)
+		/sbin/swapon -s 2>/dev/null		|
+		awk	'/^[ 	]*$/	{ next }
+			/%\)[ 	]*$/	{ print "var:system:swapon::" $0; next }
+					{ print "fix:system:swapon::" $0 }'
+	else
+		#Filename                        Type            Size    Used    Priority
+		#/dev/cciss/c0d0p3               partition       2097136 0       -1
+		/sbin/swapon -s 2>/dev/null		|
+		awk '{ $(NF-1)=""; print "fix:system:swapon::" $0 }'
+	fi
+elif [ -x /bin/esxcli ]
+then
+	/bin/esxcli sched swap system get	|
+	sed -e 's/^/fix:system:swap::/'
+fi
+
+scc_check_file /etc/swapspaces "fix:system:swap devices:/etc/swapspaces::" "\*"
+
+if [ "${OS_NAME}" = "OSF1" ]
+then
+	if [ -f /sbin/swapdefaults ]
+	then
+		echo "fix:system:/sbin/swapdefaults::present"
+	else
+		echo "fix:system:/sbin/swapdefaults::absent"
+	fi
+fi
+
+# determine checksum of files to ignore hard/soft linked files
+ls	/run/sysctl.d/*.conf		\
+	/etc/sysctl.d/*.conf		\
+	/usr/local/lib/sysctl.d/*.conf	\
+	/usr/lib/sysctl.d/*.conf	\
+	/lib/sysctl.d/*.conf		\
+	/etc/sysctl.conf 2>/dev/null		|
+sort						|
+while read file
+do
+	echo "${file} $(scc_crypt <${file})"
+done						|												
+awk	'{
+		if ( ! cksum[ $2 ] ) { print $1 }
+		cksum[ $2 ] = 1
+	}'					|
+while read conf_file
+do
+	scc_check_file ${conf_file} "fix:system:sysctl:${conf_file}::"		"#"
+done
+
+if [ -x /bin/esxcli ]
+then
+	class="fix:system:vsphere settings"
+
+	echo "${class}::name,type,default,value"
+
+	/bin/esxcli system settings advanced list 2>/dev/null		|
+	awk	'/^ *Path/			{ name=$2; type=""; value=""; def_value=""; next }
+		/^ *Type: integer/		{ type="integer"; next }
+		/^ *Type: string/		{ type="string"; next }
+		/^ *Int Value:/			{ if ( type == "integer" ) { value=$3 } }
+		/^ *String Value:/		{ if ( type == "string"  ) { sub( "^ *String Value: ", "", $0 ); value=$0 } }
+		/^ *Default Int Value:/		{ if ( type == "integer" ) { def_value=$4 } }
+		/^ *Default String Value:/	{ if ( type == "string"  ) { sub( "^ *Default String Value: ", "", $0 ); def_value=$0 } }
+		/^ *Description/		{ print name "," type "," def_value "," value }'        |
+	sort -f								|
+	sed	-e "s/^/${class}::/"				\
+		-e "s/^fix:\(.*OverheadGrowthLimit\)/var:\1/"
+fi
+
+if [ -x /usr/bin/sysdumpdev ]
+then
+	if [ "${OS_NAME}" = "AIX" ]
+	then
+		/usr/bin/sysdumpdev -L 2>&1			|
+		sed -e 's/^/var:system:last system dump::/'
+	else
+		/usr/bin/sysdumpdev				|
+		sed -e 's/^/fix:system:dump::/'
+	fi
+fi
+
+if [ -x /usr/lib/ras/dumpcheck ]
+then
+	/usr/lib/ras/dumpcheck -p	|
+	sed -e 's/^/var:system:dumpcheck::/'
+fi
+
+# Recorded by the general module.
+scc_time_zone="$(sed -n -e 's/^fix:general::timezone://p' ${SCC_KEEP_NEW} 2>/dev/null)"
+if [ "${scc_time_zone}" ]
+then
+	if [ -s /usr/lib/tztab ]
+	then
+		# Specification of the points of change consist of the
+		# name of the zone, followed by lines that start with a digit.
+		sed -n -e '/^'"${scc_time_zone}"'/,/^[ 	]*$/p' /usr/lib/tztab		|
+		sed -e 's@^@fix:system:time::/usr/lib/tztab:	@'
+	fi
+fi
+
+for file in /etc/tmpfiles.d/*.conf /usr/lib/tmpfiles.d/*.conf
+do
+	scc_check_file "${file}" "fix:system:tmpfiles:${file}::" "#"
+done
+
+if [ -x /usr/sbin/tuned-adm ]
+then
+	/usr/sbin/tuned-adm list 2>/dev/null		|
+	sed -e 's/^/fix:system:tuned-adm:list::/'
+
+	for profile in /etc/tune-profiles/*
+	do
+		for file in ${profile}/*
+		do
+			scc_check_file "${file}" "fix:system:tuned-adm:${profile##*/}:${file##*/}::" "#"
+		done
+	done
+fi
+
+scc_check_file /etc/vconsole.conf "fix:system:vconsole.conf::" "#"
+
+if [ -x /sbin/sysctl ]
+then
+	VIRT_MEM="vm"
+
+	# Only keep the virtual memory stuff and ignore variable data.
+	sed	-n									\
+		-e "/${VIRT_MEM}\.bufmem/d"						\
+		-e "/${VIRT_MEM}\.kstacks/d"						\
+		-e "/${VIRT_MEM}\.kvm_free/d"						\
+		-e "/${VIRT_MEM}\.loadavg/d"						\
+		-e "/${VIRT_MEM}\.dirty.*_ratio/d"					\
+		-e "/${VIRT_MEM}\.pmap\.pde\.mappings/d"				\
+		-e "/${VIRT_MEM}\.pmap\.pde\.promotions/d"				\
+		-e "/${VIRT_MEM}\.pmap\.pcid_save_cnt/d"				\
+		-e "/${VIRT_MEM}\.psstrings/d"						\
+		-e "/${VIRT_MEM}\.read_shortcut_count/d"				\
+		-e "/${VIRT_MEM}\.read_shortcut_failed/d"				\
+		-e "/${VIRT_MEM}\.reserv\.freed/d"					\
+		-e "/${VIRT_MEM}\.swap_reserved/d"					\
+		-e "/${VIRT_MEM}\.stats/d"						\
+		-e "/${VIRT_MEM}\.v_inactive_target/d"					\
+		-e "s/^${VIRT_MEM}\./fix:system:virtual memory::${VIRT_MEM}./p"		\
+			<${SYSCTL_DATA}								|
+	sort
+
+	echo "hlp:system:virtual memory::The configuration files for sysctl are recorded in the system module."
+	echo "hlp:system:virtual memory::Any virtual memory changes in these files will also be detected via the above data."
+	echo "hlp:system:virtual memory::Direct sysctl virtual memory changes will not be detected via the configuration files in the system module."
+fi
+
+
+wlm_dir=/etc/wlm/current
+if [ -d "${wlm_dir}" ]
+then
+	for file in classes limits rules shares
+	do
+		wlm_file="${wlm_dir}/${file}"
+		scc_check_file "${wlm_file}" "fix:system:Work Load Manager:${wlm_file}::" "*"
+	done
+fi
+if [ -x /usr/sbin/wlmcntrl ]
+then
+	/usr/sbin/wlmcntrl -q 2>/dev/null		|
+	sed -e 's/^/fix:system:Work Load Manager:status::/'
+fi
+
+if [ -d /etc/xml ]
+then
+	for file in /etc/xml/catalog /etc/xml/*.xml
+	do
+		scc_check_file --xml "${file}" "fix:system:xml:${file}::" "#"
+	done
+fi
+
+for file in	/etc/screenrc			\
+		/etc/X11/SecurityPolicy		\
+		/etc/X11/X0devices		\
+		/etc/X11/X0pointerkeys		\
+		/etc/X11/X0screens		\
+		/etc/X11/Xconsoles		\
+		/etc/X11/xorg.conf		\
+		/etc/dt/config/Xsetup
+do
+	scc_check_file "${file}" "fix:system:X11:${file}::" "#"
+done
+
+exit 0

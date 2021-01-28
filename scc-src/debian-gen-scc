@@ -1,0 +1,152 @@
+#!/bin/sh
+
+# Generate Debian package to install scc by means of dpkg.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: debian-gen-scc 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# It uses the following programs:
+#
+#	ar
+#	gzip
+#
+# After using this program, the directory contains one file:
+#
+#	scc_1.26.73_all.deb
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+VERSION=${1:-1.26.73}
+
+if [ ! -x /usr/bin/ar ]
+then
+	echo "${ProgName}: missing /usr/bin/ar (part of binutils), cannot package software" >&2
+	exit 2
+fi
+
+version=${VERSION}
+patch="1"
+
+if [ -x /usr/xpg4/bin/ar ]
+then
+	alias ar=/usr/xpg4/bin/ar
+fi
+
+my_md5()
+{
+	exe="$(which md5sum 2>/dev/null)"
+	if [ -x "${exe}" ]
+	then
+		"${exe}" "${1}" | awk '{ print $1 }'
+	else
+		exe="$(which md5 2>/dev/null)"
+		if [ -x "${exe}" ]
+		then
+			"${exe}" "${1}" | awk '{ print $4 }'
+		fi
+	fi
+}
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+# Ignore the (small) files in /etc/opt/scc.
+installed_size="$(du -sk software/opt/scc | awk '{ print $1 }')"
+
+( cd software; tar cf ../data.tar . )
+gzip data.tar
+
+echo "2.0" >debian-binary
+
+(
+	cd software
+	find . -type f		|
+	sed -e "s@^\./@@"	|
+	while read file
+	do
+		echo "$(my_md5 ${file})  ${file}"
+	done
+) >md5sums
+
+{
+	echo "/etc/opt/scc/newconfig/scc-localize"
+	echo "/etc/opt/scc/newconfig/scc-split.conf"
+	echo "/etc/opt/scc/newconfig/style.css"
+} >conffiles
+
+cp install/preinstall preinst
+cp install/postinstall postinst
+cp install/postremove postrm
+
+cat >control <<_EOF_
+Package: scc
+Version: ${version}-${patch}
+Section: admin
+Priority: extra
+Architecture: all
+Suggests: sharutils
+Installed-Size: ${installed_size}
+Maintainer: siemkorteweg@users.sourceforge.net
+Description: System Configuration Collector
+_EOF_
+
+rm -f control.tar control.tar.gz
+tar cf control.tar conffiles md5sums control preinst postinst postrm
+gzip control.tar
+rm -f conffiles md5sums control preinst postinst postrm
+
+pkg_file=scc_${version}-${patch}_all.deb
+echo "!<arch>" >${pkg_file}			# Specific magic number.
+ar -q ${pkg_file} debian-binary			# Add the files
+ar -q ${pkg_file} control.tar.gz		# in this
+ar -q ${pkg_file} data.tar.gz			# order!
+
+rm -rf install software $(cat file_list) debian-binary control.tar.gz data.tar.gz
+
+exit 0

@@ -1,0 +1,287 @@
+#!/bin/sh
+
+# Shell script to record all changes in logbooks to separate files for further processing.
+# Copyright (C) 2014-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-changes 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_WWW=${SCC_DATA}/www
+export SCC_TMP=/tmp
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+export LANG=C
+
+PATH=/sbin:/usr/sbin:/usr/bin:/bin:${SCC_BIN};		export PATH
+
+if [ -d /usr/xpg4/bin ]
+then
+	PATH=/usr/xpg4/bin:${PATH}
+fi
+
+SYNTAX="Syntax error, use: ${ProgName} [ -k|--keep <days> ] [ -s|--skip ]
+				[ -p|--prog <program> ] [ -d|--dest <dest> ] [ -m|--mode <mode> ] [ -u|--user <user> ]
+				[ -L|--list <list> | -F|--file <file> ]
+				<realm>"
+
+trap "exit 2" 1 2 3 15
+
+MISSING_OPT_ARG="${ProgName}: Syntax error, missing argument for option:"
+days=""
+prog=""
+dest=""
+skip=""
+file=""
+list=""
+user="root"
+mode="0700"
+while [ $# -gt 0 ]
+do
+	case "${1}" in
+	-k|--keep)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			days="${2}"
+			shift 2;;
+
+	-s|--skip)	skip="yes"
+			shift 1;;
+
+	-p|--progr)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			prog="${2}"
+			if [ "${prog}" != "mail" -a "${prog}" != "cp" ]
+			then
+				echo "${ProgName}: unsupported method: ${2}" >&2
+				exit 2
+			fi
+			shift 2;;
+
+	-d|--dest)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			dest="${2}"
+			if [ ! -d "${dest}" ]
+			then
+				echo "${ProgName}: unknown directory for cp: ${2}" >&2
+				exit 2
+			fi
+			shift 2;;
+
+	-m|--mode)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			mode="${2}"
+			shift 2;;
+
+	-u|--user)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			user="${2}"
+			shift 2;;
+
+	-F|--file)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			file="${2}"
+			if [ ! -f "${file}" ]
+			then
+				echo "${ProgName}: unknown file with -F option: ${file}" >&2
+				exit 2
+			fi
+			shift 2;;
+
+	-L|--list)	[ -z "${2:-}" ] && echo "${MISSING_OPT_ARG}: ${1}" >&2 && exit 1
+			list="${2}"
+			shift 2;;
+
+	-*)		echo "${SYNTAX}" >&2
+			exit 1;;
+
+	*)		break;;
+	esac
+done
+
+if [ $# -ne 1 ]
+then
+	echo "${SYNTAX}" >&2
+	exit 1
+fi
+
+if [ "${1}" != "${1##*/}" ]
+then
+	echo "${ProgName}: realm name should not contain '/': ${1}" >&2
+	exit 2
+fi
+
+if [ "${list}" -a "${file}" ]
+then
+	echo "${ProgName}: do not combine -L and -F options" >&2
+	exit 1
+fi
+
+if [ "${prog}" -a -z "${dest}" ]
+then
+	echo "${ProgName}: -p option requires -d option" >&2
+	exit 1
+fi
+
+cd ${SCC_WWW}
+
+realm="${1}"
+if [ ! -d "${realm}" ]
+then
+        echo "${ProgName}: cannot find realm: ${realm}" >&2
+        exit 2
+fi
+
+cd "${realm}"
+
+store_dir="changes"			# sub directory in realm
+mkdir -p ${store_dir}
+
+KNOWN_CHANGES="scc.changes"		# file in realm
+NEW_CHANGES="changes.new"		# (temporary) file in realm
+
+>>${KNOWN_CHANGES}
+>${NEW_CHANGES}
+
+system_spec=""
+if [ "${list}" ]
+then
+	system_spec="list: ${list}"
+elif [ "${file}" ]
+then
+	system_spec="file: ${file}"
+else
+	system_spec="realm: ${realm}"
+fi
+
+if [ "${list}" ]
+then
+	# Comma separated list of host names, convert to name of logfiles per line.
+	echo "${list}"			|
+	tr "," "\012"			|
+	sed	-e 's/^/scc./'	\
+		-e 's/$/.log/'
+elif [ "${file}" ]
+then
+	sed	-e "/^#/d"		\
+		-e "/^[ 	]*$/d"	\
+		-e 's/^/scc./'		\
+		-e 's/$/.log/'		\
+			<"${2}"
+else
+	# already in correct realm
+	ls 2>/dev/null			|
+	sed -n -e "/scc\..*\.log$/p"
+fi					|
+xargs awk -F: '/^scc/	{
+				visited[ $0 ] = 1
+				next
+			}
+			{
+				id = sprintf( "%s_%s", $1, $2 );                # date and time
+
+				if ( prev_host != FILENAME )
+				{
+					prev_host = FILENAME
+					if ( length( output ) )
+					{
+						close( output )
+					}
+
+					host = FILENAME
+					sub( ".log$", "", host )
+					sub( "^scc.", "", host )
+				}
+
+				host_change = sprintf( "scc.%s.%s.log", host, id )
+
+				if ( ! visited[ host_change ] )
+				{
+					if ( $5 != "identical" )
+					{
+						output = sprintf( "%s/%s", d, host_change )
+						print host_change >>n
+						if ( ! length( s ) )
+						{
+							process[ id ] = 1
+						}
+					}
+					visited[ host_change ] = 1
+				}
+
+				if ( process[ id ] )
+				{
+					print host ":" $0 >>output
+				}
+			}
+		END     {
+				if ( length( output ) )
+				{
+					close( output )
+				}
+			}' n=${NEW_CHANGES} d="${store_dir}" s="${skip}" ${KNOWN_CHANGES} 2>/dev/null
+
+cat ${NEW_CHANGES} >>${KNOWN_CHANGES}
+
+case "${prog}" in
+mail)	if [ "${skip}" ]
+	then
+		# No change files have been written. ${NEW_CHANGES} contains a list of detected/ignored chages.
+		mail -s "SCC: skip changes, ${system_spec}" "${dest}" <${NEW_CHANGES}
+	else
+		while read change_file
+		do
+			mail -s "SCC: detected change: ${change_file}" "${dest}" <${store_dir}/${change_file}
+		done <${NEW_CHANGES}
+	fi
+	;;
+
+cp)	if [ "${skip}" ]
+	then
+		# No change files have been written. Ignore ${NEW_CHANGES}.
+		:
+	else
+		while read change_file
+		do
+			cp ${store_dir}/${change_file} ${dest}/${change_file}
+			chown ${user} ${dest}/${change_file}
+			chmod ${mode} ${dest}/${change_file}
+		done < ${NEW_CHANGES}
+	fi
+	;;
+
+esac
+
+rm -f ${NEW_CHANGES}
+
+if [ "${days}" ]
+then
+	# Remove change files older than <keep> days only from the staging area.
+	# Processed change files (email or cp) are not our responsibility anymore.
+
+	find ${store_dir} -type f -mtime +"${days}" 2>/dev/null	|
+	xargs rm -f
+fi
+
+exit 0

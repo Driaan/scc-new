@@ -1,0 +1,96 @@
+#!/bin/sh
+
+# Generate pacman package to install scc-srv on ttylinux.
+# Copyright (C) 2007-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: ttylinux-gen-scc-srv 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install				pre/post install scripts
+#	software/opt/scc		bin, doc and man
+#	software/var/opt/scc-srv	conf, data and newconfig
+#
+# After using this program, the directory contains one file:
+#
+#	scc-1.19.44-1.pkg.tar.gz
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+which bzip2 >/dev/null 2>/dev/null
+if [ $? -ne 0 ]
+then
+	echo "${ProgName}: cannot find bzip2" >&2
+	exit 2
+fi
+
+# Calling by non-root users results in wrong permissions of the installed files.
+uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+if [ "${uid}" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+VERSION=${1:-1.19.44}
+
+# Determine what files are present in order to cleanup later.
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+# The (ttylinux) pacman package consists of a bzip2 compressed tar-file.
+# There is only a postinstall available.
+export PKG_DIR=usr/share/ttylinux/install-scripts
+mkdir -p software/${PKG_DIR}
+
+POST_INST=software/${PKG_DIR}/scc-srv-${VERSION}.sh
+cp install/postinstall ${POST_INST}
+chmod 500 ${POST_INST}
+
+cd software
+
+chown -R root:root .
+
+tar cjf ../scc-srv-${VERSION}-i486.tbz opt/scc-srv var/opt/scc-srv usr
+cd ..
+
+rm -rf install software $(cat file_list)
+
+exit 0

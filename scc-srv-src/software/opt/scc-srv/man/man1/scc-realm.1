@@ -1,0 +1,248 @@
+.TH scc-realm 1 "SCC-SRV" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-realm - maintenance for realms with SCC-data
+
+.SH  RELEASE
+.nf
+
+	scc-srv	1.19.44
+
+.SH  SYNOPSIS
+.nf
+
+	scc-realm [ -q|--quick ] [ -i|--index ] [ -b|--backup <file> ]
+	          -a|--add | -A|--archive <target> [ -w|--web ] | -l|--systems [ -f|--fqdn ] | -d|--delete | -r|--rename <new_name>
+	          [ -F|--file <file> | -L|--list <list> | -R|--realm <cp_realm> ] <realm>
+
+.SH  DESCRIPTION
+.nf
+
+	A realm contains the SCC-snapshots of a group of systems and the
+	summaries of the snapshots and logbooks. This program maintains realms
+	by creating/deleting realms and by adding/deleting/archiving systems.
+
+	When a realm is created, the contents of directory
+	/var/opt/scc-srv/data/www/custom is used as default.
+	A new realm does not have the file scc-smt-select and scc-rules.conf
+	in the sub-directory custom. These files have to created/copied 
+	manually. Refer to the manual pages of scc-smt(1) and scc-rules(1) for
+	details.
+
+	When realms are added or removed, scc-realm attempts to update
+	the file /var/opt/scc-srv/data/www/index.html. This file contains
+	the list of all the realms. It will only be updated by scc-realm
+	when a specific line is present in this file. When updating an 
+	existing installation, search this script for the line to be added.
+	Look for the string: SCC_REALM. When you do not add this line,
+	new realms will not be added automatically.
+
+	This program performs its actions indicated by the -a|--add, -A|--archive 
+	and -d|--delete options in the following order:
+
+	1: create realm and add systems
+	2: archive realm
+	3: delete realm or systems from realm
+
+	It is possible to perform all three steps with a single invocation
+	of this program.
+
+	Realms can be used to restrict the number of systems to be
+	searched/viewed. Beside grouping the systems according to your
+	departments, you can also create realms for all HP-UX, Solaris
+	and RedHat systems. Each system can join several realms.
+	
+	Realms can also be used to restrict access to the SCC-data of systems
+	for several groups of administrators. By means of the .htaccess 
+	file in a realm, the web-access is controlled.
+	It is also possible to setup the directory permissions to
+	allow command-line access to the files, based on the groups.
+
+.SH  OPTIONS
+.nf
+	-a|--add                Add the selected systems to the realm. When the realm does not exist,
+	                        it is created. Permissions and owner are copied from the directory
+	                        /var/opt/scc-srv/data/www/custom
+	-d|--delete             Delete systems from the realm. When no systems are specified,
+	                        the realm itself is deleted.
+	-i|--index              Generate the references to the realms in de top-level index.html.
+	                        No further actions are executed.
+	-b|--backup <file>      Backup configuration and system summary data in <file> via tar.
+	                        For each realm the custom directory and scc-summary.data is archived.
+	                        Be aware that NO data from scc clients is archived. The archived data
+	                        can be used to preserve realm specific configuration and the systems
+	                        comprising each realm.
+	                        Other options and arguments are ignored after archiving.
+	-l|--systems            List systems from the realm. Ignores -F, -L and -R options.
+	-f|--fqdn               Add domain to listed systems. Applies only for -l option.
+	-A|--archive <target>   Archive the snapshots and logbooks of the (selected systems of the)
+	                        realm in directory <target>. Without the -w option, the files
+	                        will be owned by root, otherwise by the user of the realm directory.
+	                        When no systems are selected via -L, -R and -F options, the entire
+	                        realm is archived.
+	                        Directory <target> should be an absolute path.
+	-r|--rename <new_name>  Rename <realm> to <new_name>. Ignores -F, -L and -R options.
+	-w|--web                Archive also html files. By default only plain snapshots and logfiles 
+	                        are archived. Ownership of the directory and the files is set to
+	                        the user of the realm All directory. With this option, the archive
+	                        realm could be accessed via a browser and a "minimal" index.html is
+	                        generated.
+	-F|--file <file>        The file contains a list of systems, one system per line. Empty and
+	                        comment lines (starting with "#") are ignored. Requires full path of file.
+	-R|--realm <cp_realm>   Use all cur-files in realm <cp_realm> to determine the systems.
+	-L|--list <list>        Comma separated list of systems to add to or delete from <realm>
+	-q|--quick              Do not call scc-update after adding/deleting hosts.
+
+	Note that the -F|--file, -L|--list and -R|--realm options can be mixed and used more than once.
+
+.SH  ARGUMENTS
+.nf
+
+	<realm>         The realm sub-directory in /var/opt/scc-srv/data/www.
+
+.SH  DIAGNOSTICS
+.nf
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-realm <option>* <realm>
+	A syntax error has been detected.
+
+	scc-realm: unable to access '<arg>' for -<option> option"
+	The argument of the indicated option cannot be found in the filesystem.
+
+	scc-realm: template directory '<template>' does not exist
+	The indicated template directory should exist.
+
+	scc-realm: file '<file>' not found
+	When adding a system to a realm, the file cannot be found in
+	the default realm.
+
+	scc-realm:: attempt to delete (from) non-existent realm '<realm>'
+	The realm to remove (the systems from) was not found.
+
+	scc-realm: cannot delete realm 'All'
+	Realm All cannot be deleted as it is the base of the website of scc-srv.
+
+	scc-realm}: directory '<dir>' exists in <web_dir> and is not a realm
+	The directory of the realm exists, but misses required subdirectories.
+
+	scc-realm: realm name should not contain '/': <realm>
+	The name of a realm should be a single level sub directory.
+
+	scc-realm: cannot rename to existing '<new_name>'
+	An existing file or directory was specified for renaming.
+
+	scc-realm: cannot add systems to realm 'All'
+	Systems that are added to realms, originate from realm All. Therefore
+	adding systems to All is not possible. scc-transfer adds new systems to
+	realm All when it processes data transferred to scc-srv.
+
+	scc-realm: unable to create directory '<dir>'
+	Check the file system for the reason of the failure.
+
+	scc-realm: do not archive in realm '<realm>'
+	A realm requires a specific structure and contents that are differ
+	from an archive directory. Therefore a realm cannot be the destination
+	of archiving.
+
+	scc-realm: do not use subdirectory of /var/opt/scc-srv/data/www for archiving
+	Avoid confusion for scc-srv software. This directory is meant for realms.
+
+	scc-realm: cannot access realm '<realm>'
+	A non-existing realm has been specified.
+
+.SH  EXTERNAL INFLUENCES
+.nf
+
+	After adding/deleting systems, this program calls scc-update(1) to update 
+	the summaries in <realm>. After archiving, this program optionally calls 
+	to create a basic webinterface to the archive.
+
+.SH  EXAMPLES
+.nf
+
+	Suppose that system1 and system2 are the responsibility of the 
+	Education department and system3 and system4 for the Sales 
+	department.
+	After creating two additional realms: Education and Sales, we
+	also create three unix groups: scc_all, scc_edu and scc_sale. 
+	To control the web- and filesystem-level access, we use the
+	following commands:
+
+	   vi /etc/group       # add members to scc_all, scc_edu and scc_sale
+	   cd /var/opt/scc-srv/data/www
+	   chgrp -R scc_all All
+	   chmod g=rx,o=x All
+	   chmod g=r All/scc.*
+	   scc-realm --add --quick --list system1,system2 Education
+	   chgrp -R scc_edu Education
+	   scc-realm --add --quick --list system3,system4 Sales
+	   chgrp -R scc_sale Sales
+	   /opt/scc-srv/bin/scc-update -f
+
+	Edit the .htaccess files in All, Education and Sales. Any 
+	administrators that are members of the scc_all, scc_edu and 
+	scc_sale groups, have filesystem level access to the SCC-data
+	of their systems.
+	The same administrators and groups should be specified in the 
+	htpasswd and htgroup files to give the same users web-access to 
+	SCC-data of their systems. This only works when each system is 
+	added to at most one realm beside All.
+
+	To rename a realm, the following command can be used:
+
+	   /opt/scc-srv/bin/scc-update -r NewRealm OldRealm
+
+	When systems system1 and system2 are no longer used, their data will
+	not be updated and it is of limited use. When you want to archive
+	the history of your environment, archive their data before removing
+	them. Use the following commands to achive this:
+
+	   /opt/scc-srv/bin/scc-realm --archive /<dir>/archive --list system1,system2 --delete All
+
+.SH  COPYRIGHT
+.nf
+
+	scc-realm is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+.SH  FILES
+.nf
+
+	/var/opt/scc-srv/data/www - base-directory for all realms
+	  index.html - index with existing realms
+	  custom/scc-logo.png - default logo-file
+	  custom/scc-realm.conf - default configuration file
+	  custom/style.css - default stylesheet
+	  custom/favicon.ico - default icon
+	  All/.htaccess - default access file
+	  <realm>/cgi-bin - contains scc-wrapper.cgi for <realm>
+	  <realm>/custom - contains the HTML-addons
+	        scc-auto-realm.conf - automatic population of realms
+	        scc-logo.png - logo-file
+	        scc-realm.conf - configuration for <realm>
+	        style.css - stylesheet for <realm>
+	        favicon.ico - icon for <realm>
+	        These files are symbolic links to top-level directory
+	        custom.
+	  <realm>/.htaccess - controls access to realm
+
+.SH  SEE ALSO
+.nf
+
+	scc-baseline(1), scc-changes(1), scc-debug(1), scc-pull(1), scc-realm(1),
+	scc-receive-mail(1), scc-rules(1), scc-setup(1), scc-smt(1), scc-summary(1),
+	scc-syscmp(1), scc-transfer(1), scc-update(1), scc-wrapper.cgi(1), scc.cgi(1),
+	scc-srv(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6217 $
+

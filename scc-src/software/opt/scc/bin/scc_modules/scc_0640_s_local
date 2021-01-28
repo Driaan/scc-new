@@ -1,0 +1,85 @@
+#!/bin/sh
+
+# Shell script to collect the contents of a custom list of files.
+# Copyright (C) 2014-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0640_s_local 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+# Use files ${SCC_CONF}/scc_local_* to specify classes and files (separated by |).
+# Empty lines and lines starting with # are ignored.
+# Format:
+#   [ini|]<class>|<file_spec>	add contents of <file_spec> to snapshot using classification <class>
+#				shell wild-cards are supported in <file_spec> 
+#   				the name of the processed file is added to <class>
+#				use optional field "ini" for processing of ini-files
+#
+# Changes in this file could result in many entries in the logbook, use scc-log -r to avoid this.
+#
+# To add oddjob configuration files, use the line:
+#fix:software:oddjob|/etc/oddjobd.conf.d/*.conf
+
+for local_file in ${SCC_CONF}/scc_local_*
+do
+	if [ -f "${local_file}" ]
+	then
+		sed	-e '/^#/d'	\
+			-e '/^$/d'	\
+			-e 's/:|/|/'	\
+				<"${local_file}"		|
+		while read line
+		do
+			# Format of line: [ini|]<class>|<file_spec>
+			ini_file=""
+			case "${line}" in
+			ini\|*)	ini_file="--ini"
+				line="${line#ini|}";;
+			esac
+			file_spec="${line#*|}"
+			class="${line%|*}"
+			for file in ${file_spec}
+			do
+				scc_check_file ${ini_file} "${file}" "${class}:${file}::" "#"
+			done
+		done
+	fi
+done
+
+exit 0

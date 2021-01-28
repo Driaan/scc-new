@@ -1,0 +1,161 @@
+<!DOCTYPE HTML>
+<HTML lang="en"><HEAD><TITLE>Manpage of scc-setup</TITLE></HEAD><BODY>
+<H1>scc-setup(1)</H1>
+<PRE>
+
+
+</PRE>
+<H2> NAME</H2>
+<PRE>
+
+	scc-setup - activate webinterface of SCC
+
+</PRE>
+<H2> RELEASE</H2>
+<PRE>
+
+	scc-srv	1.19.44
+
+</PRE>
+<H2> SYNOPSIS</H2>
+<PRE>
+
+	scc-setup [ -a|--activate | -f|--file &lt;file&gt; | -p|--print | -r|--remove ]
+
+</PRE>
+<H2> DESCRIPTION</H2>
+<PRE>
+
+	This program determines the required data to configure the webinterface
+	of SCC and optionally activates this interface. Refer to the external
+	influences on this manual page for the variables that are used to
+	activate the webinterface.
+
+	The indicated variables can be either supplied via the environment when
+	this program is called, via a default/supplied configuration file or via
+	defaults. Use the -p option to check the defaults.
+
+	Note that activating the webinterface involves modification of your
+	apache configuration and a restart of the webserver!
+
+	Note that the setup activated by this program differs from the documented 
+	setup for releases 1.7.47 and earlier. There is no need to change the setup
+	of an existing scc-srv. However, when you want to migrate to the new setup,
+	you have to make sure that all scc realms reside under the 
+	/var/opt/scc-srv/data/www directory. After the migration, the symbolic link
+	from the document root to the scc-srv hierarchy can be removed.
+
+</PRE>
+<H2> OPTIONS</H2>
+<PRE>
+
+	-a|--activate           Activate the webinterface. Note that this option 
+	                        restarts your apache webserver!
+	-f|--file &lt;file&gt;        Use &lt;file&gt; to determine the required data and then
+	                        activate the webinterface. Default path of file is
+	                        /var/opt/scc-srv/conf/setup.conf. This file has to
+	                        be manually created.
+	-p|--print              Determine the (default) configuration data and print
+	                        the values.
+	-r|--remove             Remove the scc integration with apache. Note that
+	                        this option restarts your apache webserver!
+
+</PRE>
+<H2> ARGUMENTS</H2>
+<PRE>
+
+	None.
+
+</PRE>
+<H2> DIAGNOSTICS</H2>
+<PRE>
+
+	This program writes the following messages to stderr:
+
+	Syntax error, use: scc-setup [ -a|--activate | -f|--file &lt;file&gt; | -p|--print | -r|--remove ]
+	A syntax error has been detected.
+
+	scc-setup: missing &lt;variable&gt;
+	The indicated data cannot be determined.
+
+	scc-setup: cannot source file &lt;file&gt;
+	Make sure that &lt;file&gt; exists and is executable.
+
+	scc-setup: cannot access directory WWW_CONFIG: &lt;value&gt;
+	The &lt;value&gt; is not a directory.
+
+	scc-setup: only root should run this program
+	To activate the webinterface, log in as user root.
+
+	scc-setup: note that webserver is not running, user &#39;&lt;user&gt;&#39; could be wrong
+	When the webserver does not run, determination of WWW_USER is not 100% reliable.
+	Start the webserver and rerun scc-setup.
+
+	scc-setup: please make sure that your firewall allows traffic for the webserver
+	Reconfiguring your firewall is beyond the scope of scc-setup.
+
+	Restarting Apache can also result in messages like:
+	httpd: Could not reliably determine the server&#39;s fully qualified domain name
+
+</PRE>
+<H2> RETURN VALUE</H2>
+<PRE>
+
+	Upon completion, the program returns one of the following values:
+
+		0 successful completion
+		1 Syntax error
+		2 Runtime error
+
+</PRE>
+<H2> FILES</H2>
+<PRE>
+
+	/var/opt/scc-srv/conf/setup.conf - default path of config file
+	WWW_CONFIG/scc.conf - scc-srv configuration of apache
+
+</PRE>
+<H2> EXTERNAL INFLUENCES</H2>
+<PRE>
+
+	The following variables are used from the environment (or defined in the
+	default/supplied configuration file):
+
+	- WWW_CONFIG    apache configuration directory
+	- WWW_USER      user running apache
+	- WWW_PATH      path of scc-srv under the document root of apache
+	- WWW_RESTART   command to restart apache
+	- WWW_VERSION   version of apache: 20, 22, 24
+
+	This program calls <A HREF="scc-update.html">scc-update(1)</A> after activating the configuration.
+
+	Note that during the post-install the selinux context of several
+	scc-srv directories is set to allow access by the webserver.
+
+	Note that your firewall is not checked/reconfigured to allow traffic
+	for the webserver.
+
+</PRE>
+<H2> COPYRIGHT</H2>
+<PRE>
+
+	scc-setup is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2010-2018 QNH, 2019 Siem Korteweg.
+
+</PRE>
+<H2> SEE ALSO</H2>
+<PRE>
+
+	<A HREF="scc-baseline.html">scc-baseline(1)</A>, <A HREF="scc-changes.html">scc-changes(1)</A>, <A HREF="scc-debug.html">scc-debug(1)</A>, <A HREF="scc-pull.html">scc-pull(1)</A>, <A HREF="scc-realm.html">scc-realm(1)</A>,
+	<A HREF="scc-receive-mail.html">scc-receive-mail(1)</A>, <A HREF="scc-rules.html">scc-rules(1)</A>, <A HREF="scc-setup.html">scc-setup(1)</A>, <A HREF="scc-smt.html">scc-smt(1)</A>, <A HREF="scc-summary.html">scc-summary(1)</A>,
+	<A HREF="scc-syscmp.html">scc-syscmp(1)</A>, <A HREF="scc-transfer.html">scc-transfer(1)</A>, <A HREF="scc-update.html">scc-update(1)</A>, <A HREF="scc-wrapper.cgi.html">scc-wrapper.cgi(1)</A>, <A HREF="scc.cgi.html">scc.cgi(1)</A>,
+	<A HREF="scc-srv-5.html">scc-srv(5)</A>
+
+</PRE>
+<H2> VERSION</H2>
+<PRE>
+
+	$Revision: 6217 $
+
+</PRE>
+</BODY></HTML>

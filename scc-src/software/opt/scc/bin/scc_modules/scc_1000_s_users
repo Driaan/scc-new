@@ -1,0 +1,407 @@
+#!/bin/sh
+
+# Shell script to collect users data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_1000_s_users 6274 2019-10-30 20:51:27Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+if [ "${OS_NAME}" = "AIX" ]
+then
+	awk	'/^[*#]*$/	{ next }
+		/^[^ 	]/	{ stanza = $1; next }
+				{ print stanza $0 }' /usr/lib/security/mkuser.default 2>/dev/null	|
+	sed -e 's@^@fix:users:/usr/lib/security/mkuser.default::@'
+elif [ -x /usr/sbin/useradd ]
+then
+	useradd -D 2>/dev/null		|
+	sort				|
+	sed -e 's/^/fix:users:useradd defaults::/'
+fi
+scc_check_file /etc/adduser.conf "fix:users:/etc/adduser.conf::" "#"
+scc_check_file /etc/deluser.conf "fix:users:/etc/deluser.conf::" "#"
+scc_check_file /etc/libuser.conf "fix:users:/etc/libuser.conf::" "#"
+
+for f in /etc/skel/* /etc/skel/.*
+do
+	scc_check_file "${f}" "fix:users:/etc/skel:${f}::" "#"
+done
+
+scc_check_file /etc/subuid "fix:users:/etc/subuid::" "#"
+scc_check_file /etc/subgid "fix:users:/etc/subgid::" "#"
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli system account list		|
+	sed -e 's/^/fix:users:logins::/'
+
+	/bin/esxcli system permission list	|
+	sed -e 's/^/fix:users:permission::/'
+
+fi
+
+scc_check_file /etc/vmware/system-users.conf "fix:users:/etc/vmware/system-users.conf::" "#"
+
+for f in passwd shadow master.passwd
+do
+	# Do not sort these files as the order matters.
+	# For instance entry "+::::::/bin/false" should be last
+	# This might give extra differences when comparing systems on scc-srv,
+	# but reflects the actual use of the files more accurately.
+	if [ -f /etc/${f} -a -r /etc/${f} ]
+	then
+		# Erase the password fields when they are longer than 10 characters.
+		# Indicate by means of string LOCKED that an account is locked (suggested by Rien Valkenaers).
+		sed	-e 's/^\([^:]*\):!![^:]*:/\1:LOCKED:/'						\
+			-e 's/^\([^:]*\):[^:][^:][^:][^:][^:][^:][^:][^:][^:][^:]*:/\1:ERASED:/'	\
+				/etc/${f}									|
+		if [ ${f} = "passwd" -o "${f}" = "master.passwd" ]
+		then
+			awk -F: '{
+				prefix="var:users:"
+				if ( $3 < m )
+				{
+					prefix="fix:users:"
+				}
+				print prefix f "::" $0
+			}' f=/etc/${f} m=${MAX_SYS_ACCOUNT_ID}
+		else
+			sed -e "s@^@var:users:/etc/${f}::@"
+		fi
+	fi
+
+	if [ ${IS_NIS_MASTER} -eq 1 -a "${NIS_DATA_DIR}" != "/etc" -a -f "${NIS_DATA_DIR}/${f}" ]
+	then
+		# Erase the password fields when they are longer than 10 characters.
+		sed	-e 's/^\([^:]*\):[^:][^:][^:][^:][^:][^:][^:][^:][^:][^:]*:/\1:ERASED:/'	\
+			-e "s@^@var:users:${NIS_DATA_DIR}/${f}::@" "${NIS_DATA_DIR}/${f}"
+	fi
+done
+
+if [ -x /usr/sbin/lsgroup ]
+then
+	lsgroup -R compat -c ALL		|
+	sed	-e '/^#/d'	\
+		-e 's/^/var:users:lsgroup::/'
+elif [ -f /etc/group ]
+then
+	# Sort the output to reduce the number of differences between systems when groups have been added in other order.
+	sed	-e 's/:[^:]*:/:/' /etc/group	|
+	awk -F: '{
+			label = "var"
+			if ( $2 < m )
+			{
+				label = "fix"
+			}
+			print label ":users:/etc/group::" $0
+		}' m="${MAX_SYS_ACCOUNT_ID}"	|
+	sort
+fi
+
+if [ -x /usr/sbin/logins -o -x /usr/bin/logins ]		# Available on AIX, HP-UX and SunOS
+then
+	sed -e "s/:.*//" /etc/passwd >${TMP1_FILE}		# unames from passwd file
+
+	# Get all account data, including password aging. Erase date of password change.
+	echo "hlp:users:logins::Limited to accounts from the local passwd file."
+	logins -o -x -a                 |
+	sort				|
+	awk -F:	'{
+			if ( NF == 1 ) { local_uname[ $1 ] = 1; next; }		# register local usernames
+
+			if ( ! local_uname[ $1 ] ) { next; }			# skip non-local users
+
+			prefix="var:users:logins::"
+			if ( $2 < m )
+			{
+				prefix="fix:users:logins::"
+			}
+			print prefix $0
+		}' m=${MAX_SYS_ACCOUNT_ID} ${TMP1_FILE} -                               |
+	sed  -e 's/:\([A-Z][A-Z]\):[0-9][0-9][0-9][0-9][0-9][0-9]:/:\1:XXXXXX:/'
+
+	echo "hlp:users:check:accounts without password::Limited to accounts from the local passwd file."
+	logins -p			|
+	sort				|
+	awk	'{
+			if ( NF == 1 ) { local_uname[ $1 ] = 1; next; }		# register local usernames
+
+			if ( ! local_uname[ $1 ] ) { next; }			# skip non-local users
+
+			print "fix:users:check:accounts without password::" $0
+		}' ${TMP1_FILE} -
+
+	rm -f ${TMP1_FILE}
+fi
+
+if [ "${OS_NAME}" = "AIX" ]
+then
+	# Again, erase the passwords that are longer than 10 characters.
+	sed -e 's/password = ...........*$/password = ERASED/' /etc/security/passwd 2>/dev/null	|
+	awk	'/^[ 	]*$/	{ next }
+		/^[^ 	]/	{ account=$1; next }
+				{ print "var:users:/etc/security/passwd::" account $0 }'
+
+	awk	'/^[ 	]*$/	{ next }
+		/^[^ 	]/	{ group=$1; next }
+				{ print "var:users:/etc/security/group::" group $0 }' /etc/security/group 2>/dev/null
+fi
+
+if [ -f /etc/passwd ]
+then
+	class="users:check:duplicate username"
+	echo "hlp:${class}::Limited to accounts from the local passwd file."
+	awk -F: '{
+			if ( length( data[ $1 ] ) > 0 )
+			{
+				print "fix:" c "::" data[ $1 ]
+				print "fix:" c "::" $1, $3, $4, $5, $6, $7
+			}
+			data[ $1 ] = sprintf( "%s %s %s %s %s %s", $1, $3, $4, $5, $6, $7 )
+		}' c="${class}" /etc/passwd			|
+	sort -u
+
+	class="users:check:duplicate uid"
+	echo "hlp:${class}::Limited to accounts from the local passwd file."
+	awk -F: '{
+			if ( length( $3 ) > 0 && length( data[ $3 ] ) > 0 )
+			{
+				print "fix:" c "::" data[ $3 ]
+				print "fix:" c "::" $3, $1, $4, $5, $6, $7
+			}
+			data[ $3 ] = sprintf( "%s %s %s %s %s %s", $3, $1, $4, $5, $6, $7 )
+		}' c="${class}" /etc/passwd			|
+	sort -u
+fi
+
+scc_check_file /etc/passwd.conf "fix:users:/etc/passwd.conf::" "#"
+scc_check_file /etc/usermgmt.conf "fix:users:/etc/usermgmt.conf::" "#"
+
+# Single Signon: password synchronisation between Unix and Windows.
+scc_check_file /etc/sso.conf "fix:users:/etc/sso.conf::" "#"
+
+(
+	# Get all the mountpoints of NFS-mounted file systems.
+	# We exclude these file systems from the survey of the accounts.
+	df -P 2>/dev/null		|
+	awk '{
+		if ( $1 ~ ".*:.*" )
+		{
+			NFS=1
+			if ( NF == 1 )
+			{
+				next
+			}
+		}
+		if ( NFS )
+		{
+			print $NF
+			NFS=0
+		}
+	}'				|
+	sort
+
+	# Now we produce the data of the users.
+	if [ ${IS_NIS_MASTER} -eq 1 ]
+	then
+		if [ "${IS_NIS_CLIENT:-0}" -eq 1 ]
+		then
+			ypcat passwd 2>/dev/null
+		fi
+	fi
+	# Fallback in case NIS does not respond.
+	grep -v "^[#+]" /etc/passwd 2>/dev/null
+)						|
+sort -u						|
+awk -F: '{
+	if ( NF < 7 )
+	{
+		# Process the names of the NFS file systems
+		dir=sprintf( "%s/", $1 )
+		nfs[ dir ]=1
+		next
+	}
+
+	# Visit each homedirectory only once.
+	if ( visited[ $6 ] == 0 && length( $3 ) > 0 )
+	{
+		nfs_home_dir=0
+		for ( d in nfs )
+		{
+			# Does homedirectory start with nfs-directory?
+			if ( index( $6, d ) )
+			{
+				nfs_home_dir=1
+				break
+			}
+		}
+		if ( ! nfs_home_dir )
+		{
+			print $1, $3, $6;	# Show: username, uid and home-directory
+		}
+		visited[ $6 ] =1
+	}
+}'						|
+sort						|
+while read user uid dir
+do
+	if [ -z "${user}" ]
+	then
+		continue
+	fi
+
+	# Determine whether we are dealing with a system user or an ordinary user.
+	prefix="var"
+	if [ ${uid} -lt ${MAX_SYS_ACCOUNT_ID} ]
+	then
+		prefix="fix"
+	fi
+
+	# Any module processing (local) home directories can get the data from the new keep config
+	# provided it runs after this module.
+	echo "${prefix}:user:local_home_directory::user:${user}:dir:${dir}" >>${SCC_KEEP_NEW}
+
+	scc_check_file "${dir}/.rhosts" "${prefix}:users:accounts:${user}::.rhosts:	" "#"	|
+	sort
+
+	scc_check_file "${dir}/.netrc" "${prefix}:users:accounts:${user}::.netrc:       " "#"   |
+	while read line 
+	do 
+		pw="$(echo "${line}" | sed -e 's/.*password[ 	]*//' -e 's/[ 	].*//')" 
+		if [ "${pw}" ]
+		then
+			# Show checksum of the plain-text passwords.
+			pw_e="$(echo "${pw}" | scc_crypt)" 
+			echo "${line}"		|
+			sed -e "s${sed_sep}password[ 	]*${pw}${sed_sep}password ${pw_e}${sed_sep}" 2>/dev/null
+		else
+			echo "${line}"
+		fi
+	done 
+
+	scc_check_file "${dir}/.forward" "${prefix}:users:accounts:${user}::.forward:	" "#"
+
+	(
+		scc_check_file "${dir}/.ssh/authorized_keys"	"${prefix}:users:accounts:${user}::authorized_keys:	" "#"
+		scc_check_file "${dir}/.ssh/config"		"${prefix}:users:accounts:${user}::config:	" "#"
+		if [ ${uid} -lt ${MAX_SYS_ACCOUNT_ID} ]
+		then
+			scc_check_file "${dir}/.ssh/known_hosts"	"var:users:accounts:${user}::ssh known hosts:	" "#"
+		fi
+	)						|
+	awk '/^...:users:accounts:/	{
+						for ( i = 2; i <= NF; i++ )	# Skip the classification.
+						{
+							if ( length( $i ) > 40 )
+							{
+								$i="";		# Erase the keys
+							}
+						}
+					}
+					{
+						print
+					}'
+
+	if [ "${user}" = "root" ]
+	then
+		for file in .bashrc .bash_logout .bash_profile .cshrc .tcshrc 
+		do
+			scc_check_file "${dir}/${file}"  "fix:users:accounts:root::${dir}/${file}:" "#" 
+		done
+	fi
+done
+
+mail_dir=""
+if [ -d /var/mail ]
+then
+	mail_dir=/var/mail
+elif [ -d /var/spool/mail ]
+then
+	mail_dir=/var/spool/mail
+fi
+if [ -n "${mail_dir}" ]
+then
+	local_dir="$(df -l ${mail_dir} 2>/dev/null)"
+	if [ "${local_dir}" ]
+	then
+		# Ignore NFS mounted mailboxes.
+		ls "${mail_dir}"	|
+		sed -e 's/^/var:users:mailboxes::/'
+	fi
+fi
+
+pw_grp_ck_options=""
+if [ "${OS_NAME}" = "Linux" ]
+then
+	pw_grp_ck_options="-r"
+fi
+if [ -x /usr/sbin/pwck ]
+then
+	# For HP-UX 11 you will need patch PHCO_16196 to reduce the "noise" of pwck.
+	# Erase the password-field from the output.
+	/usr/sbin/pwck ${pw_grp_ck_options} 2>&1					|
+	sed	-e 's/:[^:][^:]*:/:/'	\
+		-e '/^[ 	]*$/d'							|
+	awk	'/^[a-zA-Z]/	{ entry = $0; print p $0; next }
+				{ print p entry, $0 }' p="fix:users:check:pwck::"	|
+	sort
+fi
+if [ -x /usr/sbin/grpck ]
+then
+        # Contributed by Doug Probst.
+	if [ "$OS_NAME" = "AIX" ]
+	then
+		pw_grp_ck_options="-n ALL"
+	fi
+
+	# Erase the password-field from the output.
+	/usr/sbin/grpck ${pw_grp_ck_options} 2>&1				|
+	sed	-e 's/:[^:][^:]*:/:/'	\
+		-e '/^[ 	]*$/d'	\
+		-e 's/^/fix:users:check:grpck::/'				|
+	sort
+fi
+
+exit 0

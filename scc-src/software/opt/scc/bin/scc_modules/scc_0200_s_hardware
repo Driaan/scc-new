@@ -1,0 +1,2317 @@
+#!/bin/sh
+
+# Shell script to collect hardware data.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0200_s_hardware 6216 2019-03-21 20:47:50Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+scc_disk_info()
+{
+	dsk=${1}
+
+	present="$(grep "hardware:disk:${dsk}" "${SCC_KEEP_NEW}" 2>/dev/null)"
+	if [ -z "${present}" ]
+	then
+		echo "hardware:disk:${dsk}" >>"${SCC_KEEP_NEW}"
+
+		prefix="fix"
+		case "${dsk}" in
+		*docker*)	prefix="var";;
+		esac
+
+		rm -f ${TMP1_FILE}
+		# The output from parted and fdisk are comparable.
+		# As the output from parted is more readable, we try parted first.
+		if [ -x /sbin/parted -o -x /usr/sbin/parted ]
+		then
+			parted -s ${dsk} print 2>/dev/null				|
+			sed	-e '/^[ 	]*$/d'			\
+				-e "s@^@${prefix}:hardware:disk:${dsk}::parted:	@"
+		fi  >${TMP1_FILE}
+
+		if [ "$(wc -l <${TMP1_FILE})" -le 1 -a -x /sbin/fdisk ]
+		then
+			/sbin/fdisk -l -u ${dsk} 2>/dev/null				|
+			sed	-e '/^[ 	]*$/d'			\
+				-e "s@^@${prefix}:hardware:disk:${dsk}::fdisk:	@"
+		else
+			cat ${TMP1_FILE}
+		fi
+		rm -f ${TMP1_FILE}
+	fi
+}
+
+if [ -x /sbin/natacontrol ]
+then
+	/sbin/natacontrol list 2>/dev/null	|
+	sed -e 's/^/fix:hardware:natacontrol::/'
+elif [ -x /sbin/atacontrol ]
+then
+	# Do not call atacontrol on a system with natacontrol. It will hang.
+	/sbin/atacontrol list 2>/dev/null	|
+	sed -e 's/^/fix:hardware:atacontrol::/'
+fi
+
+if [ -x /opt/hparray/bin/arraydsp ]
+then
+	/opt/hparray/bin/arraydsp -i -S 2>/dev/null	|
+	awk -F: '{
+		# Format of input is: I:<id1>:<id2>:..:<idN>
+		# No array: I:
+		for ( i = 2; i <= NF; i++ )
+		{
+			if ( length( $i ) > 1 )
+			{
+				print $i
+			}
+		}
+	}'						|
+	while read id remainder
+	do
+		touch ${TMP1_FILE}
+
+		/opt/hparray/bin/arraydsp -l -S ${id}		|
+		sed	-e "s/:${id}[:0]*$//"	\
+			-e "s/^/fix:hardware:AutoRAID:${id}:lun::/"
+
+		/opt/hparray/bin/arraydsp -d -S ${id}		|
+		sed	-e "s/:${id}[:0]*$//"	\
+			-e "s/^/fix:hardware:AutoRAID:${id}:disk::/"
+
+		/opt/hparray/bin/arraydsp -c ${id}		|
+		sed	-e '/^ *$/d'	\
+			-e 's/^   //'	\
+			-e "s/^/fix:hardware:AutoRAID:${id}:controller::/"
+
+		/opt/hparray/bin/arraydsp -s ${id}		|
+		sed	-e '/^ *$/d'	\
+			-e 's/^   //'	\
+			-e "s/^/fix:hardware:AutoRAID:${id}:general::/"
+
+		/opt/hparray/bin/arraydsp -v ${id}		|
+		sed	-e '/^ *$/d'	\
+			-e 's/^   //'	\
+			-e "s/^/var:hardware:AutoRAID:${id}:capacity::/"
+
+		/opt/hparray/bin/arraydsp -h ${id}		|
+		sed	-e '/^ *$/d'	\
+			-e 's/^   //'	\
+			-e "s/^/fix:hardware:AutoRAID:${id}:hardware-status::/"
+	done
+
+	if [ ! -f ${TMP1_FILE} ]
+	then
+		echo "fix:hardware:AutoRAID:hardware::absent"
+	fi
+	rm -f ${TMP1_FILE}
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of AutoRAID"
+fi
+
+if [ -x /usr/sbin/cfgadm ]
+then
+	# Replace the value in the "busy" column to avoid differences.
+	# Erase the dates to avoid differences.
+	# Tape info is variable.
+	cfgadm -lav 2>/dev/null									|
+	sed	-e 's/  [ny]  /  -  /'			\
+		-e 's/^[A-Z][a-z][a-z] [0-9 ][0-9]  [0-9][0-9][0-9][0-9]/            /'		|
+	awk	'/^[^:][^:]*::rmt\//	{ print "var:hardware:cfgadm::" $0; next }
+		/memory.*permanent/	{ print "var:hardware:cfgadm::" $0; next }
+					{ print "fix:hardware:cfgadm::" $0; next }'
+fi
+
+if [ -x /sbin/conrep ]
+then
+	rm -f ${TMP1_FILE}
+	conrep_template=""
+	if [ "${SCC_CONREP_TEMPLATE:-}" ]
+	then
+		conrep_template="-x ${SCC_CONREP_TEMPLATE}"	# Specify non-default template via scc-localize.
+	fi
+	/sbin/conrep ${conrep_template} -s -f ${TMP1_FILE} >/dev/null 2>/dev/null
+	if [ $? -eq 0 -a -s ${TMP1_FILE} ]
+	then
+		sed -e "s/^/fix:hardware:conrep::/" <${TMP1_FILE}
+	fi
+	rm -f ${TMP1_FILE}
+fi
+
+if [ -x /usr/sbin/consadm ]
+then
+	/usr/sbin/consadm -p 2>/dev/null	|
+	sed -e 's/^/fix:hardware:consadm::/'
+fi
+
+if [ "${OS_NAME}" = "Haiku" ]
+then
+	listdev -d 2>/dev/null				|
+	sed -e 's/^/fix:hardware:listdev::/'
+fi
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli hardware cpu global get	|
+	sed -e 's/^ */fix:hardware:cpu::/'
+fi
+
+if [ -x /usr/sbin/psrinfo ]
+then
+	# CPU frequency is variable data on OpenSolaris.
+	/usr/sbin/psrinfo -v				|
+	sed	-e '/^Status/d'	\
+		-e '/since/d'	\
+		-e 's/^/fix:hardware:cpu psrinfo::/'	|
+	sed	-e 's/^fix:\(.*processor operates at \)/var:\1/'
+fi
+
+sed	-e "s@^@fix:hardware:cpu /proc/cpuinfo::@" /proc/cpuinfo 2>/dev/null	|
+sed	-e 's/fix:\(.*:cpu MHz\)/var:\1/'		\
+	-e 's/fix:\(.*user unaligned acc\)/var:\1/'	\
+	-e 's/fix:\(.*timebase\)/var:\1/'	\
+	-e 's/fix:\(.*:bogomips\)/var:\1/'
+
+if [ -x /usr/bin/lscpu ]
+then
+	/usr/bin/lscpu 2>/dev/null			|
+	sed	-e '/Hz/d'		\
+		-e '/MIPS/d'		\
+		-e 's/^/fix:hardware:lscpu:overview::/'
+
+	# Older versions do not support -a and -e options and write message to stdout.
+	output="$(/usr/bin/lscpu -a -e 2>/dev/null)"
+	if [ $? -eq 0 ]
+	then
+		echo "${output}"	|
+		sed -e 's/^/fix:hardware:lscpu:all::/'
+	fi
+fi
+
+if [ -x /usr/sbin/lsdev -a "${OS_NAME}" = "AIX" ]
+then
+	/usr/sbin/lsdev -Cc processor		|
+	sort					|
+	while read cpu status
+	do
+		echo "fix:hardware:cpu:${cpu}::${status}"
+		/usr/sbin/lsattr -E -l ${cpu} 2>/dev/null		|
+		sed	-e "s/^/fix:hardware:cpu:${cpu}::/"	\
+			-e 's/^fix:\(.*\)frequency/var:\1frequency/'
+	done
+fi
+
+if [ -x /usr/bin/fio-status ]
+then
+	/usr/bin/fio-status -a 2>/dev/null		|
+	awk	'		{ prefix = "var"; }
+		/^f/		{ ifc = $1; $1 = ""; }
+		/^$/		{ ifc = ""; }
+		/Firmware/	{ prefix = "fix"; }
+				{ printf( "%s:hardware:fio-status::%s %s\n", prefix, ifc, $0 ); }'
+fi
+
+if [ -x /usr/sbin/schedo ]
+then
+	/usr/sbin/schedo -L 2>/dev/null		|
+	sed -e 's/^/fix:hardware:cpu scheduler tunable parameters::/'
+fi
+
+if [ -x /usr/sbin/sizer ]
+then
+	echo "fix:hardware:cpu type::$(/usr/sbin/sizer -c 2>/dev/null)"
+	echo "fix:hardware:cpu family::$(/usr/sbin/sizer -implver 2>/dev/null)"
+fi
+
+scc_check_file /proc/dma "fix:hardware:DMA /proc/dma::" "#"
+
+scc_check_file /etc/ddr.dbase "fix:hardware:/etc/ddr.dbase::" "#"
+
+scc_check_file /etc/discover.conf "fix:hardware:/etc/discover.conf::" "#"
+
+if [ -x /opt/hparray/bin/amdsp ]
+then
+	rm -f ${TMP1_FILE}		# Indicator file for presence of hardware.
+
+	/opt/hparray/bin/amdsp -i -S 2>/dev/null	|
+	awk -F: '{
+		# Format of input is: I:<id1>:<alias1>:<id2>:<alias2>:..<aliasN>
+		# Skip the aliases
+		for ( i = 2; i <= NF; i += 2 )
+		{
+			if ( length( $i ) > 1 )
+			{
+				print $i
+			}
+		}
+	}'						|
+	while read id remainder
+	do
+		touch ${TMP1_FILE}	# Hardware found
+
+		/opt/hparray/bin/amdsp -l -S ${id}	|
+		awk -F: '{
+				if ( $5 == 0 )
+				{
+					next
+				}
+				printf( "fix:%s::%d:LunState   : %s\n", l, $4, $6 )
+				printf( "fix:%s::%d:CacheState : %s\n", l, $4, $7 )
+				printf( "fix:%s::%d:Capacity   : %s\n", l, $4, $8 )
+				printf( "var:%s::%d:Controller : %s\n", l, $4, $9 )
+				printf( "fix:%s::%d:RaidLevel  : %s\n", l, $4, $10 )
+				printf( "fix:%s::%d:SegmentSize: %s\n", l, $4, $11 )
+				printf( "fix:%s::%d:DiskGroup  : %s\n", l, $4, $12 )
+				printf( "fix:%s::%d:nDisks     : %s\n", l, $4, $13 )
+				printf( "fix:%s::%d:Channel    : %s\n", l, $4, $14 )
+				printf( "fix:%s::%d:CME        : %s\n", l, $4, $16 )
+				printf( "fix:%s::%d:CWOB       : %s\n", l, $4, $17 )
+				printf( "fix:%s::%d:RCD        : %s\n", l, $4, $18 )
+				printf( "fix:%s::%d:WCA        : %s\n", l, $4, $19 )
+				printf( "fix:%s::%d:RCA        : %s\n", l, $4, $20 )
+				printf( "fix:%s::%d:IsUtm      : %s\n", l, $4, $21 )
+				printf( "fix:%s::%d:UtmLunState: %s\n", l, $4, $22 )
+			}' l="hardware:FC60-array:${id}:lun"
+
+		/opt/hparray/bin/amdsp -d -S ${id}	|
+		sed	-e "s/:${id}[:0]*$//"	\
+			-e "s/^/fix:hardware:FC60-array:${id}:disk::/"
+
+		/opt/hparray/bin/amdsp -c ${id}		|
+		sed	-e '/^ *$/d'		\
+			-e 's/^   //'		\
+			-e '/Controller Date/d'	\
+			-e '/Controller Time/d'	\
+			-e "s/^/fix:hardware:FC60-array:${id}:controller::/"
+
+		/opt/hparray/bin/amdsp -g ${id}	|
+		sed	-e '/^ *$/d'	\
+			-e 's/^   //'	\
+			-e "s/^/fix:hardware:FC60-array:${id}:diskgroup::/"
+
+		/opt/hparray/bin/amdsp -r ${id}	|
+		sed	-e '/^ *$/d'	\
+			-e 's/^   //'	\
+			-e "s/^/fix:hardware:FC60-array:${id}:rebuild::/"
+
+		/opt/hparray/bin/amdsp -s ${id}		|
+		sed	-e '/^ *$/d'	\
+			-e 's/^   //'	\
+			-e "s/^/fix:hardware:FC60-array:${id}:general::/"
+
+		/opt/hparray/bin/amdsp -h ${id}		|
+		sed	-e '/^ *$/d'	\
+			-e 's/^   //'	\
+			-e "s/^/fix:hardware:FC60-array:${id}:hardware-status::/"
+	done
+
+	if [ ! -f ${TMP1_FILE} ]
+	then
+		echo "fix:hardware:FC60-array:hardware::absent"
+	fi
+	rm -f ${TMP1_FILE}
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of FC60-array"
+fi
+
+if [ -x /usr/bin/graphinfo -a -c /dev/crt ]
+then
+	graphinfo /dev/crt 2>/dev/null		|
+	sed	-e '/^$/d'				\
+		-e '/^OS\/SOFTWARE VERSIONS/,$d'	\
+		-e 's/^/fix:hardware:graphics::/'
+fi
+
+scc_check_file /etc/opt/sicl/hwconfig.cf "fix:hardware:HP IO libraries hwconfig.cf::" "#"
+
+if [ -x /usr/sbin/biosdecode ]
+then
+	/usr/sbin/biosdecode 2>/dev/null	|
+	strings					|
+	sed -e 's/^/fix:hardware:biosdecode::/'
+fi
+
+if [ -x /usr/sbin/dmidecode ]
+then
+	# We have to cope with the following formats of the dmidecode output:
+	#Handle 0x0000, DMI type 0, 20 bytes.
+	# and (old format):
+	#Handle 0x0400
+	#        DMI type 4, 35 bytes.
+	# In the first case, we display one line, in the other case we display two lines.
+	# Ignore all OEM-specific data as it is not very descriptive and might change.
+	/usr/sbin/dmidecode 2>/dev/null			|
+	sed	-e 's/^        //'		\
+		-e 's/^        //'		\
+		-e 's/^	//'			\
+		-e 's/^	//'				|
+	awk	'/^[ 	]*$/		{ next }
+		/^# dmidecode/		{ class = "hardware:dmidecode:general"; }
+		/^Handle.*DMI type/	{ line_1 = $0; line_2 = ""; prev_line_dmi_type = 1; next }
+		/^Handle/		{ line_1 = $0; line_2 = ""; next }
+		/DMI type/		{ line_2 = $0; prev_line_dmi_type = 1; next }
+					{
+						if ( prev_line_dmi_type == 1 )
+						{
+							prev_class = class
+							prev_line_dmi_type = 0
+							class = sprintf( "hardware:dmidecode:%s", $0 )
+							if ( class == prev_class )
+							{
+								printf( "fix:%s::\n", class )
+							}
+							printf( "fix:%s::%s\n", class, line_1 )
+							if ( length( line_2 ) )
+							{
+								printf( "fix:%s::%s\n", class, line_2 )
+							}
+							printf( "fix:%s::\n", class )
+							start_node = 0
+							next
+						}
+						prefix = "fix"
+						if ( $0 ~ "MHz" )
+						{
+							prefix = "var";		# Speed is variable data.
+						}
+						printf( "%s:%s::%s\n", prefix, class, $0 )
+					}'		|
+	grep -v "dmidecode:OEM-specific Type"
+fi
+
+scc_check_file /etc/hal/hald.conf "fix:hardware:/etc/hal/hald.conf::" "#"
+
+if [ -x /usr/sbin/lshw ]
+then
+	# The CPU speed in MHz is variable.
+	/usr/sbin/lshw 2>/dev/null				|
+	sed	-e 's/^/fix:hardware:lshw::/'		\
+		-e 's/fix:\(.*modified=\)/var:\1/'	\
+		-e 's/fix:\(.*size: .*MHz\)/var:\1/'	\
+		-e 's/fix:\(.*configuration: created=\)/var:\1/'
+elif [ -x /usr/sbin/hwinfo ]
+then
+	# The CPU speed in MHz is variable.
+	/usr/sbin/hwinfo --short 2>/dev/null			|
+	sed	-e 's/^/fix:hardware:hwinfo::/'		\
+		-e 's/fix:\(.*CPU.*MHz\)/var:\1/'
+fi
+
+# Check this file after invocation of hwinfo to avoid changes on first run after reboot
+scc_check_file /proc/devices "fix:hardware:/proc/devices::" "#"
+
+if [ -x /usr/sbin/ldm ]
+then
+	/usr/sbin/ldm ls 2>/dev/null				|
+	awk	'/^primary|^NAME/	{ next }
+					{ print $1, $2 }'	|
+	sort							|
+	while read dom state
+	do
+		# The following code is based upon the assumption that the names of the networks
+		# start with the name of the corresponding zone.
+		/usr/sbin/ldm list-bindings ${dom} </dev/null 2>/dev/null	|
+		sed -n -e '/^NETWORK/,/^DISK/p'					|
+		awk	'/^    NAME/	{ show = 1; next }
+					{
+						if ( show ) print $1
+						show = 0
+					 }'					|
+		sed	-e 's/-vnet.*//'	\
+			-e '/vnet0/d'		\
+			-e "/^${dom}$/d"					|
+		sort -u >${TMP1_FILE}
+		if [ -s ${TMP1_FILE} ]
+		then
+			sed -e "s/^/var:hardware:ldom:${dom}::${state} zone /" <${TMP1_FILE}
+		else
+			echo "var:hardware:ldom:${dom}::${state}"
+		fi
+		rm -f ${TMP1_FILE}
+	done
+fi
+
+if [ -x /usr/contrib/bin/machinfo -a "${OS_NAME}" = "HP-UX" ]
+then
+	/usr/contrib/bin/machinfo		|
+	sed -e 's/^/fix:hardware:machinfo::/'
+fi
+
+if [ -x /usr/bin/lparstat ]
+then
+	/usr/bin/lparstat -i 2>/dev/null			|
+	sed	-e 's/^/fix:hardware:lparstat::/'	\
+		-e 's/^fix:\(.*Variable\)/var:\1/'	\
+		-e 's/^fix:\(.*Online\)/var:\1/'	\
+		-e 's/^fix:\(.*Active\)/var:\1/'
+fi
+
+# AIX workload partitions
+if [ -x /usr/sbin/lswpar ]
+then
+	# Survey contains status and is therefore variable data
+	/usr/sbin/lswpar 2>/dev/null			|
+	sed -e 's/^/var:hardware:wpar:survey::/'
+
+	/usr/sbin/lswpar -q 2>/dev/null			|
+	sort						|
+	while read wpar state type remainder
+	do
+		prefix="fix"
+		if [ "${type}" = "A" ]
+		then
+			# Type A (application) wpars are transient and disappear after completing their job.
+			prefix="var"
+		fi
+
+		/usr/sbin/lswpar -G ${wpar} 2>/dev/null		|
+		sed -e "s/^/${prefix}:hardware:wpar:${wpar}:general::/"
+
+		/usr/sbin/lswpar -R ${wpar} 2>/dev/null		|
+		sed	-e "s/^/var:hardware:wpar:${wpar}:resource control::/"	\
+			-e "s/^var:\(.*Limit\)/${prefix}:\1/"			\
+			-e "s/^var:\(.*Max\)/${prefix}:\1/"
+
+		/usr/sbin/lswpar -T ${wpar} 2>/dev/null		|
+		sed -e "s/^/var:hardware:wpar:${wpar}:operation::/"
+
+		/usr/sbin/lswpar -D ${wpar} 2>/dev/null		|
+		sed -e "s/^/var:hardware:wpar:${wpar}:device::/"
+
+		/usr/sbin/lswpar -M ${wpar} 2>/dev/null		|
+		sed -e "s/^/var:hardware:wpar:${wpar}:mount::/"
+
+		/usr/sbin/lswpar -I ${wpar} 2>/dev/null		|
+		sed -e "s/^/var:hardware:wpar:${wpar}:network routes::/"
+
+		/usr/sbin/lswpar -N ${wpar} 2>/dev/null		|
+		sed -e "s/^/var:hardware:wpar:${wpar}:network::/"
+
+		/usr/sbin/lswpar -S ${wpar} 2>/dev/null		|
+		sed -e "s/^/${prefix}:hardware:wpar:${wpar}:security privilege::/"
+	done
+fi
+
+# HP-UX nPar partition information
+if [ -x /usr/sbin/parstatus ]
+then
+	# Hendrik Visage: There are cases when this does execute, but with errors, so prevent further errors by testing exit code
+	/usr/sbin/parstatus 2>/dev/null >${TMP1_FILE}; error_state=$?
+
+	if [ -s ${TMP1_FILE} -a ${error_state} -eq 0 ]
+	then
+		# NOTE:  No action specified. Default behavior is display all.
+		# Example data:
+		#[Complex]
+		#Complex Name : xxxxxxxx
+		#Complex Capacity
+		awk	'BEGIN		{
+						label="Notes";		# prevent global::: errors in HP/UX 11.31
+					}
+			/^\[.*\]$/	{
+						sub( "\\[", "" )
+						sub( "\\]", "" )
+						label=$0
+						next
+					}
+					{
+						# This is the global data of the complex.
+						# Label it as variable to avoid changes for other nodes.
+						print "var:hardware:parstatus:global:" label "::" $0
+					}' ${TMP1_FILE}
+
+		partition="$(awk '/'$(hostname)' *$/ { print $1 }' ${TMP1_FILE} )"
+		/usr/sbin/parstatus -p ${partition} -V 2>/dev/null	|
+		awk	'/^\[.*\]$/	{
+						sub( "\\[", "" )
+						sub( "\\]", "" )
+						label=$0
+						next
+					}
+					{
+						print "fix:hardware:parstatus:partition " p ":" label "::" $0
+					}' p="${partition}"
+
+		# Determine which cells are part of the partition.
+		awk	'/cell.*active.* '"${partition}"'$/	{
+						sub( "cab", "", $1 )
+						sub( "cell", "", $1 )
+						sub( ",", "/", $1 )
+						print $1
+					}' ${TMP1_FILE}				|
+		while read cell
+		do
+			/usr/sbin/parstatus -c "${cell}" -V 2>/dev/null	|
+			awk	'/^\[.*\]$/	{
+							sub( "\\[", "" )
+							sub( "\\]", "" )
+							label=$0
+							next
+						}
+						{
+		                                	print "fix:hardware:parstatus:cell " c ":" label "::" $0
+						}' c="${cell}"
+		done
+	fi
+
+	rm -f ${TMP1_FILE}
+fi
+
+# HP-UX vPar partition information (Hendrik Visage)
+if [ -x /usr/sbin/vparstatus ]
+then
+	# There are cases when this does execute, but with errors, so prevent further errors by testing exit code
+	/usr/sbin/vparstatus -w >/dev/null 2>/dev/null; ERR_STAT=$?
+
+	if [ $ERR_STAT -eq 0 ]
+	then
+		# We need to distinguish between sx3000's OA and the previous non-OA based vPars
+		# I still need a more fool proof check, and I wasn't in the mood for 
+		# awking in machinfo, so lets check something that we know is not OA supported ;)
+		/usr/sbin/vparstatus -m 2>/dev/null; OA=$?
+		VPARTYPE=""
+		versions_option="-P"
+		if [ $OA -ne 0 ]
+		then
+			VPARTYPE="-OA"			# To tag the "new" OA based vpars
+			versions_option="-r"
+		fi
+
+		/usr/sbin/vparstatus		|
+		awk	'BEGIN  	{
+						label="Notes";		# This is to prevent global::: errors in HP/UX 11.31
+					}
+			/^\[.*\]$/      {
+						sub( "\\[", "" )
+						sub( "\\]", "" )
+						label=$0
+						next
+					}
+					{
+						# This is the global data of the complex.
+						# Label it as variable to avoid changes for other nodes.
+						print "var:hardware:vparstatus" t ":summary:" label "::" $0
+					}' t="${VPARTYPE}" 
+
+		if [ $OA -eq 0 ]
+		then	# No equivalent info on OA systems
+			/usr/sbin/vparstatus -m 2>/dev/null		|
+			sed -e 's/^/fix:hardware:vparstatus:monitor::/'
+		fi
+        
+		/usr/sbin/vparstatus -d 2>/dev/null			|
+		sed -e "s/^/fix:hardware:vparstatus${VPARTYPE}:CPU configuration::/"
+
+		/usr/sbin/vparstatus -A 2>/dev/null			|
+		sed -e "s/^/var:hardware:vparstatus${VPARTYPE}:available resources::/"
+        
+		/usr/sbin/vparstatus ${versions_option}				|
+		sed -e "s/^/fix:hardware:vparstatus${VPARTYPE}:versions::/"
+        
+		partition="$(/usr/sbin/vparstatus -w -M 2>/dev/null)" 
+		if [ "${partition}" ]
+		then
+			/usr/sbin/vparstatus -v -p "${partition}" 2>/dev/null		|
+			awk	'/^\[.*\]$/	{
+							sub( "\\[", "" )
+							sub( "\\]", "" )
+							label=$0
+							next
+						}
+						{
+							print "fix:hardware:vparstatus" t ":local:" p ":" label "::" $0
+						}' t="${VPARTYPE}" p="${partition}"
+
+			# The first cut is for non-OA, the last for OA
+			for other_partition in $(/usr/sbin/vparstatus -M | cut -f1 -d":" | cut -f1 -d";" | grep -v "${partition}")
+			do
+				/usr/sbin/vparstatus -v -p "${other_partition}" 2>/dev/null	|
+				awk	'/^\[.*\]$/	{
+								sub( "\\[", "" )
+								sub( "\\]", "" )
+								label=$0
+								next
+							}
+							{
+								print "fix:hardware:vparstatus" t ":siblings:" p ":" label "::" $0
+							}' t="${VPARTYPE}" p="${other_partition}"
+			done
+		fi
+	fi
+fi
+
+scc_check_file /etc/multipath.conf "fix:hardware:multipath:/etc/multipath.conf::" "#"
+if [ -x /sbin/multipath ]
+then
+	/sbin/multipath -v 1 -ll 2>/dev/null	|
+	sed -e '/ /d'				|
+	while read mp
+	do
+		/sbin/multipath -ll ${mp} 2>/dev/null   |
+		sed -e "s/^/fix:hardware:multipath:${mp}::/"
+	done
+fi
+
+if [ -x /usr/sbin/sizer ]
+then
+	/usr/sbin/sizer -P 2>/dev/null			|
+	sed -e 's/^/fix:hardware:partitions::/'
+fi
+
+if [ -x /usr/sbin/prtfru ]
+then
+	# The output consists of detailed data that changes frequently. 
+	# To avoid too many changes in the logbook, we mark all data variable.
+	/usr/sbin/prtfru -c 2>/dev/null			|
+	sed -e 's/^/var:hardware:prtfru:data::/'
+
+	/usr/sbin/prtfru -l 2>/dev/null			|
+	sed -e 's/^/fix:hardware:prtfru:hierarchy::/'
+fi
+
+ARMDSP=/opt/sanmgr/commandview/client/sbin/armdsp
+if [ -x ${ARMDSP} ]
+then
+	rm -f ${TMP1_FILE} ${TMP2_FILE}
+
+	${ARMDSP} -i				|
+	tee ${TMP1_FILE}			|
+	sed	-e '/^#/d'		\
+		-e '/^[ 	]*$/d'	\
+		-e 's/^/fix:hardware:SAN:devices::/'
+
+	awk '/Serial Number:/	{ print $NF }' ${TMP1_FILE}	|
+	sort							|
+	while read SN
+	do
+		${ARMDSP} "${SN}" > ${TMP2_FILE}
+		SNalias="$(awk -F_ '/^Alias:/ { print $NF}' ${TMP2_FILE})"
+		[ -n "${SNalias}" ] && SN="${SNalias}"
+
+		awk '/Last Event Log/	{
+						printf( "var:hardware:SAN:%s::%s\n", l, $0 )
+						next
+					}
+			{
+				printf( "fix:hardware:SAN:%s::%s\n", l, $0 )
+				next
+			}' l="${SN} overview" ${TMP2_FILE}
+
+		${ARMDSP} -a "${SN}"			|
+		awk 'BEGIN		{ var = 0 }
+			/Scrub State:/	{ var = 1 }
+			/Last Event Log/ || /Voltage/ || /mAh$/ || /Remaining Capacity/ || var == 1 {
+					printf( "var:hardware:SAN:%s::%s\n", l, $0 )
+					next
+				}
+				{
+					printf( "fix:hardware:SAN:%s::%s\n", l, $0 )
+					next
+				}' l="${SN} details"
+	done
+fi
+rm -f ${TMP1_FILE} ${TMP2_FILE} 2> /dev/null
+
+## Added by Paul te Vaanholt for HP Storage Works Secure Path
+if [ -x /sbin/spmgr ]
+then
+	/sbin/spmgr display			|
+	grep -v -i -e "report created:"		|
+	sed "s/^/fix:hardware:hp secure path::/"
+fi
+
+if [ -x /usr/sbin/lsrset ]
+then
+	/usr/sbin/lsrset -av			|
+	sed -e 's/^/fix:hardware:lsrset::/'
+fi
+
+## Added by Paul te Vaanholt for EMC Symmetrix machines
+# When this software is not installed in its'default directory (refer to scc-localize),
+# edit scc-localize and change the contents of the variable SCC_PATH. 
+# This replaces the variable SYMCLI used for previous versions of the software.
+EMC="hardware:EMC symmetrix"
+
+symdev_exe="$(which symdev 2>/dev/null)"
+if [ -x "${symdev_exe}" ]
+then
+	"${symdev_exe}" list 2>&1				|
+	sed -e "s/^/fix:${EMC}:devices::/"
+fi
+
+symdg_exe="$(which symdg 2>/dev/null)"
+if [ -x "${symdg_exe}" ]
+then
+	symdg list 2>/dev/null			|
+	sed -e "s/^/fix:${EMC}:symdg list::/"
+
+	symdg list 2>/dev/null			|
+	grep -v -e "D E V I C E" -e "Num.* of" -e "Symmetrix"	|
+	awk 'NF > 5 { print $1 }'				|
+	while read DG
+	do
+		# The structure of the output of this command is general data followed by several categories.
+		#Group Name: <group>
+		#   general data ...
+		#   category
+		#   {
+		#   category-data
+		#   }
+		symdg show "${DG}" 2>/dev/null			|
+		awk	'/^Group Name/	{
+						category = "general"
+						next
+					}
+			/^[ 	]*$/	{	next; }
+			/^[ 	]*\{/	{
+						category = prev_line
+						sub( "^[ 	]*", "", category )
+						gsub( "[\\(][^\\)]*[\\)]", "", category );	# no text in brackets
+						sub( "[ 	]*:*$", "", category )
+						gsub( "  ", " ", category )
+					}
+					{
+						if ( length( prev_line ) > 0 )
+						{
+							print prefix category "::" prev_line
+						}
+						prev_line = $0
+					}
+			END		{
+						print prefix category "::" prev_line
+					}' prefix="fix:${EMC}:${DG}:"
+
+		>${TMP1_FILE}
+		symdg -f ${TMP1_FILE} export "${DG}" 2>/dev/null
+		sed -e "s/^/fix:${EMC}:${DG}:export::/" <${TMP1_FILE}
+		rm -f ${TMP1_FILE}
+
+		if [ -x symrdf ]
+		then
+			symrdf -g "${DG}" query 2>/dev/null			|
+			sed -e "s/^/fix:${EMC}:${DG}:query::/"
+		fi
+
+		if [ -x symmir ]
+		then
+			symmir -g "${DG}" -rdf query 2>/dev/null		|
+			sed -e "s/^/fix:${EMC}:${DG}:mirror state::/"
+		fi
+	done
+fi
+
+syminq_exe="$(which syminq 2>/dev/null)"
+if [ -x "${syminq_exe}" ]
+then
+	"${syminq_exe}" 2>/dev/null			|
+	sed -e "s/^/fix:${EMC}:syminq::/"
+fi
+
+# Sun Storedge
+if [ -x /usr/sbin/sccli ]
+then
+	/usr/sbin/sccli -l 2>/dev/null			|
+	awk '/^\/dev\//	{ print $1, $NF }'		|
+	while read device id
+	do
+		/usr/sbin/sccli "${device}" show configuration ${TMP1_FILE} 2>/dev/null
+
+		# The contents of the output file are:
+		# <empty line>
+		# * <category> 
+		# <empty line>
+		# <data>
+		# Some data appears to "change" for each run of scc. Tag this data variable.
+		# inquiry-data:: Page D0 Fibre Channel Address: A7 (id 40)
+		# inquiry-data:: Page D0 Port Name: 216000C0FF884D85
+		# peripheral-device-status data is variable: temperature and voltage (indicated by Nico van Leeuwen).
+		awk	'/^[ 	]*$/	{ if ( class_cnt < 1 ) next }
+			/^\* /		{
+						class = $2
+						prefix = "var"
+						if ( class != "enclosure-status" )
+						{
+							prefix = "fix"
+						}
+						class_cnt = 0
+						next
+					}
+					{
+						print prefix ":hardware:Sun Storedge:" i ":" class "::" $0
+						class_cnt += 1
+					}' i="${id}" ${TMP1_FILE}			|
+		sed	-e 's@^fix:\(.*:peripheral-device-status::\)@var:\1@'				\
+			-e 's@^fix:\(.*:inquiry-data:: Page D.* Fibre Channel Address\)@var:\1@'	\
+			-e 's@^fix:\(.*:inquiry-data:: Page D.* Port Name\)@var:\1@'			\
+			-e '/controller-date::Current time/d'
+
+
+		rm -f ${TMP1_FILE}
+	done
+fi
+
+if [ -x /usr/sbin/lspath ]
+then
+	# No example data analysed, keep all data variable.
+	/usr/sbin/lspath 2>/dev/null			|
+	sed -e 's/^/var:hardware:lspath::/'
+fi
+
+if [ -x /sbin/sysctl ]
+then
+	case "${OS_NAME}" in
+	*BSD)	LABEL="hw"
+		;;
+	*)	LABEL="dev"
+		;;
+	esac
+
+	sed	-n											\
+		-e "/battery/d"										\
+		-e "/remaining capacity/d"								\
+		-e "s/^${LABEL}\.acpi.stat.method/var:hardware:sysctl::${LABEL}.acpi.stat.method/p"	\
+		-e "s/^${LABEL}\.acpi.battery/var:hardware:sysctl::${LABEL}.acpi.battery/p"		\
+		-e "s/^${LABEL}\.cpuspeed/var:hardware:sysctl::${LABEL}.cpuspeed/p"			\
+		-e "s/^${LABEL}\.clockrate/var:hardware:sysctl::${LABEL}.clockrate/p"			\
+		-e "s/^${LABEL}\.sensors.acpibat/var:hardware:sysctl::${LABEL}.sensors.acpibat/p"	\
+		-e "s/^${LABEL}\.usermem/var:hardware:sysctl::${LABEL}.usermem/p"			\
+		-e "s/^${LABEL}\./fix:hardware:sysctl::${LABEL}./p"					\
+			<${SYSCTL_DATA}										|
+	sort
+
+	echo "hlp:hardware:sysctl::The configuration files for sysctl are recorded in the system module."
+	echo "hlp:hardware:sysctl::Any hardware/device changes in these files will also be detected via the above data."
+	echo "hlp:hardware:sysctl::Direct sysctl hardware/device changes will not be detected via the configuration files in the system module."
+fi
+
+if [ -x /opt/fcms/bin/fcmsutil ]
+then
+	for dev in /dev/fcms* /dev/td*
+	do
+		if [ -c "${dev}" ]
+		then
+			class="hardware:TACHYON-interface:${dev}"
+
+			/opt/fcms/bin/tdutil "${dev}" read 0x008 pci 2>/dev/null	|
+			sed -e "s@^@fix:${class}:tdutil::@"
+
+			/opt/fcms/bin/fcmsutil "${dev}" 2>/dev/null			|
+			awk	'/^[ 	]*$/			{ next }
+								{ prefix="fix"; }
+				/Number of Assisted IOs/	{ prefix="var" }
+				/Number of Active Login/	{ prefix="var" }
+								{ print prefix ":" l $0 }' l="${class}:fcmsutil::"
+
+			# The following data (control register) changes frequently: var.
+			/opt/fcms/bin/fcmsutil "${dev}" read_cr 2>/dev/null		|
+			sed	-e '/^[ 	]*$/d'		\
+				-e "s@^@var:${class}:registers::@"
+
+			/opt/fcms/bin/fcmsutil "${dev}" stat 2>/dev/null		|
+			sed	-e '/^[ 	]*$/d'		\
+				-e "s@^@var:${class}:status::@"
+		fi
+	done
+fi
+
+if [ -x /opt/fcms/bin/fcdutil ]
+then
+	for dev in /dev/fcd*
+	do
+		if [ -c "${dev}" ]
+		then
+			class="hardware:FibreChannel-interface:${dev}"
+
+			/opt/fcms/bin/fcdutil "${dev}" vpd 2>/dev/null                      |
+			awk	'/^[ 	]*$/    { next }
+						{ print "fix:" l $0 }' l="${class}:Vital Product Data::"
+
+			/opt/fcms/bin/fcdutil "${dev}" get_int_delay 2>/dev/null	|
+			sed -e "s@^@fix:${class}:get_int_delay::@"
+
+			/opt/fcms/bin/fcdutil "${dev}" 2>/dev/null			|
+			awk	'/^[ 	]*$/	{ next }
+						{ print "fix:" l $0 }' l="${class}:fcdutil::"
+
+			# The following data (control register) changes frequently: var.
+			/opt/fcms/bin/fcdutil "${dev}" read_cr 2>/dev/null		|
+			sed	-e '/^[ 	]*$/d'			\
+				-e "s@^@var:${class}:registers::@"
+		fi
+	done
+fi
+
+if [ -x /usr/sbin/icod_stat ]
+then
+	# The status line contains the current date (reported by Hendrik Visage).
+	/usr/sbin/icod_stat 2>/dev/null						|
+	sed	-e 's/^/fix:hardware:Instant Capacity on Demand::/'	\
+		-e 's/^fix:\(.*\) Status /var:\1 Status /'
+fi
+
+if [ -x /usr/sbin/chcod ]
+then
+	/usr/sbin/chcod 2>/dev/null			|
+	sed -e 's/^/fix:hardware:capacity on demand::/'
+fi
+
+scc_check_file /etc/iscsi/iscsid.conf		"fix:hardware:scsi:/etc/iscsi/iscsid.conf::"		"#"
+scc_check_file /etc/iscsi/initiatorname.iscsi	"fix:hardware:scsi:/etc/iscsi/initiatorname.iscsi::"	"#"
+scc_check_file /proc/scsi/scsi			"fix:hardware:scsi:/proc/scsi/scsi::"			"#"
+scc_check_file /proc/scsi/sg/host_strs		"fix:hardware:scsi:/proc/scsi/sg/host_strs::"		"#"
+
+if [ -x /usr/sbin/iscsiadm ]
+then
+	# Format of the data:
+	#tcp: [7] 111.11.11.111:3260,1191 iqn.1992-08.com.netapp:abcdefghij (non-flash)
+	/usr/sbin/iscsiadm -m session 2>/dev/null		|
+	awk '{ $2=""; print "fix:hardware:iscsiadm::" $0 }'
+fi
+
+if [ -x /usr/bin/sg_map ]
+then
+	/usr/bin/sg_map -i 2>/dev/null			|
+	sed -e 's/^/fix:hardware:scsi:sg_map::/'
+fi
+
+if [ -x /usr/bin/scsiinfo ]
+then
+	# List all scsi devices and then retrieve the results from the Inquiry command.
+	/usr/bin/scsiinfo -l 2>/dev/null	|
+	while read device remainder
+	do
+		/usr/bin/scsiinfo -i ${device} 2>/dev/null	|
+		sed	-e '/^[ 	]*$/d'		\
+			-e "s@^@fix:hardware:scsi:${device}::@"
+	done
+fi
+
+if [ -x /usr/sbin/luxadm ]
+then
+	# Sun Enterprise Network Array
+	/usr/sbin/luxadm probe 2>/dev/null		|
+	sed -e 's/^/fix:hardware:SENA:probe::/'
+
+	/usr/sbin/luxadm -e port 2>/dev/null		|
+	sed -e 's/^/fix:hardware:SENA:port::/'
+
+	for d in $(ls /dev/es/* 2>/dev/null )
+	do
+		/usr/sbin/luxadm inq "${d}" 2>/dev/null	|
+		sed -e "s@^@fix:hardware:SENA:${d}::@"
+	done
+
+	/usr/sbin/luxadm probe 2>/dev/null		|
+	sed -n -e 's/^S.*Name:\([^ ]*\) .*/\1/p'	|
+	sort						|
+	while read enclosure remainder
+	do
+		/usr/sbin/luxadm display ${enclosure}		|
+		sed	-e "/Temperature [sS]ensors/,/ temperatures /d"	\
+			-e "/Interconnect assembly/,/Language/d"	\
+			-e "s/^/fix:hardware:SENA:${enclosure}:display::/"
+	done
+fi
+
+if [ -d /sys/block ]
+then
+	find /sys/block -type f 2>/dev/null			|
+	sed	-e '/\/stat$/d'	\
+		-e '/\/ram/d'					|
+	sort -u -f						|
+	while read file
+	do
+		if [ -r "${file}" ]
+		then
+                        dev=${file#/sys/block/}
+                        cat=${dev#*/}
+                        dev=${dev%%/*}
+                        sed -e "s@^@fix:hardware:block devices:/sys/block/${dev}::${cat} :@" "${file}" 2>/dev/null
+		fi
+	done
+
+	find /sys/block -type l	2>/dev/null			|
+	grep "/holders/"					|
+	sort -u -f						|
+	sed	-e "s@^/sys/block/@@"			\
+		-e "s@^@fix:hardware:block devices:@"	\
+		-e "s@/holders/@::holders:	@"
+fi
+
+scc_check_file /etc/path_to_inst "fix:hardware:devices:/etc/path_to_inst::" "#"
+scc_check_file /etc/name_to_major "fix:hardware:devices:/etc/name_to_major::" "#"
+scc_check_file /etc/minor_perm "fix:hardware:devices:/etc/minor_perm::" "#"
+scc_check_file /etc/driver_classes "fix:hardware:devices:/etc/driver_classes::" "#"
+scc_check_file /etc/driver_aliases "fix:hardware:devices:/etc/driver_aliases::" "#"
+scc_check_file /etc/devlink.tab "fix:hardware:devices:/etc/devlink.tab::" "#"
+scc_check_file /etc/dacf.conf "fix:hardware:devices:/etc/dacf.conf::" "#"
+scc_check_file /etc/dgroup.tab "fix:hardware:devices:/etc/dgroup.tab::" "#"
+
+# On RedHat and *BSD systems, there are too many device files.
+if [ "${OS_NAME}" = "HP-UX" -o "${OS_NAME}" = "SunOS"  -o "${OS_NAME}" = "OSF1" ]
+then
+	{
+		if [ -x /usr/sbin/lsdev -a "${OS_NAME}" = "HP-UX" ]
+		then
+			# Get the major device numbers for the "variable" ownership devices.
+			/usr/sbin/lsdev					|
+			sed -n	-e 's/^[ 	]*//'	\
+				-e 's/ .*pt[ms]$//p'	\
+				-e 's/ .*pty[ms]$//p'	\
+				-e 's/ .*tel[ms]$//p'	\
+				-e 's/ .*tty$//p'
+		fi
+
+		{
+			# Ignore the file-descriptor and pseudo-terminal devices on SunOS.
+			find /dev -type b -o -type c		|
+			sed	-e '/\/dev\/fd/d'	\
+				-e '/\/dev\/pts/d'	\
+				-e '/\/dev\/ipnet/d'
+
+			if [ -d /devices ]		# SunOS
+			then
+				# There ware way too many pseudo devices, ignore them.
+				find /devices -type b -o -type c	|
+				fgrep -v "/pseudo/"
+			fi
+		}				|
+		sort				|
+		xargs ls -ld			|
+		sed -e 's/,/ /'
+	}							|
+	awk '{
+		if ( NF == 1 )
+		{
+			# Here we process the list of major device numbers with
+			# "variable" ownership of the device-files.
+			variable[ $1 ] = 1
+			cnt_variable++
+			next
+		}
+
+		cnt=split( $NF, parts, "/" )
+		dir="/dev"
+		if ( cnt > 3 )
+		{
+			dir=sprintf( "/%s/%s", parts[ 2 ], parts[ 3 ] )
+		}
+
+		if ( cnt_variable > 0 )
+		{
+			if ( variable[ $5 ] == 0 )
+			{
+				# This is fixed.
+				printf( "fix:hardware:device-files:%s::%s:	%s %2s %8.8s %8.8s %4s %s\n",
+					dir, $NF, $1, $2, $3, $4, $5, $6 )
+				next
+			}
+		}
+		# Treat permission, owner and group as variable.
+		# For tty-device files these properties depend on the
+		# current user that is logged in on the device.
+
+		# Name, link-count, major and minor number are fixed.
+		printf( "fix:hardware:device-files:%s::%s:	%2s %4s %s\n",
+			dir, $NF, $2, $5, $6 )
+		# permissions, owner and group are variable.
+		printf( "var:hardware:device-files:%s::%s:	%s %8.8s %8.8s\n",
+			dir, $NF, $1, $3, $4 )
+	}'
+fi
+
+scc_check_file /etc/devfsd.conf "fix:hardware:device-files:/etc/devfsd.conf::" "#"
+
+if [ -x /sbin/dsfmgr ]
+then
+	# Erase all dates from the output.
+	/sbin/dsfmgr -s -x 2>/dev/null					|
+	sed	-e 's/ [A-Z][a-z][a-z] [0-9][0-9]  [0-9][0-9][0-9][0-9] / /'	\
+		-e 's/ [A-Z][a-z][a-z]  [0-9]  [0-9][0-9][0-9][0-9] / /'	\
+		-e 's/ [A-Z][a-z][a-z] [0-9][0-9] [0-9][0-9]:[0-9][0-9] / /'	\
+		-e 's/ [A-Z][a-z][a-z] [0-9][0-9]  [0-9]:[0-9][0-9] / /'	\
+		-e 's/^/fix:hardware:dsfmgr::/'
+fi
+
+if [ -x /usr/bin/raw ]
+then
+	/usr/bin/raw -qa 2>/dev/null		|
+	sed -e 's/^/fix:hardware:raw device::/'
+fi
+
+scc_check_file /etc/device.tab "fix:hardware:devices:/etc/device.tab::" "#"
+
+scc_check_file /var/adm/sbtab "fix:hardware:disk:/var/adm/sbtab::" "#"
+
+ls /dev/rdsk 2>/dev/null	|
+if [ "${OS_NAME}" = "SunOS" ]
+then
+	# Slice 0 (s0) indicates the entire disk,
+	# other slices are used to address parts of the disk.
+	sed -e "/s[1-9]$/d"
+else
+	cat -
+fi > ${TMP1_FILE}
+
+DISK_COUNT="$(wc -l <${TMP1_FILE})"
+sort ${TMP1_FILE}				|
+while read disk remainder
+do
+	if [ -x /usr/sbin/diskinfo ]
+	then
+		/usr/sbin/diskinfo -v /dev/rdsk/${disk} 2>/dev/null	|
+		sed	-e '/Additional inquiry/d'	\
+			-e '/date/d'			\
+			-e "s/^/fix:hardware:disk:${disk}::diskinfo:	/"
+	fi
+
+	if [ -x /usr/sbin/lssf ]
+	then
+		/usr/sbin/lssf /dev/rdsk/${disk} 2>/dev/null	|
+		sed -e "s/^/fix:hardware:disk:${disk}::lssf:	/"
+	fi
+
+	if [ -x /usr/sbin/prtvtoc ]
+	then
+		/usr/sbin/prtvtoc /dev/rdsk/${disk} 2>/dev/null		|
+		sed -e "s/^/fix:hardware:disk:${disk}::prtvtoc:	/"
+	fi
+
+	# The format command can disrupt the SAN when there are many disks.
+	if [ ${DISK_COUNT} -lt 250 -a -x /usr/sbin/format -a "${OS_NAME}" = "SunOS" ]
+	then
+		# Remove the slice-ID from the device-name
+		dsk=$(echo ${disk} | sed -e 's/s0$//')
+
+		printf "inquiry\npartition\nprint\nquit\nquit\n"	|
+		/usr/sbin/format -d ${dsk} 2>&1				|
+		awk	'/^Warning/		{ next }
+			/^[ 	]*$/		{ next }
+			/^format>/		{ show = 1; prefix="format:	" }
+			/^format> $/		{ show = 0 }
+			/^partition> Current /	{ show = 1; prefix="partition:	"; partition = 1 }
+			/^partition> $/		{ show = 0 }
+			/^  2 /			{ if ( partition ) size=$7 }
+						{ if ( show) print "fix:hardware:disk:" d "::" prefix $0 }
+			END	{ if ( length( size ) > 0 ) print "fix:hardware:disk:" d "::size:	" size }' d=${dsk}
+	fi
+
+	if [ -x /usr/sbin/scsictl ]
+	then
+		/usr/sbin/scsictl -a /dev/rdsk/${disk} 2>${TMP1_FILE}	|
+		sed -e "s/^/fix:hardware:disk:${disk}::scsictl:	/"
+
+		if [ -s ${TMP1_FILE} ]
+		then
+			# SAN's can use pseudo LUNs, where scsictl fails. Do not collect more info.
+			continue
+		fi
+	fi
+
+	if [ -x /usr/sbin/pvdisplay -o -x /sbin/pvdisplay ]
+	then
+		pvdisplay /dev/dsk/${disk} >/dev/null 2>${TMP1_FILE}
+		if [ -s ${TMP1_FILE} ]
+		then
+			grep -l "find the volume group" ${TMP1_FILE} >/dev/null 2>/dev/null
+			if [ $? -eq 0 ]
+			then
+				echo "fix:hardware:disk:${disk}::LVM:	absent"
+			else
+				echo "fix:hardware:disk:${disk}::LVM:	messages:present"
+			fi
+		else
+			echo "fix:hardware:disk:${disk}::LVM:	present"
+
+			dd bs=8200 skip=1 count=1 if=/dev/dsk/${disk} 2>/dev/null	|
+			od -x								|
+			awk	'{
+					if ( NR == 1 )
+					{
+						pvid = sprintf( "%s%s%s%s", $2, $3, $4, $5 )
+						vgid = sprintf( "%s%s%s%s", $6, $7, $8, $9 )
+						printf( "fix:hardware:disk:%s::PVID:%s\n", d, toupper( pvid ) )
+						printf( "fix:hardware:disk:%s::VGID:%s\n", d, toupper( vgid ) )
+						exit( 0 )
+					}
+				}' d="${disk}"
+		fi
+		rm -f ${TMP1_FILE}
+	fi
+done
+rm -f ${TMP1_FILE}
+
+if [ -x /usr/sbin/lsdev -a "${OS_NAME}" = "AIX" ]
+then
+	/usr/sbin/lsdev -c disk		|
+	sort				|
+	while read disk remainder
+	do
+		echo "fix:hardware:disk:${disk}::${remainder}"
+
+		getconf DISK_SIZE /dev/${disk} 2>/dev/null	|
+		sed -e "s/^/fix:hardware:disk:${disk}::disksize	/"
+
+		/usr/sbin/lsattr -E -l ${disk}	|
+		sed -e "s/^/fix:hardware:disk:${disk}::/"
+	done
+fi
+
+if [ "${OS_NAME}" = "Linux" ]
+then
+	# Determine the disks of our local filesystems.
+	busybox_check df
+	if [ $? -eq 0 ]
+	then
+		df -l 2>/dev/null	# The real thing
+		cat /proc/mounts 2>/dev/null
+	else
+		df			# No -l option available
+	fi							|
+	awk '/^\/dev\// { print $1 }'				|
+	sed -e 's/[0-9]*$//'					|
+	sort -uf						|
+	while read dsk remainder
+	do
+		scc_disk_info ${dsk}
+
+		# SCSI disks are handled by sginfo
+		case "${dsk##*/}" in
+		hd*)	/sbin/hdparm -I ${dsk} 2>/dev/null					|
+			sed -e "s@^@fix:hardware:disk:${dsk}::hdparm:	@"
+			;;
+		esac
+	done
+fi
+
+if [ -x /sbin/fdisk -a -x /usr/sbin/smartctl ]
+then
+	/sbin/fdisk -l 2>/dev/null			|
+	awk '/^Disk/ { sub( ":", "", $2 ); print $2 }'	|
+	sort						|
+	while read disk
+	do
+		if [ -b "${disk}" ]
+		then
+			/usr/sbin/smartctl --info --all "${disk}" 2>/dev/null		|
+			sed	-e '1,/=== START/d'		\
+				-e '/Local Time/d'		\
+				-e "s@^@fix:hardware:disk:${disk}::smartctl @"		|
+			sed	-e 's/fix:\(.* Seek_Error_Rate \)/var:\1/'	\
+				-e 's/fix:\(.*_Hours \)/var:\1/'		\
+				-e 's/fix:\(.* Spin_Up_Time \)/var:\1/'		\
+				-e 's/fix:\(.* Start_Stop_Count \)/var:\1/'	\
+				-e 's/fix:\(.* Power_Cycle_Count \)/var:\1/'	\
+				-e 's/fix:\(.*Temperature_Cel\)/var:\1/'	\
+				-e 's/fix:\(.* Total_LBA\)/var:\1/'		\
+				-e 's/fix:\(.*Error_Rate \)/var:\1/'		\
+				-e 's/fix:\(.* Hardware_ECC_Recovered \)/var:\1/'
+		fi
+	done
+fi
+
+if [ -x /usr/bin/lsscsi ]
+then
+	# Sample output:
+	# lsscsi --list
+        # [0:0:0:0]    disk    ATA      VBOX HARDDISK    1.0   /dev/sda
+        #   device_blocked=0
+	/usr/bin/lsscsi --list 2>/dev/null	|
+	awk	'/^\[/	{ dev=$NF }
+		/_cnt=/	{ next }
+			{ print "fix:hardware:disk:" dev "::lsscsi:	" $0; }'
+
+elif [ -x /usr/bin/sginfo ]
+then
+	# Sample output:
+	# sginfo -l
+	# /dev/sr0 /dev/sda /dev/scd0
+	# /dev/sg0 [=/dev/sda scsi0 ch0 id=0 lun=0]
+	# /dev/sg1 [=/dev/sr0 scsi1 ch0 id=0 lun=0]
+	for disk in $(/usr/bin/sginfo -l 2>/dev/null | head -n 1)
+	do
+		if [ ! -h "${disk}" ]
+		then
+			# Ignore tape devices (indicated by Ben de haan).
+			case ${disk} in
+			/dev/st*|/dev/nst*)	;;
+			*)			scc_disk_info ${disk}
+						# Ignore lines indicating unsupported (sub)pages: lines starting with ">>"
+						/usr/bin/sginfo -A "${disk}" 2>/dev/null				|
+						sed	-e '/^>>/d'						\
+							-e "s@^@fix:hardware:disk:${disk}::sginfo:	@"
+						;;
+			esac
+		fi
+	done
+fi
+
+if [ -x /sbin/fdisk  -a "${OS_NAME}" = "FreeBSD" ]
+then
+	ls /dev/ad[0-9] /dev/da[0-9] 2>/dev/null	|
+	while read disk
+	do
+		fdisk ${disk} 2>/dev/null		|
+		sed -e "s@^@fix:hardware:disk:${disk}::fdisk:	@"
+	done
+fi
+
+if [ -x /sbin/sysctl -a -x /sbin/disklabel ]
+then
+	# Retrieve all the disknames, ignore floppy and CD-rom.
+        /sbin/sysctl -n hw.disknames 2>/dev/null			|
+	tr " ," "\012"							|
+	sort								|
+	sed	-e '/^fd/d'	\
+		-e '/^cd/d'						|
+	while read disk
+	do
+		/sbin/disklabel ${disk} </dev/null 2>/dev/null	|
+		sed -e "s/^/fix:hardware:disklabels:${disk}::/"
+	done
+fi
+
+if [ -x /sbin/hwmgr -a -x /sbin/disklabel ]
+then
+	/sbin/hwmgr show scsi					|
+	awk '{ if ( $4 == "disk" ) print $8 }'			|
+	while read disk
+	do
+		# Disks can be added to an EMC box without the device files being created.
+		device="/devices/disk/${disk}a"
+		if [ -b "${device}" ]
+		then
+			/sbin/disklabel -r ${device} 2>/dev/null			|
+			sed -e "s/^/fix:hardware:disk:${disk}::disklabel:	/"
+		fi
+	done
+fi
+
+for d in /proc/ide/hd*
+do
+	if [ -d "${d}" ]
+	then
+		disk="/dev/$(basename "${d}")"
+		if [ -x /sbin/ide_info ]
+		then
+			/sbin/ide_info ${disk} 2>/dev/null	|
+			sed -e "s@^@fix:hardware:disk:${disk}::ide_info:	@"
+		else
+			scc_check_file "${d}/model" "fix:hardware:disk:${disk}::model:	" "#"
+			scc_check_file "${d}/driver" "fix:hardware:disk:${disk}::driver:	" "#"
+		fi
+		scc_check_file "${d}/geometry" "fix:hardware:disk:${disk}::geometry:	" "#"
+	fi
+done
+scc_check_file "/proc/ide/drivers" "fix:hardware:disk:/proc/ide/drivers::" "#"
+scc_check_file "/proc/ide/piix" "fix:hardware:disk:/proc/ide/piix::" "#"
+scc_check_file "/proc/ide/via" "fix:hardware:disk:/proc/ide/via::" "#"
+
+if [ -d /dev/disk ]
+then
+	for dir in /dev/disk/by-*
+	do
+		if [ -d "${dir}" ]
+		then
+			cat=${dir##*/by-}
+
+			ls -l ${dir}		|
+			sed -n	-e "s@.* \([^ ][^ ]*\) -> \.\./\.\./\([^/][^/]*$\)@var:hardware:disk id:\2::${cat} : \1@p"
+		fi
+	done		|
+	sort
+fi
+
+if [ -x /bin/lsblk ]
+then
+	# Devices for snap apps are variable.
+	/bin/lsblk -i -o NAME,MAJ:MIN,TYPE,FSTYPE,MOUNTPOINT,LABEL,RA,RO,RM,MODEL,SIZE,MODE,ALIGNMENT,SCHED,RQ-SIZE 2>/dev/null	|
+	sed	-e 's/^/fix:hardware:lsblk::/'				\
+		-e 's@^fix:\(.* /snap/\)@var:\1@'			\
+		-e 's@^fix:\(.* thinpool-pool.*stratis\)@var:\1@'	\
+		-e 's@^fix:\(.* flex-mdv.*stratis\)@var:\1@'
+fi
+
+if [ -x /usr/sbin/emxmgr ]
+then
+	for adapter in $(/usr/sbin/emxmgr -d 2>/dev/null | grep emx)
+	do
+		/usr/sbin/emxmgr -t ${adapter} 2>/dev/null		|
+		sed -e "s/^/fix:hardware:EMX:${adapter}::/"
+	done
+fi
+
+if [ -x /usr/sbin/lscfg ]
+then
+	# AIX
+	/usr/sbin/lscfg			|
+	awk '/^\+ fcs/ { print $2 }'	|
+	sort				|
+	while read fc
+	do
+		/usr/sbin/lscfg -vl ${fc}	|
+		sed -e "s/^/fix:hardware:Fibre Channel:${fc}::/"
+	done
+fi
+
+if [ -x /sbin/irdiag ]
+then
+	# I20 internal raid
+	# TODO: I have not yet tested the output, so all output is var.
+	/sbin/irdiag -v 2>&1		|
+	sed -e 's/^/var:hardware:I20 internal raid::/'
+fi
+
+if [ -x /usr/lib/osa/bin/lad -a -x /usr/lib/osa/bin/drivutil ]
+then
+	/usr/lib/osa/bin/lad 2>/dev/null		|
+	sed -e 's/^/fix:hardware:RaidManager:lad::/'
+
+	/usr/lib/osa/bin/lad 2>/dev/null		|
+	sort						|
+	while read dev remainder
+	do
+		if [ -z "${dev}" ]
+		then
+			continue
+		fi
+
+		/usr/lib/osa/bin/raidutil -c ${dev} -i 2>/dev/null		|
+		sed	-e '/^[ 	]*$/d'	\
+			-e '/succeeded/d'	\
+			-e "s/^/fix:hardware:RaidManager:${dev}:raidutil::/"
+
+		/usr/lib/osa/bin/drivutil -I ${dev} 2>/dev/null		|
+		sed	-e '/^[ 	]*$/d'	\
+			-e '/succeeded/d'	\
+			-e "s/^/fix:hardware:RaidManager:${dev}:drive group::/"
+
+		/usr/lib/osa/bin/drivutil -d ${dev} 2>/dev/null		|
+		sed	-e '/^[ 	]*$/d'	\
+			-e '/succeeded/d'	\
+			-e "s/^/fix:hardware:RaidManager:${dev}:drives per group::/"
+
+		/usr/lib/osa/bin/drivutil -i ${dev} 2>/dev/null		|
+		sed	-e '/^[ 	]*$/d'	\
+			-e '/succeeded/d'	\
+			-e "s/^/fix:hardware:RaidManager:${dev}:drive::/"
+
+		/usr/lib/osa/bin/drivutil -l ${dev} 2>/dev/null		|
+		sed	-e '/^[ 	]*$/d'	\
+			-e '/succeeded/d'	\
+			-e "s/^/fix:hardware:RaidManager:${dev}:LUN::/"
+	done
+fi
+
+for f in /etc/osa/rmparams /etc/osa/mnf /usr/lib/osa/rdac_address
+do
+	scc_check_file "${f}" "fix:hardware:RaidManager:${f}::" "#"
+done
+
+if [ -x /usr/lib/osa/bin/healthck ]
+then
+	/usr/lib/osa/bin/healthck -a 2>/dev/null	|
+	sed	-e '/^[ 	]*$/d'	\
+		-e '/succeeded/d'	\
+		-e 's/^/var:hardware:RaidManager:healthck::/'
+fi
+
+scc_check_file "/etc/raid/rmparams" "fix:hardware:RaidManager:/etc/raid/rmparams::" "#"
+
+for f in /etc/raidtab /etc/raid?.conf /etc/mdadm.conf /etc/mdadm/mdadm.conf 
+do
+	scc_check_file "${f}" "fix:hardware:software RAID:${f}::" "#"
+done
+scc_check_file "/proc/mdstat" "var:hardware:software RAID:/proc/mdstat::" "#"	# Status is var data.
+
+if [ -x /sbin/mdadm -a -f /proc/mdstat ]
+then
+	sed	-e '/^Personalities/d'		\
+		-e '/^unused/d'			\
+		-e 's/[ 	].*//'		\
+		-e '/^$/d'			\
+			/proc/mdstat			|
+	while read device
+	do
+		/sbin/mdadm --detail /dev/${device} 2>/dev/null	 >${TMP1_FILE}
+
+		sed	-e "/ Time /d"							\
+			-e '/^$/d'							\
+			-e "s@^@fix:hardware:software RAID:/dev/${device}:general::@"	\
+			-e "s/fix:\(.* Events :\) /var:\1/"				\
+			-e "s/fix:\(.* State :\) /var:\1/"				\
+			-e "s/fix:\(.* Check Status :\) /var:\1/"			\
+				${TMP1_FILE}
+
+		awk '/Major *Minor/	{ show = 1; next }
+					{ if ( show ) print $NF }' ${TMP1_FILE}		|
+		while read disk
+		do
+			/sbin/mdadm --examine ${disk} 2>/dev/null	|
+			sed	-e "/ Time /d"							\
+				-e "s@^@fix:hardware:software RAID:/dev/${device}:${disk}::@"	\
+				-e "s/fix:\(.* Checksum :\) /var:\1/"				\
+				-e "s/fix:\(.* Events :\) /var:\1/"				\
+				-e "s/fix:\(.* State :\) /var:\1/"
+		done
+		rm -f ${TMP1_FILE}
+	done
+fi
+
+[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of disk"
+
+# Data Terminal Connectors
+for dtc in /opt/dtcmgr/sbin/dtclist /opt/rdtcmgr/sbin/rdtclist
+do
+	if [ ! -x ${dtc} ]
+	then
+		continue
+	fi
+
+	${dtc} -c 2>/dev/null			|
+	sed -e '/^Error/d' -e '/^[ 	]/d'	|
+	while read dtc_dev remainder
+	do
+		${dtc} -c ${dtc_dev}			|
+		tr "\f" " "				|
+		sed	-e '/^[ 	]*$/d'	\
+			-e "s/^/fix:hardware:dtc:${dtc_dev}::/"
+	done
+done
+
+scc_check_file /etc/ddfa/dp "fix:hardware:dtc:/etc/ddfa/dp::" "#"	|
+tee ${TMP1_FILE}
+if [ -s ${TMP1_FILE} ]
+then
+	# This file can also contain a message from scc_check_file, select only the contents of the file.
+	# The last field of each line contains the name of a configuration file.
+	sed -n	-e 's/[ 	]*$//'	\
+		-e 's/^fix:hardware:dtc:.*[ 	]//p' ${TMP1_FILE}	|
+	while read file
+	do
+		scc_check_file "${file}" "fix:hardware:dtc:${file}::" "#"
+	done
+fi
+rm -f ${TMP1_FILE}
+
+if [ -f /proc/interrupts ]
+then
+	awk '{
+		if ( NR == 1 )
+		{
+			num_cpu=NF
+			next
+		}
+		print $1, $(2+num_cpu), $(3+num_cpu) }' /proc/interrupts		|
+	sed	-e '/^$/d'	\
+		-e 's@^@fix:hardware:/proc/interrupts::@'
+fi
+
+if [ -d /proc/irq ]
+then
+	find /proc/irq -type f 2>/dev/null	|
+	sed	-e "/spurious/d"	\
+		-e "/smp_affinity/d"		|
+	sort					|
+	while read file
+	do
+		if [ -r "${file}" ]
+		then
+			sed	-e "/^count/d"				\
+				-e "s@^@fix:hardware:irq:${file}::@"	\
+					"${file}"
+		fi
+	done
+fi
+
+# This file contains binary data on Gentoo: ignore.
+# Accessing this file on unity fails: ignore.
+if [ "${SCC_LINUX_DISTRO}" != "gentoo" -a "${SCC_LINUX_DISTRO}" != "unity" ]
+then
+	scc_check_file /proc/ioports "fix:hardware:/proc/ioports::" "#"
+fi
+
+scc_check_file /etc/isapnp.conf "fix:hardware:/etc/isapnp.conf::" "#"
+
+scc_check_file /etc/kbdlang "fix:hardware:/etc/kbdlang::" "#"
+
+if [ -x /usr/bin/getdev -a -x /usr/sbin/devattr ]
+then
+	/usr/bin/getdev		|
+	while read device remainder
+	do
+		/usr/sbin/devattr -v ${device}		|
+		sed -e "s/^/fix:hardware:devattr:${device}::devattr:	/"
+	done
+fi
+
+if [ -x /usr/bin/getconf ]
+then
+	if [ "$OS_NAME" = "AIX" ]
+	then
+		# Contributed by Doug Probst.
+		getconf_opts="CLK_TCK HARDWARE_BITMODE KERNEL_BITMODE MACHINE_ARCHITECTURE" 
+	else
+		getconf_opts="CS_MACHINE_SERIAL CLK_TCK CPU_CHIP_TYPE HW_CPU_SUPP_BITS HW_32_64_CAPABLE KERNEL_BITS"
+	fi
+	for c in ${getconf_opts}
+	do
+		echo "fix:hardware:getconf::${c}:	$(/usr/bin/getconf ${c} 2>/dev/null)"
+	done
+fi
+
+if [ -x /usr/bin/isalist ]
+then
+	/usr/bin/isalist				|
+	sed -e 's/^/fix:hardware:instruction set:isalist::/'
+fi
+
+if [ -x /usr/bin/isainfo ]
+then
+	/usr/bin/isainfo -bv 2>/dev/null		|
+	sed -e 's/^/fix:hardware:instruction set bits:isainfo::/'
+fi
+
+if [ -x /usr/sbin/lscfg ]
+then
+	/usr/sbin/lscfg -v				|
+	sed	-e '/^[ 	]*$/d'	\
+		-e 's/^/fix:hardware:lscfg::/'
+fi
+
+if [ -x /usr/sbin/lsdev ]
+then
+	/usr/sbin/lsdev					|
+	sed -e 's/^/fix:hardware:lsdev::/'
+fi
+
+if [ -x /usr/sbin/prtconf -a "${OS_NAME}" = "SunOS" ]
+then
+	# The following command produces much data that is rather non-descript.
+	# Changes are not very clear. Treat all output as variable.
+	/usr/sbin/prtconf -v 2>/dev/null		|
+	sed	-e 's/^/var:hardware:prtconf:device-tree::/'
+
+	/usr/sbin/prtconf -vp 2>/dev/null		|
+	sed -n -e 's/^  *idprom:/fix:hardware:prtconf:PROM::idprom:/p' 2>/dev/null
+fi
+
+if [ -f /proc/meminfo ]
+then
+	grep Total /proc/meminfo		|
+	sed -e 's@^@fix:hardware:memory /proc/meminfo::@'
+fi
+if [ -f /proc/iomem ]
+then
+	sed -e 's@^@var:hardware:memory /proc/iomem::@' </proc/iomem 2>/dev/null
+fi
+
+if [ -x /usr/sbin/lscfg ]
+then
+	/usr/sbin/lscfg -v		|
+	awk '/mem/ { print $1 }'	|
+	while read card
+	do
+		/usr/sbin/lsattr -EHl ${card}	|
+		sed -e "s/^/fix:hardware:memory:${card}::/"
+	done
+fi
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli hardware memory get		|
+	sed -e 's/^/fix:hardware:memory::/'
+fi
+
+if [ -x /usr/sbin/lsmcode ]
+then
+	/usr/sbin/lsmcode -A					|
+	sed -e 's/^/fix:hardware:microcode lsmcode::/'
+fi
+
+file=/etc/X11/XF86Config
+newer="$(find /etc -type f -name XF86Config -newer ${file} 2>/dev/null)"
+if [ -f "${newer}" ]
+then
+	file="${newer}"
+fi
+scc_check_file "${file}" "fix:hardware:monitor:${file}::" "#"
+
+if [ -x /sbin/hwmgr ]
+then
+	for cat in name scsi component
+	do
+		/sbin/hwmgr show "${cat}" 2>&1			|
+		awk	'{
+				prefix = "fix"
+				if ( c == "scsi" && $4 == "tape" )
+				{
+					# The driver owner seems to change for tapes.
+					prefix = "var"
+				}
+				printf( "%s:hardware:hwmgr:%s::%s\n", prefix, c, $0 )
+			}' c="${cat}"
+	done
+
+	/sbin/hwmgr view devices -category fibre 2>&1		|
+	sed -e "s/^/fix:hardware:hwmgr:fibre::/"
+
+	for cat in cluster devices hierarchy env
+	do
+		/sbin/hwmgr view "${cat}" 2>&1			|
+		sed -e "s/^/fix:hardware:hwmgr:${cat}::/"
+	done
+fi
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli hardware platform get	|
+	sed -e 's/^/fix:hardware:platform::/'
+fi
+
+if [ -x /sbin/scu ]
+then
+	/sbin/scu show edt 2>&1					|
+	sed -e 's/^/fix:hardware:scu::/'
+fi
+
+if [ -x /usr/sbin/ioscan ]
+then
+	# On some systems you may want to ignore NO_HW, for example on backup servers in SAN
+	# environments. Depending on IGNORE_NO_HW, the sed params are changed
+	# Edit scc-localize to change the default setting of this variable.
+	IGNORE_NO_HW=${IGNORE_NO_HW:-0}
+
+	/usr/sbin/ioscan -fn 2>${TMP1_FILE}		|
+	if [ ${IGNORE_NO_HW} -eq 1 ]
+	then
+		sed -e 's/^/fix:hardware:ioscan::/' -e 's/NO_HW  /CLAIMED/'
+	else
+		sed -e 's/^/fix:hardware:ioscan::/'
+	fi
+
+	sed -e 's/^/fix:hardware:ioscan::messages:	/' ${TMP1_FILE}
+	rm -f ${TMP1_FILE}
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of ioscan"
+elif [ -f /etc/sysconfig/hwconf ]
+then
+	scc_check_file /etc/sysconfig/hwconf "fix:hardware:/etc/sysconfig/hwconf::" "-"
+fi
+
+if [ -x /usr/sbin/mcelog ]
+then
+	# Display hardware error events:
+	/usr/sbin/mcelog 2>/dev/null			|
+	sed -e 's@^@var:hardware:/usr/sbin/mcelog::@'
+
+	scc_check_file /etc/mcelog.conf "fix:hardware:/etc/mcelog.conf::" "#"
+fi
+
+if [ -x /usr/bin/rad ]
+then
+	# Online adding and replacement (HP-UX).
+	/usr/bin/rad -q 2>/dev/null					|
+	sed	-e '/^[ 	]*$/d'		\
+		-e 's/^/fix:hardware:OLA:overview::/'
+
+	ls -l /usr/sbin/olrad.d 2>/dev/null				|
+	scc_ls								|
+	sed	-e '/^total/d'			\
+		-e 's@^@fix:hardware:OLA:/usr/sbin/olrad.d::@'
+
+	/usr/bin/rad -q 2>/dev/null					|
+	grep "^[0-9].*Yes"						|
+	while read slot remainder
+	do
+		/usr/bin/rad -c ${slot} 2>/dev/null		|
+		sed	-e '/^[ 	]*$/d'		\
+			-e "s/^/fix:hardware:OLA:${slot}::/"
+	done
+fi
+
+scc_check_file /etc/olar.config "fix:hardware:/etc/olar.config::" "-"
+scc_check_file /etc/olar.config.common "fix:hardware:/etc/olar.config.common::" "-"
+
+if [ -x /sbin/lspci ]
+then
+	/sbin/lspci -vv 2>/dev/null			|
+	sed	-e 's/^/fix:hardware:pci-devices lspci::/'	\
+		-e 's/^fix:\(.*Address: \)/var:\1/'		\
+		-e 's/^fix:\(.*: Current \)/var:\1/'		\
+		-e 's/^fix:\(.*Control: \)/var:\1/'		\
+		-e 's/^fix:\(.*DevSta:\)/var:\1/'		\
+		-e 's/^fix:\(.*Latency: \)/var:\1/'		\
+		-e 's/^fix:\(.*LnkSta:\)/var:\1/'		\
+		-e 's/^fix:\(.*[Ss]tatus: \)/var:\1/'		\
+		-e 's/^fix:\(.*Region .* Memory\)/var:\1/'
+else
+	scc_check_file /proc/pci "fix:hardware:pci-devices /proc/pci::" "#"
+fi
+
+if [ -x /usr/sbin/pciconf ]
+then
+	/usr/sbin/pciconf -v -l 2>/dev/null 		|
+	sed -e 's/^/fix:hardware:pciconf::/'
+fi
+
+if [ -x /sbin/lspnp ]
+then
+	/sbin/lspnp -vv 2>/dev/null		|
+	sed -e 's/^/fix:hardware:pnp-devices lspnp::/'
+else
+	scc_check_file /proc/bus/pnp "fix:hardware:pnp-devices /proc/bus/pnp::" "#"
+fi
+
+scc_check_file /etc/power.conf "fix:hardware:power management::/etc/power.conf:	" "#"
+scc_check_file /etc/genpowerd.conf "fix:hardware:power management::/etc/genpowerd.conf:	" "#"
+
+# Powermt is a tool buit-in on PowerPath -- a high availability SAN software from EMC.
+# Suggested by and implemented with the assistance of Eduardo Alvarenga.
+powermt_exe=""
+for dir in /sbin /usr/sbin /etc
+do
+	if [ -x ${dir}/powermt ]
+	then
+		powermt_exe="${dir}/powermt"
+		break
+	fi
+done
+
+if [ -x "${powermt_exe}" ]
+then
+	"${powermt_exe}" check_registration 2>/dev/null	|
+	sed -e 's/^/fix:hardware:powermt:registration::/'
+
+	"${powermt_exe}" display 2>/dev/null	|
+	sed -e 's/^/fix:hardware:powermt:general::/'
+
+	"${powermt_exe}" display 2>/dev/null	|
+	sed -e 's/^/fix:hardware:powermt:options::/'
+
+	# Default format of data:
+	#Pseudo name=hdiskabc123
+	#Symmetrix ID=123456789012
+	#Logical device ID=12AB
+	#state=alive; policy=SymmOpt; priority=0; queued-IOs=0
+	#==============================================================================
+	#---------------- Host ---------------   - Stor -   -- I/O Path -  -- Stats ---
+	####  HW Path                I/O Paths    Interf.   Mode    State  Q-IOs Errors
+	#==============================================================================
+   	#0 fscsi0                    hdisk254  FA  7bA   active  alive      0      0
+   	#1 fscsi1                    hdisk256  FA  9bB   active  alive      0      0
+
+	# Alternative header for Clarion:
+	#CLARiiON ID=123456789012
+	#Logical device ID=12345678901234567890
+	#state=alive; policy=CLAROpt; priority=0; queued-IOs=0
+
+	# Some versions on HP-UX do not contain the Pseudo name line.
+	# In that case we use the Logical device ID for the classification.
+
+	# To avoid changes in the logbook, we erase all data concerning queued IO's.
+
+	"${powermt_exe}" display dev=all 2>/dev/null	|
+	if [ "${OS_NAME}" = "HP-UX" ]
+	then
+		# When Pseudo name line is missing, switch the Symmetrix/CLARiion ID and Logical device ID lines.
+		awk	'/^Pseudo name=/	{ ok="yes" }
+			/^Symmetrix ID|^CLARiiON ID/	{
+							if ( length( ok ) == 0 )
+							{
+								id=$0
+								next
+							}
+						}
+			/^Logical device ID/	{
+							if ( length( ok ) == 0 )
+							{
+								print
+								print id
+								next
+							}
+						}
+						{ print }'
+	else
+		cat
+	fi						|
+	awk	'/^Pseudo name=/	{
+						class=$0
+						sub( ".*=", "", class )
+						next
+					}
+		/^Logical device ID/	{
+						if ( length( class ) == 0 )
+						{
+							class=$0
+							sub( ".*=", "", class )
+						}
+					}
+		/^[ 	]*$/		{
+						class=""
+						next
+					}
+					{
+						print "fix:hardware:powermt:" class "::" $0
+					}'		|
+	sed	-e 's/queued-IOs=.*//'		\
+		-e 's/Q-IOs //'			\
+		-e 's/ [0-9][0-9]*  *\([0-9][0-9]*\)$/ \1/'
+
+fi
+
+####################################################################################################
+# The following code has been developed and contributed by: Erik-Jan Taal (ejtaal at gmail.com)
+# HP Proliant Support Pack for SCC.
+
+psp_base_class="fix:hardware:proliant support pack"
+
+# To remove the following permanently from the collection process,
+# make sure scc-localize exists in /etc/opt/scc/conf, edit it and 
+# change the default setting of variable SCC_IGNORE_ACUCLI.
+ACUCLI="/usr/sbin/hpacucli"
+if [ -x /usr/sbin/hpssacli ]
+then
+	ACUCLI="/usr/sbin/hpssacli"
+fi
+if [ -x "${ACUCLI}" -a "${SCC_IGNORE_ACUCLI:-no}" = "no" ]
+then
+	class="${psp_base_class}:Disk array layout"
+	if ${ACUCLI} ctrl all show 2> /dev/null | grep -q "Another instance of hpacucli is running"
+	then
+		# Do not wait until the other instance closes. Use the data from the previous run.
+		grep "^${class}::" ${SCC_KEEP_CONFIG} 2>/dev/null
+	else
+		HPACU_SLOT=0
+		if ${ACUCLI} ctrl slot=0 show status > /dev/null 2>&1
+		then
+			HPACU_SLOT=0
+		elif ${ACUCLI} ctrl slot=1 show status > /dev/null 2>&1
+		then
+			HPACU_SLOT=1
+		#else
+			# Is this any higher on other server types? I can only test on DL3[68]0
+		fi
+
+		${ACUCLI} ctrl slot=${HPACU_SLOT} show config 2> /dev/null	|
+		sed	-e "/^$/d"		\
+			-e "s/^/${class}:slot ${HPACU_SLOT} general::/"
+		
+		${ACUCLI} ctrl slot=${HPACU_SLOT} show config detail 2> /dev/null	|
+		sed	-e "/^$/d"		\
+			-e "/ Temperature/d"	\
+			-e "/ Hours/d"		\
+			-e "/ days/d"		\
+			-e "/Usage remaining/d"	\
+			-e "s/^/${class}:slot ${HPACU_SLOT} detail::/"
+
+		# Check for MSA external arrays
+		MSASERIAL=$(${ACUCLI} ctrl all show 2> /dev/null | grep ^MSA | head -1 | tr \( , | cut -f 2 -d, | cut -f 2 -d' ')
+		if [ -n "${MSASERIAL}" ]
+		then
+			${ACUCLI} ctrl sn=${MSASERIAL} show config 2> /dev/null		|
+			grep .								|
+			sed	-e "/^$/d"		\
+				-e "s/^/${class}:sn=${MSASERIAL} general::/"
+
+			${ACUCLI} ctrl sn=${MSASERIAL} show config detail 2> /dev/null	|
+			sed	-e "/^$/d"		\
+				-e "s/^/${class}:sn=${MSASERIAL} detail::/"
+		fi
+	fi			|
+	tee -a "${SCC_KEEP_NEW}"
+fi
+
+ASMCLI="/sbin/hpasmcli"
+if [ -x "${ASMCLI}" ]
+then
+	class="${psp_base_class}:hardware"
+	# Server layout
+	${ASMCLI} -s "show server"		|
+	sed	-e "/^$/d"		\
+		-e "s/^/${class}:motherboard::/"
+	
+	# Just for info, make var to avoid changes in % and speed columns
+	${ASMCLI} -s "show fans"			|
+	sed	-e "s/^/${class}:fans::/"	\
+		-e "s/^fix:/var:/"
+		
+	# Maybe not that interesting as unlikely to change unless you go
+	# soldering ;) Strip out the actual temp values as they'll change.
+	${ASMCLI} -s "show temp"			|
+	awk '{ print $1 " " $2 }'			|
+	sed	-e "/^[ 	]*$/d"		\
+		-e "s/^/${class}:temp sensors::/"
+
+	# Memory sticks info
+	${ASMCLI} -s "show dimm"			|
+	sed	-e "/^$/d"			\
+		-e "s/^/${class}:dimms::/"
+fi
+
+HPONCFG="/sbin/hponcfg"
+if [ -x "${HPONCFG}" ]
+then
+	class="${psp_base_class}:iLO"
+	${HPONCFG} -w ${TMP1_FILE} >/dev/null 2>/dev/null
+	if [ $? -eq 0 ]
+	then
+		sed	-e '/<!-- Generated.*\/.*>/d'	\
+			-e "s/^/${class}::/"		\
+				<${TMP1_FILE}
+	fi
+	rm -f ${TMP1_FILE}
+fi
+
+scc_check_file /etc/hprest/hprest.conf "fix:hardware:hprest:/etc/hprest/hprest.conf::" "#"	|
+sed -e '/password/d'
+
+# end of psp software
+####################################################################################################
+
+if [ -x "/usr/platform/$(uname -m 2>/dev/null)/sbin/prtdiag" ]
+then
+	"/usr/platform/$(uname -m 2>/dev/null)/sbin/prtdiag" -v 2>/dev/null		|
+	sed -e 's/^/var:hardware:prtdiag::/'
+fi
+
+if [ -d /etc/sane.d ]
+then
+	for file in /etc/sane.d/*conf
+	do
+		scc_check_file "${file}" "fix:hardware:sane:${file}::" "#"
+	done
+fi
+
+# Remove receive and transmit statistics.
+scc_check_file /proc/tty/driver/serial "fix:hardware:serial hardware::" "#"	|
+sed	-e 's/ [rt]x:[0-9][0-9]*//g'
+
+if [ -x /usr/sbin/cstm ]
+then
+	# When diagmond is not running, cstm will loop. 
+	grep -l diagmond ${PROC_FILE} >/dev/null 2>/dev/null
+	if [ $? -eq 0 ]
+	then
+		# stm often hangs during install. As the stm-data is variable in the snapshot,
+		# it does not matter for the logboook. Skipping stm during installation, will also
+		# speed up the installation. The install-scripts set the variable SCC_IGNORE_STM.
+		# To remove stm permanently from the collection process,
+		# edit scc-localize and change the default setting of this variable.
+		if [ -z "${SCC_IGNORE_STM}" ]
+		then
+			machinfo=""
+			if [ -x /usr/contrib/bin/machinfo ]
+			then
+				machinfo="yes"
+			fi
+
+			(
+				echo "selall"
+				echo "info"
+				echo "wait"
+				echo "infolog"
+				echo "Done"
+				echo "quit"
+				echo "OK"
+			)						|
+			/usr/sbin/cstm 2>/dev/null			|
+			awk 'BEGIN	{ path="intro"	}
+				/^-- Information Tool Log for .* on path .*/	{
+						path=$(NF-1)
+					}
+				/^-- Information Tool Log for each selected device --/	{
+						path="trailer"
+					}
+				/^ *$/	{ next }
+				/System Serial/	{
+						# The System Serial can be retrieved fast by
+						# means of machinfo. When this program is absent, it
+						# is obtained via stm. It should be present under 
+						# class "general".
+						if ( length( m ) == 0 )
+						{
+							printf( "fix:general::System Serial Number:%s\n",
+								$NF ) >>k
+							# The "general" module retrieves this data from
+							# the keep-file. It is available in the next run.
+						}
+					}
+					{
+						print "var:hardware:stm:" path "::" $0
+					}' k="${SCC_KEEP_NEW}" m="${machinfo}"
+
+			[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of stm"
+		fi
+	else
+		echo "fix:hardware:stm:general::messages:stm skipped, diagmond is not running"
+	fi
+else
+	if [ -f /var/tombstones/ts99 ]
+	then
+		tr -d "\015" </var/tomstones/ts99		|
+		sed -e 's/^/var:hardware:last pdcinfo Tombstone::/'
+	fi
+fi
+
+scc_check_file /etc/hotplug/blacklist "fix:hardware:hotplug:blacklist::" "#"
+ls -l /etc/hotplug 2>/dev/null			|
+scc_ls						|
+sed -n -e 's/\(.*agent\)/fix:hardware:hotplug:agents::\1/p'
+
+sc_adm="/usr/platform/$(uname -i 2>/dev/null)/sbin/scadm"
+if [ -x ${sc_adm} ]
+then
+	class="hardware:System Controller"
+
+	${sc_adm} version 2>/dev/null			|
+	sed -e "s/^/fix:${class}::version	: /"
+
+	${sc_adm} show 2>/dev/null			|
+	sed -e "s/^/fix:${class}::parameters	: /"
+
+	${sc_adm} shownetwork 2>/dev/null		|
+	tr -d "\015"					|
+	sed -e "s/^/fix:${class}::network	: /"
+
+	${sc_adm} usershow 2>/dev/null			|
+	sed -e "s/^/fix:${class}::users	: /"
+
+	${sc_adm} loghistory 2>/dev/null		|
+	tr -d "\015"					|
+	sed -e "s/^/var:${class}::loghistory	: /"
+fi
+
+if [ -x /usr/sbin/shconf ]
+then
+	/usr/sbin/shconf -d 				|
+	sed -e 's/^/fix:hardware:shconf::/'
+fi
+
+scc_check_file /etc/smartmontools/smartd.conf "fix:hardware:smartd.conf::" "#"
+
+if [ -x /usr/sbin/sfupdate ]
+then
+	/usr/sbin/sfupdate 2>/dev/null |
+	awk	'BEGIN	{ prefix="var"; }
+		/^$/	{ prefix="var"; ifc=""; }
+			{ printf( "%s:hardware:solarflare::%s %s\n", prefix, ifc, $0 ); }
+		/MAC:/	{ prefix="fix"; ifc=$1; }'
+fi
+
+if [ -x /bin/esxcli ]
+then
+	/bin/esxcli storage core adapter list		|
+	sed -e 's/^/fix:hardware:storage adapter::/'
+fi
+
+# Linux dynamic device naming support
+for file in	/etc/udev/udev.conf		\
+		/etc/udev/permissions.d/*	\
+		/etc/udev/rules.d/*
+do
+	scc_check_file "${file}" "fix:hardware:udev:${file}::" "#"
+done
+
+if [ -x /sbin/lsusb ]
+then
+	# On CentOS 5 this produces too much variable data. Tag all output as variable data.
+	/sbin/lsusb -vv 2>/dev/null 			|
+	sed -e "s/^/var:hardware:usb::/"
+fi
+
+if [ -x /bin/listusb ]
+then
+	/bin/listusb -v 2>/dev/null			|
+	sed -e "s/^/fix:hardware:usb::/"
+fi
+
+if [ -x /usr/sbin/usbdevs ]
+then
+	/usr/sbin/usbdevs -v 2>/dev/null 		|
+	sed -e "s/^/fix:hardware:usb::/"
+fi
+
+if [ -x /usr/sbin/virtinfo ]
+then
+	/usr/sbin/virtinfo -a 2>/dev/null	|
+	sed -e 's/^/fix:hardware:virtinfo::/'
+fi
+
+if [ -x /usr/sbin/lsvpd ]
+then
+	/usr/sbin/lsvpd					|
+	sed -e 's/^/fix:hardware:vital product data::/'
+fi
+# Linux on IBM hardware:
+if [ -x /usr/sbin/vpddecode ]
+then
+	/usr/sbin/vpddecode 2>/dev/null			|
+	sed -e 's/^/fix:hardware:vital product data::/'
+fi
+
+if [ -x /usr/bin/wacdump ]
+then
+	/usr/bin/wacdump  --list 2>/dev/null	|
+	sort -f -k 2,2 -k 3,3 -k 1,1		|
+	sed -e 's/^/fix:hardware:Waco wacdump::/'
+fi
+
+if [ -x /usr/sbin/zoneadm ]
+then
+	/usr/sbin/zoneadm list -cv 2>/dev/null		|
+	sed -e 's/^/var:hardware:zoneadm:status::/'
+
+	/usr/sbin/zoneadm list -c 2>/dev/null		|
+	grep -v "^global$"				|
+	sort						|
+	while read zone
+	do
+		/usr/sbin/zonecfg -z "${zone}" export 2>/dev/null	|
+		sed -e "s${sed_sep}^${sed_sep}var:hardware:zonecfg:${zone}::${sed_sep}"
+	done
+fi
+
+exit 0

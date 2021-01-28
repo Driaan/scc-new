@@ -1,0 +1,1354 @@
+#!/bin/sh
+
+# Shell script to collect data concerning software (patch) and package management.
+# Derived from the default software module from scc.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# This is a system module of scc, to call it separately in the
+# proper environment, use: scc-collect -i -e <module_name>
+
+# SCC-release: 1.26.73
+# ID:          $Id: scc_0630_s_pkgmngt 6293 2019-11-17 15:33:41Z siemkorteweg $
+ 
+set -u
+[ "${SCC_DEBUG:-}" ] && set -x
+
+export ProgName=${0##*/}
+
+if [ -z "${SCC_BIN:-}" -o -z "${SCC_CONF:-}" -o -z "${SCC_DATA:-}" ]
+then
+	echo "${ProgName}: activate this program via scc(1), scc-log(1) or scc-collect(1)" >&2
+	exit 2
+fi
+
+if [ ! -w ${SCC_DATA} ]
+then
+	echo "${ProgName}: insufficient permissions to write in data directory: ${SCC_DATA}" >&2
+	exit 2
+fi
+
+. ${SCC_BIN}/scc_modules/scc_utils
+
+if [ -d /var/4MLinux ]
+then
+	ls /var/4MLinux  2>/dev/null		|
+	sed -n	-e 's/.tar.xz$//'	\
+		-e 's/^addon_/fix:software:installed 4mlinux addons::/p'
+fi
+
+if [ -x /sbin/apk ]
+then
+	# Alpine Package Keeper.
+	/sbin/apk info -vv 2>/dev/null			|
+	sed	-e '/WARNING/d'		\
+		-e 's/ - /:/'		\
+		-e 's/-\([0-9]\)/:\1/'	\
+		-e 's/^/fix:software:installed apk::/'	|
+	sort
+fi
+
+scc_check_file --xml /data/system/packages.xml "fix:software:android packages::" ""
+
+if [ -d /etc/conary ]
+then
+	scc_check_file /etc/conary/macros "fix:software:conary:/etc/conary/macros::" "#"
+
+	for dir in arch config.d distro/use groupinfo site tags use userinfo
+	do
+		for file in /etc/conary/"${dir}"/*
+		do
+			scc_check_file "${file}" "fix:software:conary:${dir}:${file}::" "#"
+		done
+	done
+fi
+
+if [ -x /usr/bin/conary ]
+then
+	/usr/bin/conary config					|
+	sed -e 's/^/fix:software:conary:config::/'
+
+	conary query --full-versions --flavors 2>/dev/null	|
+	sed -e 's/^/fix:software:conary:installed packages::/'
+fi
+
+for file in /etc/dnf/*.conf /etc/dnf/plugins/*.conf /etc/dnf/protected.d/*.conf
+do
+	scc_check_file "${file}" "fix:software:dnf:${file}::" "#"
+done
+
+if [ -x /usr/bin/equo ]
+then
+	/usr/bin/equo --info --nocolor 2>/dev/null		|
+	awk	'/EntropyRepository instance/	{ next }
+		/ \[[u]*'\''/	{
+				# Replace all (long) lists by lines with: <label> <list-element>
+				label = $0
+				sub( " \\[.*", "", label )
+				sub( ".* \\[", "" )
+				sub( "]$", "" )
+				gsub( ",", "" )
+				gsub( "[u]*'\''", "" )
+				gsub( "'\''", "" )
+				for ( i = 1; i <= NF; i++ )
+				{
+					printf( "%s %s\n", label, $i )
+				}
+				next
+			}
+			{ print }'			|
+	sed -e 's/^/fix:software:equo:info::/'
+
+	# Format of example data is:
+	#^M>>   #6071 [4] x11-themes/xcursor-themes-1.0.1
+	# On Sabayon 5.3, the output does not contain the ^M.
+	/usr/bin/equo query list installed --verbose --nocolor 2>/dev/null	|
+	tr -d "\015"								|
+	sed -n -e 's/^>> *# *[0-9]* \[.*] *//p'					|
+	sed	-e 's@/@::@'				\
+		-e 's/^/fix:software:equo:installed packages:/'
+
+	#^M>>  @@ Package Set Search...
+	#^M>>   #1 entropy_world
+	#^M>>     app-admin/entropy-notification-applet
+	# On Sabayon 5.3, the output does not contain the ^M.
+	/usr/bin/equo query sets --nocolor 2>/dev/null		|
+	tr -d "\015"						|
+	sed -n -e 's/^>>  //p'					|
+	awk	'/^ #/	{ label = $2; next; }
+		/^ /	{
+				sub( "^ *", "" )
+				printf( "fix:software:equo set:%s::%s\n", label, $0 )
+				next
+			}' 
+fi
+
+if [ -x /usr/bin/snap ]
+then
+	/usr/bin/snap list 2>/dev/null		|
+	sed -e 's/^/fix:software:installed-snaps::/'
+fi
+
+if [ -x /usr/sbin/swlist ]
+then
+	# Record the bundles and the products not contained in a bundle.
+	# Products are also recorded through their filesets, record them here as var data.
+	/usr/sbin/swlist 2>/dev/null							|
+	awk	'/^# Bundle/	{ p = "fix"; show = 1 }
+		/^# Product/	{ p = "var" }
+		/^#$/		{ next }
+		/^$/		{ next }
+				{
+					if ( show )
+					{
+						print p ":software:installed software::" $0; 
+					}
+				}'
+
+	# Show the fileset, ignore the header.
+	/usr/sbin/swlist -l fileset -x one_liner="name revision title" 2>/dev/null	|
+	sed -e '1,/^$/d'								|
+	sed -e 's/^/fix:software:installed-filesets::/'
+
+	swlist -l fileset -a state 2>/dev/null		|
+	sed	-e '/configured[ 	]*$/d'	\
+		-e '/transient[ 	]*$/d'	\
+		-e '/^#/d'			\
+		-e '/^[ 	]*$/d'		\
+		-e 's/^/fix:software:patches:unconfigured::/'
+
+fi
+
+if [ "${SCC_LINUX_DISTRO}" = "Igelle DSV" ]
+then
+	ls /apps/ 2>/dev/null			|
+	sed	-e 's/\.sjapp$//'	\
+		-e 's/_\([^_]*\)$/:\1/'	\
+		-e 's/^/fix:software:installed Igelle apps::/'
+fi
+
+nixos_option="$(which nixos-option 2>/dev/null)"
+if  [ -x "${nixos_option}" ]
+then
+	nixos-option environment.systemPackages				|
+	head -n 2							|
+	sed -n -e 's/^. *//' -e 's/ *.$//' -e 's/"//g' -e 's/ /\n/gp'	|
+	cut -d- -f2-							|
+	sort -u								|
+	sed -e 's/^/fix:software:installed nixos packages::/'
+fi
+
+nix_channel="$(which nix-channel 2>/dev/null)"
+if [ -x "${nix_channel}" ]
+then
+	nix-channel --list 2>&1				|
+	sed -e 's/^/fix:software:nixos channels::/'
+fi
+
+if [ -x /usr/bin/npm ]
+then
+	/usr/bin/npm list 2>/dev/null	|
+	strings				|
+	sort				|
+	sed -e 's/^/fix:software:npm:installed javascript packages::/'
+
+	rm -f ./npm-debug.log
+fi
+for file in /etc/npmrc /etc/npmignore /etc/npmrc
+do
+	scc_check_file "${file}" "fix:software:npm:${file}::" "#"
+done
+
+if [ -x /usr/sbin/instfix ]
+then
+	# AIX
+	instfix -i -c		|
+	awk -F: '{
+			#IY58143:devices.pci.00100f00.rte:5.3.0.1:5.3.0.10:+:Required fixes for AIX 5.3
+			if ( $5 == "+" )
+			{
+				if ( ignore[ $1 ] == 0 )
+				{
+					printf( "fix:software:instfix:superseded::%s	%s\n", $1, $NF )
+					ignore[ $1 ] = 1
+				}
+				next
+			}
+			if ( $5 == "!" )
+			{
+				if ( ignore[ $1 ] == 0 )
+				{
+					printf( "fix:software:instfix:not installed::%s	%s\n", $1, $NF )
+					ignore[ $1 ] = 1
+				}
+				next
+			}
+			if ( $5 == "-" )
+			{
+				printf( "fix:software:instfix:down level::%s	%-30s	%-12s	%-12s	%s\n",
+					$1, $2, $3, $4, $NF )
+				next
+			}
+			if ( $5 == "=" )
+			{
+				printf( "fix:software:instfix:correct level::%s	%-30s	%-12s	%s\n",
+					$1, $2, $3, $NF )
+				next
+			}
+		}'			|
+	sort
+fi
+
+if [ -x /usr/bin/pkg ]
+then
+	/usr/bin/pkg list 2>/dev/null	|
+	sed -e 's/^/fix:software:ips installed packages::/'
+fi
+
+if [ -x /usr/sbin/emgr ]
+then
+	/usr/sbin/emgr -l 2>&1		|
+	sed -e 's/^/fix:software:interim fixes::/'
+fi
+
+# Registrate the version of scc installed from source.
+# This will only work with a release from scc-srv more recent than 1.3.25 
+if [ "${SCC_INSTALL_PHASE}" = "postinstall" ]
+then
+	# The following variable is only set to "source" when scc is installed from source.
+	if [ "${SCC_INSTALL_METHOD}" = "source" ]
+	then
+		# add to snapshot and new-keep
+		echo "fix:software:installed-source::scc:${SCC_RELEASE}"	|
+		tee -a ${SCC_KEEP_NEW}
+	else
+		# do nothing; source install indication is not copied into ${SCC_KEEP_NEW}
+		:
+	fi
+else
+	if [ "${SCC_INSTALL_PHASE}" != "preinstall" -o "${SCC_INSTALL_METHOD}" = "source" ]
+	then
+		# Copy from keep-file to snapshot and to new-keep.
+		# When scc is not installed from source, this will not produce any data.
+		grep "^fix:software:installed-source::scc:" ${SCC_KEEP_CONFIG} 2>/dev/null	|
+		tee -a ${SCC_KEEP_NEW}
+	fi
+fi
+
+if [ -x /usr/bin/lslpp ]
+then
+	scc_keep_fileset_config="fix:software:installed-aix-filesets"
+
+	# When this module is called during the pre- and post-install
+	# of SCC, the rpm-database is locked and cannot be queried.
+	# AIX lists installed rpms also as native filesets. Store all filesets
+	# in the keep-file and use the data from this file during installs.
+	if [ ! "${SCC_INSTALL_PHASE}" -o "${SCC_INSTALL_METHOD}" = "source" ]
+	then
+		/usr/bin/lslpp -a -c -L 2>/dev/null			|
+		sed -e "s/^/${scc_keep_fileset_config}::/"
+	fi >${TMP1_FILE}
+
+	if [ -s ${TMP1_FILE} ]
+	then
+		# Use the output from lslpp.
+		cat ${TMP1_FILE}
+	else
+		# Use the output from a previous run of SCC. 
+		grep "${scc_keep_fileset_config}::" ${SCC_KEEP_CONFIG} 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			# No output from rpm and nothing found in the data we kept.
+			echo "var:software:installed-aix-filesets::message	: No filesets are shown for first run of scc during install."
+		fi
+	fi					|
+	tee -a ${SCC_KEEP_NEW}		# keep the results for a next run.
+	rm -f ${TMP1_FILE}
+fi
+
+if [ -x /usr/sbin/kpkg ]
+then
+	# The script version of kpkg cleans up by doing: rm -rf $TMP
+	# Unfortunately we have set $TMP to $SCC_TMP.
+	# To avoid removing our temporary directory, we run kpkg with env -i in an empty environment.
+
+	# Example output of kpkg is:
+	#Package found (installed): traceroute
+	# * serie:     networking
+	# * version:   1.4a12
+	# * arch:      i686
+	# * build:     1
+	# * author:
+	# * extension: tar.lzma
+	# * mirror:    europa.fapyd.unr.edu.ar
+	#
+	env -i /usr/sbin/kpkg search /all 2>>/dev/null		|
+	awk	'/Package found .installed/	{ pkg = $NF; show = 1; next}
+		/Package found/			{ show = 0; next}
+		/ serie: /			{ sub( ".* serie:[ 	]*", "" ); serie = $0; next; }
+		/ version: /			{ version = $NF; next; }
+		/ arch: /			{ arch = $NF; next }
+		/ build: /			{
+							if ( show == 0 )
+							{
+								next
+							}
+							build = $NF
+							printf( "%s:%s::%s:%s-%s:%s\n",
+								"fix:software:installed kwort packages",
+								serie,
+								pkg,
+								version,
+								build,
+								arch )
+						}'				|
+	sort -f
+fi
+
+if [ -x /bin/lcmtool ]
+then
+	if [ -x /bin/get_default_repository ]
+	then
+		/bin/get_default_repository 2>/dev/null		|
+		sed -e 's/^/fix:software:lcmtool default repo::/'
+	fi
+
+	if [ -d /mnt/linuxconsole ]
+	then
+		ls /mnt/linuxconsole/		|
+		sed -n -e 's@^@fix:software:installed lcm packages::@p'
+	fi
+fi
+
+if [ -x /bin/mine ]
+then
+	/bin/mine -q 2>/dev/null			|
+	sort						|
+	sed	-e 's/ /:/'		\
+		-e 's/^/fix:software:installed mine packages::/'
+fi
+
+installpkg="$(which installpkg 2>/dev/null)"
+if [ -d /var/log/packages -a -x "${installpkg}" ]
+then
+	(
+		cd /var/log/packages
+
+		# Ignore any sub-directories.
+		ls -F					|
+		grep -v "/$"				|
+		xargs awk '/PACKAGE NAME/       {
+							if ( show )
+							{
+								printf( "\n" )
+								show = 0
+							}
+							printf( "fix:software:installed Slackware packages::%s:", $3 )
+							next
+						}
+			/PACKAGE DESCRIPTION/   { show = 1; next }      # Description is on next line
+						{
+							if ( show )
+							{
+								sub( "[^:]*:[ ]*", "" )
+								print
+								show = 0
+							}
+						}
+			END	{
+					if ( show )
+					{
+						printf( "\n" )
+					}
+				}'
+	)
+fi
+
+if [ -x /bin/lvu ]
+then
+	# Output: <name>:<install_date>:installed:<version>:<size>
+	/bin/lvu installed 2>/dev/null		|
+	sort -f					|
+	awk -F: '{ printf( "fix:software:lunar modules::%s:%s\n", $1, $4 ) }'
+fi
+
+MOONBASE=/var/lib/lunar/moonbase
+if [ ! -d "${MOONBASE}" -a -f /etc/lunar/config ]
+then
+	MOONBASE="$( sed -n 's/.*MOONBASE=//p' /etc/lunar/config)"
+fi
+
+for file in	"${MOONBASE}/aliases"	\
+		/etc/lunar/config	\
+		/etc/lunar/local/*	\
+		/etc/lunar/mirrors/*
+do
+	scc_check_file "${file}" "fix:software:lunar:${file}::" "#"
+done
+
+if [ -d /Programs -a "${SCC_LINUX_DISTRO}" = "GoboLinux" ]
+then
+	(
+		cd /Programs
+		for program in *
+		do
+			if [ -h "${program}/Current" ]                  
+			then
+				ls -ld "${program}/Current"	|
+				sed -e "s@.*Current[ 	]*->[ 	]*@${program}:@"
+			else
+				for version in "${program}"/[0-9]*
+				do
+					echo "${version}"	|
+					sed -e 's@/@:@'
+				done
+			fi
+		done				|
+		sed -e 's/^/fix:software:installed GoboLinux packages::/'
+	)
+fi
+
+if [ -x /usr/bin/pkginfo ]
+then
+	if [ "${SCC_LINUX_DISTRO}" = "CRUX" -o "${SCC_LINUX_DISTRO}" = "nutyx" ]
+	then
+		# This distro uses the -i option to list its own type of packages.
+		# Output consists of name and version pairs, separated by a space.
+		/usr/bin/pkginfo -i		|
+		sed	-e 's/ /:/'	\
+			-e 's/^/fix:software:installed CRUX packages::/'
+
+		scc_check_file /etc/pkgmk.conf "fix:software:CRUX packages:/etc/pkgmk.conf::" "#"
+		scc_check_file /etc/pkgadd.conf "fix:software:CRUX packages:/etc/pkgadd.conf::" "#"
+
+		for file in /etc/prt-get.conf /etc/ports/*
+		do
+			scc_check_file "${file}" "fix:software:CRUX ports:${file}::" "#"
+		done
+
+		ports -d			|
+		sed -e 's/^/var:software:CRUX ports:differences::/'
+	elif [ "${SCC_LINUX_DISTRO}" != "vector" ] 
+	then
+		# VectorLinux contains /usr/bin/pkginfo, but uses Slackware packages.
+
+		# Wes Brown pointed out:
+		# - NAME and VERSION can contain ":" and spaces.
+		# - some patches do not update the version of a product, only the PSTAMP.
+		/usr/bin/pkginfo -l 2>/dev/null			|
+		awk	'/PKGINST:/	{ pkg = $2; next; }
+			/NAME:/		{ $1 = ""; gsub( ":", ";" ); name = $0; next; }
+			/CATEGORY:/	{ $1 = ""; gsub( ":", ";" ); cat = $0; next; }
+			/VERSION:/	{ $1 = ""; gsub( ":", ";" ); ver = $0; next; }
+			/PSTAMP:/	{ $1 = ""; gsub( ":", ";" ); stamp = $0; next; }
+			/STATUS:/	{
+						printf( "fix:software:installed-packages:%s::%s:%s:%s:%s\n",
+							cat, pkg, name, ver, stamp )
+						pkg = ""
+						name = ""
+						cat = ""
+						ver = ""
+						stamp = ""
+						next
+					}'			|
+		sed -e 's/:[ 	][ 	]*/:/g'			|
+		sort -f -t":" -k 1,8
+	fi
+fi
+
+if [ -x /usr/bin/pkg ]
+then
+	/usr/bin/pkg property 2>/dev/null	|
+	sed -e "s/^/fix:software:IPS:property::/"
+
+	/usr/bin/pkg publisher 2>/dev/null	|
+	sed -e "s/^/fix:software:IPS:publisher::/"
+fi
+
+scc_check_file /etc/installurl "fix:software:OpenBSD:/etc/installurl::" "#"
+if [ -x /usr/sbin/syspatch ]
+then
+	ls /var/syspatch 2>/dev/null			|
+	sed -e 's/^/fix:software:OpenBSD:syspatch::/'
+fi
+
+scc_check_file /etc/slapt-get/slapt-getrc "fix:software:Slackware:/etc/slapt-get/slapt-getrc::" "#"
+
+if [ -x /usr/sbin/setld ]
+then
+	# Installed software for TRU64
+	/usr/sbin/setld -i 2>/dev/null			|
+	sed -e 's/^/fix:software:installed-subsets::/'
+fi
+
+if [ -x /usr/bin/dpkg ]
+then
+	/usr/bin/dpkg -l 2>/dev/null			|
+	sed -e 's/^/fix:software:installed Debian packages::/'
+fi
+scc_check_file /etc/apt/sources.list "fix:software:/etc/apt/sources.list::" "#"
+scc_check_file /etc/apt/apt.conf "fix:software:/etc/apt/apt.conf::" "#"
+for file in /etc/apt/apt.conf.d/*
+do
+	scc_check_file "${file}" "fix:software:${file}::" "#"
+done
+for file in /etc/dpkg/*.cfg
+do
+	scc_check_file "${file}" "fix:software:${file}::" "#"
+done
+
+if [ -x /usr/bin/apt-config ]
+then
+	/usr/bin/apt-config dump 2>/dev/null		|
+	sed -e 's/^/fix:software:apt-config dump::/'
+fi 
+
+if [ -x /usr/bin/tasksel ]
+then
+	/usr/bin/tasksel --list-tasks	|
+	sort -k 2			|
+	sed -e 's/^/fix:software:tasksel:survey::/'
+
+	# Do not (anymore) retrieve the details of all packages.
+	# On an Ubuntu 15.04 server this contained some 20K lines (40% of the snapshot)
+	# without much added value.
+fi
+
+if [ "${SCC_LINUX_DISTRO}" = "dragora" ]
+then
+	if [ -d /var/db/pkg ]
+	then
+		# List files and ignore files without digits ("description", "postinstall").
+		ls /var/db/pkg				|
+		grep "[0-9]"				|
+		sed	-e 's/-\([0-9]\)/:\1/'					\
+			-e 's/^/fix:software:installed dragora packages::/'
+	fi
+fi
+
+emerge="$(which emerge 2>/dev/null)"
+if [ -d /var/db/pkg -a -x "${emerge}" ]
+then
+	find /var/db/pkg/* -mindepth 2 -maxdepth 2 2>/dev/null	|
+	cut -d"/" -f5-6						|
+	sort -u							|
+	sed	-e 's@/@::@'		\
+		-e 's/^/fix:software:installed Gentoo packages:/'
+fi
+
+if [ -x /usr/bin/emerge ]
+then
+	/usr/bin/emerge --pretend --emptytree --nocolor --tree world 2>/dev/null	|
+	sed	-e '/Calculating world dependencies/d'		\
+		-e "s/^/fix:software:Gentoo portage:software::/"
+fi
+
+if [ -x /usr/bin/layman ]
+then
+	/usr/bin/layman --list --nocolor 2>/dev/null		|
+	sed -e 's/^/fix:software:Gentoo repositories::/'
+fi
+
+scc_check_file /etc/dispatch-conf.conf 	"fix:software:Gentoo portage:/etc/dispatch-conf.conf::"	"#"
+scc_check_file /etc/etc-update.conf	"fix:software:Gentoo portage:/etc/etc-update.conf::"	"#"
+scc_check_file /etc/make.conf		"fix:software:Gentoo portage:/etc/make.conf::"		"#"
+scc_check_file /etc/portage/make.conf	"fix:software:Gentoo portage:/etc/portage/make.conf::"	"#"
+scc_check_file /etc/make.globals	"fix:software:Gentoo portage:/etc/make.globals::"	"#"
+
+if [ -x /usr/sbin/pkg_version ]
+then
+	# Check whether packages are uptodate compared with ports. FreeBSD only.
+	/usr/sbin/pkg_version -v 2>/dev/null		|
+	sed -e 's/^/var:software:ports::/'
+fi
+
+if [ -x /usr/sbin/pkg_info -o -x /usr/pkg/sbin/pkg_info ]
+then
+	scc_keep_pkginfo_config="fix:software:installed-BSD-packages::"
+
+	# When this program is called during the pre- and post-install
+	# of SCC, the pkg-database is locked and cannot be queried.
+	# On OpenBSD, pkg_info "hangs" during install. Ignore pkg_info during installs of SCC.
+	if [ ! "${SCC_INSTALL_PHASE}" -o "${SCC_INSTALL_METHOD}" = "source" ]
+	then
+		if [ -x /usr/sbin/pkg_info ]
+		then
+			/usr/sbin/pkg_info 2>/dev/null
+		else
+			/usr/pkg/sbin/pkg_info 2>/dev/null
+		fi						|
+		sed -e "s/^/${scc_keep_pkginfo_config}/"
+	fi >${TMP1_FILE}
+
+	if [ -s ${TMP1_FILE} ]
+	then
+		# Use the output from pkg_info.
+		cat ${TMP1_FILE}
+	else
+		# Use the output from a previous run of SCC. 
+		grep "${scc_keep_pkginfo_config}" ${SCC_KEEP_CONFIG} 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			# No output from pkg_info and nothing found in the data we kept.
+			echo "var:software:installed-BSD-packages:message::No packages are shown for first run of scc during install."
+		fi
+	fi					|
+	tee -a ${SCC_KEEP_NEW}		# keep the results for a next run.
+	rm -f ${TMP1_FILE}
+	# The use of pkg_info is a permanent attribute of a system. Do not count the
+	# use of this data in the keep-file.
+
+	# Recording the software versions of the base system of OpenBSD can be done
+	# by recording the RCS idents of all seperate files. Suggested by Marco Hyman.
+	echo "hlp:software:BSD base::The base system of the BSD systems is not installed via package management software."
+	echo "hlp:software:BSD base::Therefore the list of installed software is limited and we record the idents of the software in /sbin /bin /usr/sbin and /usr/bin."
+	for dir in /sbin /bin /usr/sbin /usr/bin
+	do
+		# Format of the ident output is:
+		#/dir/prog1:
+		#     <ident1>
+		#     ...
+		#     <identn>
+		#
+		#/dir/prog1:
+		#     <ident1>
+		#     ...
+		#     <identn>
+		#
+		# Look for idents containing /main.c,v or /<program>.c,v to identify the programs.
+		# The other lines correspond to object modules, register them under "other" instead of the direcory.
+
+		if [ -d "${dir}" ]
+		then
+			ident "${dir}"/* 2>/dev/null            |
+			awk	'/^[^ 	]/	{
+							if ( main_entry == 0 )
+							{
+								if ( length( prev_line ) )
+								{
+									print l dir "::" prog prev_line
+									prev_line = ""
+								}
+							}
+							main_entry = 0
+							dir = $0
+							sub( "/[^/]*:", "", dir )
+							prog = $0
+							sub( ":$", "", prog )
+							sub( ".*/", "", prog )
+							next
+						}
+				/^$/		{ next }
+						{
+							if ( main_entry == 0 )
+							{
+								if ( length( prev_line ) )
+								{
+									print l "other" "::" prev_line
+								}
+								# Look for ".*/main.c,v " or for ".*/<prog>.c,v "
+								if ( $2 ~ ".*/main.c,v$" )
+								{
+									print l dir "::" prog $0
+									main_entry = 1
+								}
+								else
+								{
+									# Avoid that /bin/[ leads to an error in awk:
+									prog_pat = prog
+									sub( "[[]", "\\[", prog_pat )
+									pat = sprintf( ".*/%s.c,v$", prog_pat )
+									if ( $2 ~ pat )
+									{
+										print l dir "::" prog $0
+										main_entry = 1
+									}
+									else
+									{
+										prev_line = $0
+									}
+								}
+							}
+							else
+							{
+								print l "other" "::" prev_line
+							}
+							next
+						}
+				END	{
+						if ( main_entry == 0 )
+						{
+							if ( length( prev_line ) )
+							{
+								print l dir "::" prog prev_line
+							}
+						}
+						else
+						{
+							print l "other" "::" prev_line
+						}
+					}' l="fix:software:BSD base:"
+		fi
+	done			|			# for dir in /sbin /bin /usr/sbin /usr/bin
+	sort -u
+fi							# if [ -x /usr/sbin/pkg_info -o -x /usr/pkg/sbin/pkg_info ]
+
+for pkg_file in /usr/local/etc/pkg.conf /usr/local/etc/pkgtools.conf /usr/local/etc/pkg/repos/*.conf
+do
+	scc_check_file ${pkg_file} "fix:software:BSD pkg config:${pkg_file}::" "#"
+done
+
+# FreeBSD and DragonFlyBSD
+for pkg in /usr/local/sbin/pkg /usr/sbin/pkg
+do
+	if [ -x "${pkg}" ]
+	then
+		# name:version:offset(group):architecture:repo:comment
+		${pkg} query "%n:%v:%o:%q:%R:%c" 2>/dev/null		|
+		sed -e "s/^/fix:software:installed BSD packages::/"
+	fi
+	break
+done
+
+if [ -x /usr/bin/tazpkg ]
+then
+	# Remove the escape sequences from the output.
+	/usr/bin/tazpkg list 2>/dev/null		|
+	sed	-e '/^[0-9]/d'	\
+		-e 's/.\[[^ ]* / /g'			|
+	awk	'{ 
+			if ( NF == 3 )
+			{
+				printf( "fix:software:slitaz packages:%s::%s:%s\n", $3, $1, $2 )
+			}
+		}'
+fi
+
+scc_check_file /var/lib/tazpkg/mirror		"fix:software:tazpkg:/var/lib/tazpkg/mirror::" "#"
+scc_check_file /var/lib/tazpkg/mirrors		"fix:software:tazpkg:/var/lib/tazpkg/mirrors::" "#"
+scc_check_file /etc/tazlito/tazlito.conf	"fix:software:tazpkg:/etc/tazlito/tazlito.conf::" "#"
+
+if [ -x /usr/bin/pisi ]
+then
+	# When listing installed software, the version of a package is not displayed (only the name).
+	# To obtain the version, we have to use the info command for the supplied name.
+	# To know what data to catch from the info option, we look for a line 
+	# with 4 (comma separated) fields: name, version, edition and build
+	# Use the first package to determine the label of this line with 4 fields.
+	# pisi does not handle head in a pipe well, use a temporary file.
+	# Keep the data as pisi li takes quite some time.
+	/usr/bin/pisi li				|
+	sed	-e 's/^[ 	]*//'	\
+		-e 's/ - .*//' >${TMP1_FILE}
+	first_package="$(head -n 1 ${TMP1_FILE})"
+
+	# Determine name label, example data:
+	#Name: scc, version: 1, release: 8, build 9
+	#Naam: scc, versie: 1, uitgave: 8, bouw 9
+	label="$(/usr/bin/pisi info ${first_package}	|
+		awk -F, '{ if ( NF == 4 ) print $1 }'	|
+		sed -e 's/ .*//'			|
+		head -n 1)"
+
+	# Get the info of all packages.
+	xargs pisi info <${TMP1_FILE}		|
+	awk '/^'"${label} "'/	{
+					# Example data:
+					#Name: knazar, version: 0.2, release: 6, build 2
+					#Summary: An application to protect your computer from evil eyes (harmful looks)
+					sub( ",", "", $2 ) 		# Get the package name
+					if ( ! visited[ $2 ] )
+					{
+						sub( ",", "", $4 ) 
+						sub( ",", "", $6 ) 
+						printf( "%s::%s:%s.%s.%s:",
+							"fix:software:installed pisi packages", $2, $4, $6, $8 )
+						visited[ $2 ] = 1;	# avoid double entry in snapshot
+						getline;		# goto summary on next line
+						$1="";			# erase label
+						sub( "^ ", "" )
+						print
+						next
+					}
+				}'		|
+	sort -f
+
+	rm -f ${TMP1_FILE}
+
+	/usr/bin/pisi list-repo 2>/dev/null			|
+	sed -e 's/^/fix:software:pisi repositories::/'
+fi
+
+if [ "${SCC_LINUX_DISTRO}" = "PuppyLinux" ]
+then
+	if [ -d /root/.packages ]
+	then
+		(
+			cd /root/.packages
+			for file in DISTRO_*_REPOS *-installed-packages
+			do
+				scc_check_file "${file}" "fix:software:installed Puppy:${file}::" "#"
+			done
+		)
+	fi
+
+	scc_check_file /root/.packages/buildvariables "fix:software:installed Puppy buildvariables::" "#"
+fi
+
+scc_check_file /etc/pacman.conf "fix:software:pacman:/etc/pacman.conf::" "#"
+scc_check_file /etc/makepkg.conf "fix:software:pacman:/etc/makepkg.conf::" "#"
+
+for config in /etc/pacman.d/*
+do
+	scc_check_file "${config}" "fix:software:pacman:${config}::" "#"
+done
+
+if [ -x /usr/bin/pacman-g2 ]
+then
+	for repo in /etc/pacman-g2/repos/*
+	do
+		scc_check_file "${repo}" "fix:software:pacman:${repo}::" "#"
+	done
+
+	/usr/bin/pacman-g2 -Q 2>/dev/null		|
+	sed -e 's/^/fix:software:pacman packages::/'
+elif [ -x /usr/bin/pacman ]
+then
+	if [ "${SCC_LINUX_DISTRO}" = "ttylinux" ]
+	then
+		scc_check_file /etc/ttylinux-repo "fix:software:pacman:/etc/ttylinux-repo::" "#"
+
+		# ttylinux display the date and time of the install.
+		# When the install is long ago, the time is no longer displayed. Remove date/time to avoid changes.
+		/usr/bin/pacman -qa 2>/dev/null					|
+		sed	-e 's/ .*//'					\
+			-e 's/^/fix:software:pacman packages::/'
+	else
+		# avoid starting the game pacman (on 4MLinux for instance)
+		if [ -f /etc/pacman.conf ]
+		then
+			/usr/bin/pacman -Q 2>/dev/null		|
+			sed -e 's/^/fix:software:pacman packages::/'
+		fi
+	fi
+fi
+
+if [ -x /usr/local/bin/pakfire ]
+then
+	/usr/local/bin/pakfire list --no-colors 2>/dev/null	|
+	awk	'/^Name/	{ name = $2; next }
+		/^ProgVersion/	{ version = $2; next }
+		/^Release/	{
+					sub( "[^0-9.].*", "", $2 );	# Remove trailing escape sequence (despite --no-colors)
+					printf( "fix:software:installed ipfire addons::%s:%s.%s\n", name, version, $2 )
+					next
+				}'
+fi
+
+busybox_check rpm
+busybox_rpm=$?
+rpm_exe="/bin/rpm"
+if [ -x /usr/bin/rpm ]
+then
+	rpm_exe="/usr/bin/rpm"
+fi
+if [ ${busybox_rpm} -eq 0 -a -x ${rpm_exe} ]
+then
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: start of rpm"
+
+	scc_keep_rpm_config="fix:software:installed-rpms"
+
+	# When this program is called during the pre- and post-install
+	# of SCC, the rpm-database is locked and cannot be queried.
+	# On Mandrake, rpm "hangs" during install. Ignore rpm during installs of SCC.
+	# When specific output from rpm is added to the snapshot, scc-log has to be extended
+	# to avoid changes on the second run of scc on a system.
+	if [ ! "${SCC_INSTALL_PHASE}" -o "${SCC_INSTALL_METHOD}" = "source" ]
+	then
+		${rpm_exe} -qa --queryformat "${scc_keep_rpm_config}:%{GROUP}::%{NAME}:%{VERSION}-%{RELEASE}:%{ARCH}\n" 2>/dev/null	|
+		awk -F: '{ if ( NF > 5 ) print }'											|
+		sort -t: -k 1,7
+	fi >${TMP1_FILE}
+
+	# During installs, rpm is able to reply to the --showrc option
+	${rpm_exe} --showrc 2>/dev/null		|
+	sed	-e '/^=====/,$d'	\
+		-e "s/^/fix:software:rpm:showrc::/"
+
+	if [ -s ${TMP1_FILE} ]
+	then
+		# Use the output from RPM.
+		cat ${TMP1_FILE}
+	else
+		# Use the output from a previous run of SCC. 
+		grep "${scc_keep_rpm_config}:" ${SCC_KEEP_CONFIG} 2>/dev/null
+		if [ $? -ne 0 ]
+		then
+			# No output from rpm and nothing found in the data we kept.
+			echo "var:software:installed-rpms:message::No rpms are shown for first run of scc during install."
+		fi
+	fi					|
+	tee -a ${SCC_KEEP_NEW}		# keep the results for a next run.
+	rm -f ${TMP1_FILE}
+	# The use of rpm is a permanent attribute of a system. Do not count the
+	# use of this data in the keep-file.
+
+	for file in /etc/pki/rpm-gpg/*
+	do
+		scc_check_file "${file}" "fix:software:rpm:gpg:${file}::" "#"
+	done
+
+	for file in /etc/rpm/* /usr/lib/rpm/*macros*
+	do
+		scc_check_file "${file}" "fix:software:rpm:macro:${file}::" "#"
+	done
+
+	if [ ! "${SCC_INSTALL_PHASE}" -o "${SCC_INSTALL_METHOD}" = "source" ]
+	then
+		rpm -q gpg-pubkey 2>/dev/null			|
+		grep -v "is not installed"			|
+		sort						|
+		while read key
+		do
+			# Mark date lines as variable to reduce differences when comparing systems on scc-srv.
+			rpm -qi "${key}" 2>/dev/null						|
+			sed	-e "s/^/fix:software:rpm:imported keys:${key}::/"	\
+				-e "s/^fix\(.* Date: \)/var\1/" 
+		done
+	fi >${TMP1_FILE}
+
+	if [ -s ${TMP1_FILE} ]
+	then
+		# Use the output from RPM.
+		cat ${TMP1_FILE}
+	else
+		# Use the output from a previous run of SCC. 
+		grep "fix:software:rpm:imported keys:" ${SCC_KEEP_CONFIG} 2>/dev/null
+	fi					|
+	tee -a ${SCC_KEEP_NEW}		# keep the results for a next run.
+	rm -f ${TMP1_FILE}
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of rpm"
+fi
+
+if [ -x /usr/bin/smart ]
+then
+	# Smart package manager: config includes channels.
+	# Ignore the history of the mirrors to avoid changes in the logbook and replace fix in var for some variable data.
+	/usr/bin/smart config --show 2>/dev/null		|
+	sed	-e '/mirrors-history/,$d'		\
+		-e '/^New channel/d'			\
+		-e '/^Include it/d'			\
+		-e 's/^/fix:software:smart:config::/'		|
+	sed	-e 's/^fix:\(.*last-update\)/var:\1/'	\
+		-e "s/^fix:\(.*config:: 'gtk-.*\)/var:\1/"
+fi
+
+scc_check_file /etc/ipkg.conf "fix:software:ipkg:/etc/ipkg.conf::" "#"
+
+if [ -x /usr/bin/showrev ]
+then
+	# Limit the length of the output (for kernel patches for instance)
+	/usr/bin/showrev -p				|
+	cut -c1-2000					|
+	sort -nr					|
+	sed -e 's/^/fix:software:patches:showrev::/'
+fi
+
+if [ -x /usr/contrib/bin/show_patches ]
+then
+	/usr/contrib/bin/show_patches -s		|
+	sed -e 's/^/fix:software:patches:superseded::/'
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of superseded patches"
+fi
+
+if [ -x /usr/contrib/bin/check_patches ]
+then
+	/usr/contrib/bin/check_patches -i >/dev/null 2>&1
+	if [ -f /tmp/check_patches.report ]
+	then
+		sed	-e '1,/^$/d'	\
+			-e 's/^/fix:software:patches:invalid::/' </tmp/check_patches.report 2>/dev/null
+	fi
+
+	/usr/contrib/bin/check_patches -s >/dev/null 2>&1
+	if [ -f /tmp/check_patches.report ]
+	then
+		sed	-e '1,/^$/d'	\
+			-e 's/^/fix:software:patches:non-configured::/' </tmp/check_patches.report 2>/dev/null
+	fi
+
+	rm -f /tmp/check_patches.report
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of invalid patches"
+fi
+
+if [ -x /usr/sbin/dupatch ]
+then
+	/usr/sbin/dupatch -track -nolog -type kit 2>/dev/null	|
+	sed	-e '1,/-------/d'		\
+		-e '/^[ 	]*NOTE/,$d'	\
+		-e '/^[ 	]*$/d'		\
+		-e 's/^/fix:software:patch-kit::/'
+
+	# Ignore up to the header and then the next 3 lines.
+	/usr/sbin/dupatch -track -nolog -type patch 2>/dev/null	|
+	sed	-e '1,/Patches installed on the system:/d'	|
+	sed	-e '1,3d'		\
+		-e '/^[ 	]*$/d'	\
+		-e 's/^ - //'		\
+		-e 's/^/fix:software:installed-patches::/'
+fi
+
+if [ -x /usr/bin/pip ]
+then
+	/usr/bin/pip list 2>/dev/null	|
+	sed -e 's/^/fix:software:pip::/'
+fi
+
+scc_check_file /etc/sysconfig/rhn/rhn-applet	"fix:software:RHN:/etc/sysconfig/rhn/rhn-applet::"	"#"
+scc_check_file /etc/sysconfig/rhn/rhnsd		"fix:software:RHN:/etc/sysconfig/rhn/rhnsd::"		"#"
+scc_check_file /etc/sysconfig/rhn/sources	"fix:software:RHN:/etc/sysconfig/rhn/sources::"		"#"
+scc_check_file /etc/sysconfig/rhn/systemid	"fix:software:RHN:/etc/sysconfig/rhn/systemid::"	"#"
+scc_check_file /etc/sysconfig/rhn/up2date	"fix:software:RHN:/etc/sysconfig/rhn/up2date::"		"#"	|
+sed -e 's/\(proxyPassword=\).*/\1ERASED/'
+scc_check_file /etc/sysconfig/rhn/up2date-uuid	"fix:software:RHN:/etc/sysconfig/rhn/up2date-uuid::"	"#"
+if [ -x /usr/sbin/rhn-channel ]
+then
+	# Avoid changes in the logbook for a single failure of the rhn-channel command.
+	class="fix:software:RHN:channels::"
+	/usr/sbin/rhn-channel --list 2>/dev/null >${TMP1_FILE}
+	if [ $? -ne 0 ]
+	then
+		grep "^${class}" ${SCC_KEEP_CONFIG} 2>/dev/null
+	else
+		sed -e "s/^/${class}/" <${TMP1_FILE}	|
+		tee -a ${SCC_KEEP_NEW}
+	fi
+	rm -f ${TMP1_FILE}
+fi
+
+if [ -x /usr/sbin/subscription-manager ]
+then
+	/usr/sbin/subscription-manager list --consumed  2>${TMP1_FILE}	|
+	sed	-n			\
+		-e "/^Subscription/p"	\
+		-e '/^SKU/p'		\
+		-e "/^Serial/p"		\
+		-e "/Contract/p"	\
+		-e "/^Available/p"	\
+		-e "/^Ends/p"		\
+		-e "/^Status/p"		\
+		-e "/^System/p"		\
+		-e "/Pool/p"		\
+		-e "/Active/p"		\
+		-e "/Quantity/p"					|
+	sed -e 's/^/fix:software:subscription:consumed::/'
+
+	/usr/sbin/subscription-manager identity 2>&1			|
+	sed -e 's/^/fix:software:subscription:identity::/'
+
+	/usr/sbin/subscription-manager status 2>&1			|
+	awk '/^Overall/ { print "fix:software:subscription:status::" $0 }'
+
+	if [ -s ${TMP1_FILE} ]
+	then
+		sed -e 's/^/fix:software:subscription:error::/'
+	fi
+	rm -f ${TMP1_FILE}
+fi
+
+if [ -x /usr/sbin/swlist ]
+then
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: start of SD-UX"
+
+	scc_check_file /var/adm/sw/defaults "fix:software:SD-UX:defaults::" "#"
+
+	swacl -l host 2>/dev/null			|
+	sed	-e '1,/^$/d'		\
+		-e "s@^@fix:software:SD-UX:swacl-host::@"
+
+	swacl -l root 2>/dev/null			|
+	sed	-e '1,/^$/d'		\
+		-e "s@^@fix:software:SD-UX:swacl-root::@"
+
+	swacl -l global_soc_template 2>/dev/null			|
+	sed	-e '1,/^$/d'		\
+		-e "s@^@fix:software:SD-UX:swacl-global_soc_template::@"
+
+	swlist -l depot 2>/dev/null	|
+	sort				|
+	sed	-e '/^#/d'	\
+		-e 's/^ *//'	\
+		-e '/^ *$/d'		|
+	while read depot remainder
+	do
+		if [ -d "${depot}" -o -f "${depot}" ]
+		then
+			[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: start of depot ${depot}"
+
+			# File depots do not have ACL's
+			if [ ! -f "${depot}" ]
+			then
+				swacl -l depot @ "${depot}" 2>&1		|
+				sed	-e '1,/^$/d'		\
+					-e "s@^@fix:software:SD-UX:${depot}:swacl::@"
+			fi
+
+			# Get attributes of depots, we are not interested in all attributes.
+			# Those containing '_' seem interesting enough.
+			swlist -d -v -l depot @ "${depot}" 2>/dev/null  |
+			awk     '				{ prefix="fix" }
+				/_date/				{ prefix="var" }
+				/_time/				{ next }
+				/^[^    ]*_[^ 	]*[ 	]/	{ print prefix ":" c "::" $0; next }'	\
+					c="software:SD-UX:${depot}:attributes"
+
+			# Get some attributes of bundles and products.
+			for level in bundle product
+			do
+				swlist -d -v -l ${level} @ "${depot}" 2>/dev/null	|
+				awk	'/^software_spec/	{
+									split( $2, parts, "," )
+									l = sprintf( "%s:%s,%s",
+										p, parts[ 1 ], parts[ 2 ] )
+									if ( NF > 1 )
+									{
+										print l "::" $0
+									}
+									next
+								}
+					/^control_directory/	{ if ( NF > 1 ) print l "::" $0; next; }
+					/^machine_type/		{ if ( NF > 1 ) print l "::" $0; next; }
+					/^os_/			{ if ( NF > 1 ) print l "::" $0; next; }
+					/^is_/			{ if ( NF > 1 ) print l "::" $0; next; }' \
+						p="fix:software:SD-UX:${depot}:${level}"
+			done	# for level in bundle product
+		else
+			# swlist -l depot reports this depot, but there is no directory or file.
+			# When the depot is removed, it should be unregisterd by: swreg -l depot -u <depot>
+			echo "fix:messages::SD-UX:depot ${depot} not found"
+		fi	# if [ -d "${depot}" -o -f "${depot}" ]
+	done	# while read depot
+
+	swmodify -V 2>/dev/null				|
+	sed	-e '/^[ 	]*$/d'	\
+		-e 's/^/fix:software:SD-UX:data model revisions::/'
+
+	[ ${SCC_PROFILING} ] && scc_timing "${SCC_MODULE}: end of SD-UX"
+fi	# if [ -x /usr/sbin/swlist ]
+
+if [ "${SCC_LINUX_DISTRO}" = "tinycore" ]
+then
+	mount						|
+	sed	-n				\
+		-e "s@.* on /tmp/tcloop/@@p"		|
+	sort						|
+	sed	-e 's/ .*//'	\
+		-e 's/^/fix:software:installed tinycore tcz::/'
+fi
+
+if [ -x /bin/esxcli ]
+then
+	class="fix:software:installed vsphere vib"
+
+	echo "${class}::Name,Version,Vendor,AcceptanceLevel"
+
+	/bin/esxcli	--formatter=csv							\
+			--format-param=fields="Name,Version,Vendor,AcceptanceLevel"	\
+			software vib list 2>/dev/null							|
+	sed	-e "/^Name,/d"								\
+		-e 's/^/fix:software:installed vsphere vib::/'						|
+	sort -f
+fi
+
+if [ -x /usr/sbin/up2date-config ]
+then
+	/usr/sbin/up2date-config </dev/null 2>/dev/null		|
+	sed -n -e 's/^[0-9][0-9]*\. */fix:software:up2date-config::/p'
+fi
+
+for file in /etc/update-manager/meta-release /etc/update-manager/release-upgrades /etc/update-manager/release-upgrades.d/*
+do
+	scc_check_file "${file}" "fix:software:update manager:${file}::" "#"
+done
+
+scc_check_file /etc/upkg.conf "fix:software:upkg:/etc/upkg.conf::" "#"
+
+if [ -x /usr/bin/upkg-list ]
+then
+	/usr/bin/upkg-list 2>/dev/null		|
+	sort -f					|
+	sed -n -e 's/^- */fix:software:upkg:installed packages::/p'
+fi
+
+if [ -x /usr/bin/xbps-query ]
+then
+	/usr/bin/xbps-query -L 2>&1			|
+	sed -e 's/^/fix:software:xbps repos::/'
+
+	/usr/bin/xbps-query -l 2>&1			|
+	sed -e 's/^/fix:software:xbps packages::/'
+fi
+
+scc_check_file /var/lib/YaST2/you/config "fix:software:YaST:config::" "#"	|
+sed -e 's/^fix:\(.*\)::LastUpdate/var:\1::LastUpdate/'
+
+scc_check_file /var/lib/YaST2/you/youservers "var:software:YaST:/var/lib/YaST2/you/youservers::" "#"
+scc_check_file /etc/youservers "var:software:YaST:/etc/youservers::" "#"
+
+scc_check_file /etc/yum.conf "fix:software:yum:/etc/yum.conf::" "#"	|
+sed -e 's#\(proxy.*://.*:\).*\(@.\)#\1ERASED\2#'
+for repo in /etc/yum.repos.d/*
+do
+	ini=""
+	case "${repo}" in
+	*.repo)	ini="--ini";;
+	esac
+	scc_check_file ${ini} "${repo}" "fix:software:yum:${repo}::" "#"
+done
+
+for file in /etc/yum/* /etc/yum/*/*
+do
+	scc_check_file "${file}" "fix:software:yum:${file}::" "#"
+done
+# The following yum data is identical to the output of rhn-channel --list
+if [ -x /usr/bin/yum -a ! -x /usr/sbin/rhn-channel ]
+then
+	echo "hlp:software:yum:repolist::The repositories the system currently is subscribed to."
+	echo "hlp:software:yum:repolist::This can differ from the used repositories (fix:software:yum:used channel)"
+	echo "hlp:software:yum:repolist::when a system is no longer subscribed to a repository that was used to install software."
+
+	# Installing scc with yum from a repository locks yum (indicated by Dimitri Ars).
+	if [ -z "${SCC_INSTALL_PHASE}" -o "${SCC_INSTALL_METHOD}" = "source" ]
+	then
+		/usr/bin/yum repolist 2>/dev/null	|
+		sed	-e '0,/^repo id/d'	\
+			-e '/repolist/,$d'	\
+			 -e 's/^!//'		\
+			 -e 's/^*//'			|
+		awk '{ print "fix:software:yum:repolist::" $1 }'  
+	fi >${TMP1_FILE}
+
+	# Without results from the above command, re-use the results from a previous run.
+	if [ ! -s ${TMP1_FILE} ]
+	then
+		grep "fix:software:yum:repolist::" ${SCC_KEEP_CONFIG} 2>/dev/null
+	else
+		cat ${TMP1_FILE}
+	fi	|
+	tee -a ${SCC_KEEP_NEW}
+
+	rm -f ${TMP1_FILE}
+fi
+
+if [ -x /usr/bin/yum ]
+then
+	echo "hlp:software:yum:used channel::The repositories that were used to install software on the system."
+	echo "hlp:software:yum:used channel::This can differ from the current list of repositories (fix:software:yum:repolist)"
+	echo "hlp:software:yum:used channel::when a system is no longer subscribed to a repository that was used to install software."
+
+	if [ -z "${SCC_INSTALL_PHASE}" -o "${SCC_INSTALL_METHOD}" = "source" ]
+	then
+		/usr/bin/yum list installed 2>/dev/null			|
+		sed	-n -e '/@\//d'	\
+			-e 's/.*@/fix:software:yum:used channel::/p'	|
+		sort -u
+	fi >${TMP1_FILE}
+
+	# Without results from the above command, re-use the results from a previous run.
+	if [ ! -s ${TMP1_FILE} ]
+	then
+		# Only one of the following grep will return data
+
+		# TODO: obsolete following code after next release
+		grep "fix:software:yum:channel in use::" ${SCC_KEEP_CONFIG} 2>/dev/null		|
+		sed -e 's/:channel in use::/:used channel::/'
+
+		grep "fix:software:yum:used channel::" ${SCC_KEEP_CONFIG} 2>/dev/null
+	else
+		cat ${TMP1_FILE}
+	fi	|
+	tee -a ${SCC_KEEP_NEW}
+
+	rm -f ${TMP1_FILE}
+fi
+
+if [ -d /var/lib/YaST2/you/installed ]
+then
+	# Updated software is registered in the following directory.
+	ls /var/lib/YaST2/you/installed 2>/dev/null		|
+	sed -e 's/\(.*\)-\([^-]*\)$/\2 \1/'			|
+	sort -k 1n						|
+	sed -e 's/^/fix:software:YaST:installed::/'
+fi
+
+scc_check_file /etc/netpkg.conf "fix:software:zenwalk:/etc/netpkg.conf::" "#"
+
+if [ -x /usr/bin/zypper ]
+then
+	/usr/bin/zypper ls --details 2>/dev/null		|
+	sed -e 's/^/fix:software:zypper:services::/'
+fi
+
+exit 0

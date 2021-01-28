@@ -1,0 +1,127 @@
+#!/bin/sh
+
+# Generate AIX package to install scc-srv by means of installp.
+# Copyright (C) 2010-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: installp-gen-scc-srv 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install				pre/post install scripts
+#	software/opt/scc-srv		bin, doc and man
+#	software/var/opt/scc-srv	conf, data and newconfig
+#
+# After using this program, the directory contains one file:
+#
+#	scc-srv-1.19.44.1.bff
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+ProgName=installp-gen-scc-srv
+
+# Check for id 0 (run as root)
+if [ "$(id -u)" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+if [ ! -x /usr/sbin/mkinstallp ]
+then
+	echo "${ProgName}: cannot access /usr/sbin/mkinstallp (install from bos.adt.insttools)" >&2
+	exit 2
+fi
+
+VERSION=${1:-1.19.44}
+
+# The directory software will be our buildroot and is already in the correct layout
+
+# The order of the installp scripts is:
+# - install
+#   - pre-install
+#   - post-install
+#   - config
+# - upgrade
+#   - pre-remove (of previous version)
+#   - pre-install (previous version of software not present anymore)
+#   - post-install
+#   - config
+# - remove
+#   - unconfig
+#   - unpre-install
+
+# We will only use the post-install.
+
+# Keywords for scripts:
+# Pre-installation Script: /path/script
+# Unpre-installation Script: /path/script
+# Post-installation Script: /path/script
+# Pre_rm Script: /path/script
+# Configuration Script: /path/script
+# Unconfiguration Script: /path/script
+
+# Create the template file:
+# Version of the package: use ${VERSION} and add .1
+cat >scc-srv.tmplt <<_X_
+Package Name: scc-srv
+Package VRMF: ${VERSION}.1
+Update: N
+Fileset
+  Fileset Name: scc-srv.rte
+  Fileset VRMF: ${VERSION}.1
+  Fileset Description: System Configuration Collector Server
+  USRLIBLPPFiles
+    Unpre-installation Script: $(pwd)/install/preremove
+    Post-installation Script: $(pwd)/install/postinstall
+  EOUSRLIBLPPFiles
+  Bosboot required: N
+  License agreement acceptance required: N
+  Name of license agreement:
+  Include license files in this package: N
+  License file path:
+  Requisites:
+  USRFiles
+$(find software/opt/scc-srv | sed -e 's@^software@    @')
+$(find software/var/opt/scc-srv | sed -e 's@^software@    @')
+  EOUSRFiles
+  ROOT Part: N
+  ROOTFiles
+  EOROOTFiles
+  Relocatable: N
+EOFileset
+_X_
+
+mkdir -p software/tmp
+
+chown -R root:sys software
+
+/usr/sbin/mkinstallp -d $(pwd)/software -T scc-srv.tmplt
+
+mv software/tmp/scc-srv*bff .
+
+# Remove all (except the installp package)
+ls			|
+grep -v scc-srv.*bff	|
+xargs rm -rf
+
+exit 0

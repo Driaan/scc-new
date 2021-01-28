@@ -1,0 +1,252 @@
+.TH scc-transfer 1 "SCC-SRV" 
+.nf
+
+
+.SH  NAME
+.nf
+
+	scc-transfer - move SCC-files from transfer-area to website
+
+.SH  RELEASE
+.nf
+
+	scc-srv	1.19.44
+
+.SH  SYNOPSIS
+.nf
+
+	scc-transfer [ -m|--minimal ] [ -u|--unpacked <host> ] [ -e|--encrypted ]
+	             [ -l|--log <log> ] [ -s|--source <src_dir> ] [ <dest_dir> ]
+
+.SH  DESCRIPTION
+.nf
+
+	Snapshots and log files are sent to scc server by the client
+	software of SCC. The client software stores the files in a 
+	transfer-area on the scc server. This program determines the new 
+	ownership/permissions of the files in the realm All. Then the files
+	are moved to this realm. The mode and the owner/group are derived from
+	the destination directory.
+
+	Snapshots (and logfiles) can be large. When they are copied across the 
+	network, it is possible that the server notices a partially copied file
+	and attempts to uncompress an incomplete file what results in a message 
+	about a corrupt file. To avoid this, the client copies an empty .signal
+	file before it starts copying the scc-data. When the client is done with
+	copying the scc-data, the signal file is copied again, this time with 
+	contents "done". This program checks for non-empty signal files to 
+	determine what scc-data it can move.
+
+	This program is primarily intended to be used by scc-update. The exit-status
+	of this program indicates to scc-update whether or not new SCC data has
+	been transferred to realm and summaries should be (re)generated.
+
+	The -u option is intended to transfer unpacked SCC files. The related -m
+	option can be used for automatic realm assignment when the name of systems
+	in a realm is used to retrieve all data from a proxy server behind a firewall.
+
+.SH  OPTIONS
+.nf
+
+	-m|--minimal            Requires -u option to transfer/generate minimal
+	                        placeholder file for <host>. Existing data files
+	                        are not replaced with minimal data.
+	                        Snapshot contains hostname and domain (from <host>).
+	-u|--unpacked <host>    transfers unpacked SCC files from <host>:
+	                            scc.<host>.cur, scc.<host>.html,
+	                            scc.<host>.log, scc.<host>.log.html
+	-e|--encrypted          All mail-transfers should be encrypted
+	                        to make a DOS attack slightly more difficult
+	-l|--log <log>          the file for log-messages; default log file is
+	                        /var/opt/scc-srv/data/log/scc-transfer.log
+	                        logging is only enabled when this file exists
+	-s|--source <src_dir>   Source directory for the transfer, default
+	                        directory is: /var/opt/scc-srv/data/transfer
+	                        SCC data should be in subdirectory 'cp' or 'mail'
+	                        unless the -u option is used.
+
+.SH  ARGUMENTS
+.nf
+
+	<dest_dir>      absolute path of the destination directory for the
+	                received files, make sure that this directory has
+	                the proper permissions when accessed by the
+	                web-server.
+	                Default directory is: /var/opt/scc-srv/data/www/All
+
+.SH  DIAGNOSTICS
+.nf
+
+	The program issues the following messages to the stderr:
+
+	Syntax error, use: scc-transfer [ -m|--minimal ] [ -u|--unpacked <host> ]
+	        [ -e|--encrypted ] [ -l|--log <log> ] [ -s|--source <src_dir> ] [ <dest_dir> ]
+	A syntax error has been detected and reported.
+
+	scc-transfer: Syntax error, missing argument for option: <option>
+	The argument for <option> is missing.
+
+	scc-transfer: missing source-directory: <dir>
+	scc-transfer: missing destination-directory <dir>
+	Directory <dir> cannot be accessed. 
+
+	scc-transfer: missing data for host: <host>
+	The signal-file for rcp/scp is present, the data-file is absent.
+
+	scc-transfer: uudecode not found
+	The program uses uudecode to decode SCC-data sent via email. On
+	RedHat, it is part of shar-utils. It should be installed when 
+	SCC-data is sent via email.
+
+	scc-transfer: openssl not found
+	scc-transfer: uncompress/gunzip not found
+	These programs are required to unpack the SCC-data.
+	When it is absent, edit the file /var/opt/scc-srv/conf/scc.conf
+	and alter the contents of the variable SCC_PATH. When you upgraded
+	from a version of scc-srv prior to 1.4.12, you have to inspect the file
+	in the newconfig directory.
+
+	scc-transfer: missing data for id: <id>
+	The signal-file for mail/smtp is present, the data-file is absent.
+
+	scc-transfer: missing <transfer> in email: <id> from <sender>
+	The uuencoded mail-file does not contain <transfer>, refer to the
+	manual page of scc.
+
+	scc-transfer: unexpected data from host: <host>:<contents>,
+	        expected:<expected>.
+	The tar-file for <host> does not contain the expected snapshots,
+	log files and html-files. The data is preserved in
+	        /var/opt/scc-srv/data/transfer/error/scc_host.tar
+	When multiple hosts send unexpected data, only the data of the last
+	host is preserved.
+
+	scc-transfer: unexpected data from <sender>:<contents>, 
+	        expected:<expected>.
+	The tar-file for encrypted email does not contain the expected files.
+	Processing continues after saving the data in
+	        /var/opt/scc-srv/data/transfer/error/scc-transfer.e.tar
+	When multiple hosts send unexpected data, only the data of the last
+	host is preserved.
+
+	scc-transfer: received empty snapshot and log file from <system>
+	On <system> scc was used with the -t option to test the transfer.
+	The files for <system> already on the server are not replaced.
+
+	scc-transfer: key-file <key> not found
+	To decrypt SCC-data sent via email, a private key is used. This
+	key should be configured in /var/opt/scc-srv/conf/scc.conf using
+	the keyword: SCC_PRIV_HOST_KEY. When this option is configured, the
+	file has to exist, even when data is emailed in plain-text.
+
+	scc-transfer: saved snapshot and log file for <host> at <date>
+	The new log file for <host> did not contain the date/time of the
+	current snapshot. An old recovery after a crash can be the cause
+	of this. The current snapshot and log file are saved by 
+	appending <date> to the names. These files can be used to check
+	for a full recovery.
+
+	scc-transfer: non-encrypted mail transfer from <sender>
+	When the -e option is used, all mail transfers should have been
+	encrypted. The data is removed.
+
+	scc-transfer: cannot access scc-cmp in <path>
+	When a client sends the data of a virtual host for remote comparison
+	to the scc-srv, scc-cmp and scc-log2html have to be used. Make sure 
+	the proper version of scc is installed on the system in one of the 
+	directories in <path>.
+
+	Syntax error, use scc-transfer: scc_msg <sev> <msg>
+	scc-transfer: scc_msg: unknown severity: <sev>
+	Internal coding errors have been detected.
+
+	scc-transfer: missing directories cp and mail in <source>
+	The transfer of SCC data to the server is done by by file transfer 
+	or by email. Subdirectories cp and mail indicate how data was sent 
+	and how it should be processed.
+
+	scc-transfer: -m option requires -u option
+	Use the -u option when using the -m option.
+
+	The messages are sent to stderr and to the log file, when it exists.
+	In the log file, the messages are prefixed with the string "ERROR"
+	and the current date and time.
+
+	The following message is only recorded in the log file (when it
+	exists):
+	INFO scc-transfer: received data from <host>
+	Data has been received and accepted from <host>.
+
+.SH  RETURN VALUE
+.nf
+
+	Syntax errors are indicated by exit status 2, runtime errors
+	through exit status 1. All errors are reported on stderr.
+	Exit status 0 indicates successful completion, without any
+	transfer of SCC-files. Exit status 3 indicates successful transfer
+	of data
+
+.SH  EXAMPLES
+.nf
+
+	To take a daily snapshot and transfer the files to mysrv, use a 
+	cronjob like:
+
+	   0 23 * * * /opt/scc/bin/scc scc-transfer@mysrv.mydom
+
+	This runs scc daily and transfers the files to mysrv. On this 
+	system the alias file should contain a line like:
+
+	   scc-transfer: "|/opt/scc-srv/bin/scc-receive-mail "
+
+	Note that scc-receive-mail is run through postfix/sendmail, and 
+	does not run as root. On a HP-UX/sendmail system, the program is 
+	launched as daemon/other. Use the appropriate permissions for the 
+	directories and scc-receive-mail. Use scc-srv(5) for a detailed
+	description of the setup of a scc-server.
+
+	To reduce the likelihood of DOS-attacks, you should use a non-obvious 
+	email-alias and not the alias from this documentation.
+
+	To transfer the mailed files and generate summaries, use the cronjob:
+
+	   0 * * * * /opt/scc-srv/bin/scc-update
+
+.SH  EXTERNAL INFLUENCES
+.nf
+
+	Using context diff for the scc client on the scc-srv host, implies this
+	mechanismn also for all hosts without a local diff.
+
+.SH  COPYRIGHT
+.nf
+
+	scc-transfer is free software under the terms of the GNU General Public 
+	License. Copyright (C) 2001-2004 Open Challenge B.V.,
+	2004-2005 OpenEyeT Professional Services, 2005-2018 QNH, 2019 Siem Korteweg.
+
+.SH  FILES
+.nf
+
+	/var/opt/scc-srv/conf/scc.conf - configuration file
+	/var/opt/scc-srv/data/transfer - default directory to receive files
+		cp - subdirectory used for: rcp and scp
+		mail - subdirectory used for: mail and smtp
+		error - subdirectory used for erroneous scc-data
+	/var/opt/scc-srv/data/log/scc-transfer.log - default log file
+	/var/opt/scc-srv/data/www/All - default realm for scc-files
+	/var/opt/scc-srv/tmp - directory for temporary files
+
+.SH  SEE ALSO
+.nf
+
+	scc-baseline(1), scc-changes(1), scc-debug(1), scc-pull(1), scc-realm(1),
+	scc-receive-mail(1), scc-rules(1), scc-setup(1), scc-smt(1), scc-summary(1),
+	scc-syscmp(1), scc-transfer(1), scc-update(1), scc-wrapper.cgi(1), scc.cgi(1),
+	scc-srv(5)
+
+.SH  VERSION
+.nf
+
+	$Revision: 6217 $
+

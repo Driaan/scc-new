@@ -1,0 +1,147 @@
+#!/bin/sh
+
+# Generate Solaris package to install scc by means of pkgadd.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.26.73
+# ID:          $Id: sunos-gen-scc 6216 2019-03-21 20:47:50Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install			pre/post install scripts
+#	software/opt/scc	bin, doc and man
+#	software/etc/opt/scc	conf and newconfig
+#	software/var/opt/scc	data
+#
+# After using this program, the directory contains one file:
+#
+#	scc-1.26.73.sunos.pkg
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+exe="$(which pkgproto 2>/dev/null)"
+if [ ! -x "${exe}" ]
+then
+	echo "${ProgName}: cannot find pkgproto" >&2
+	exit 2
+fi
+
+uid=$(id | sed -e 's/(.*//' -e 's/.*=//')
+if [ "${uid}" != "0" ]
+then
+	echo "${ProgName}: only root should run this program" >&2
+	exit 2
+fi
+
+chown -R root:root software
+
+VERSION=${1:-1.26.73}
+
+cat >pkginfo <<_EOF_
+PKG="scc"
+VERSION="${VERSION}"
+NAME="System Configuration Collector"
+CATEGORY="application"
+CLASSES="none"
+ARCH="noarch"
+VENDOR="(C) Siem Korteweg"
+_EOF_
+
+for f in *
+do
+	if [ -f "${f}" ]
+	then
+		echo "${f}"
+	fi
+done >file_list
+
+PKG=scc-${VERSION}.sunos.pkg;	export PKG
+
+# The shell /bin/sh on Solaris systems does not provide the functionality we need.
+# Replace /bin/sh with /bin/ksh for all scripts in the package.
+find install software -type f            |
+while read f
+do
+	hdr=$(head -n 1 ${f})
+	if [ "${hdr}" = "#!/bin/sh" ]
+	then
+		cat <<-_X_	| ed -s ${f} 2>/dev/null | sed -e '/^?$/d'
+			1,$ s@^#!/bin/sh@#!/bin/ksh@
+			w
+			q
+		_X_
+
+	fi
+done
+
+mkdir spool
+
+(
+	cat <<-_X_
+		i pkginfo
+		i preinstall=install/preinstall
+		i postinstall=install/postinstall
+		i postremove=install/postremove
+	_X_
+
+	# Do not alter permissions for default directories like /opt, /etc, /var, /etc/opt and /var/opt.
+	# Ignore /opt/scc, /etc/opt/scc and /var/opt/scc to allow symbolic links for these directories.
+	# Do not bother for these directories in case of "relocation"
+	pkgproto	software/opt/scc=/opt/scc		\
+			software/etc/opt/scc=/etc/opt/scc	\
+			software/var/opt/scc=/var/opt/scc		|
+	sed	-e '/^d.*\/opt /d'				\
+		-e '/^d.*\/etc /d'				\
+		-e '/^d.*\/var /d'				\
+		-e '/^d.*\/scc /d'				\
+		-e 's/ 0600 / 0500 /g'				\
+		-e 's/root other/root sys/g'
+) >sunos-scc.pkg
+
+pkgmk	-o				\
+	-d ./spool			\
+	-f sunos-scc.pkg		\
+	-p sunos58`date '+%Y%m%d%H%M'`	\
+	-v ${VERSION}
+
+pkgtrans -n ./spool ${PKG} scc
+
+mv spool/${PKG} .
+chmod 444 ${PKG}
+
+rm -rf install software spool sunos-scc.pkg $(cat file_list)
+
+exit 0

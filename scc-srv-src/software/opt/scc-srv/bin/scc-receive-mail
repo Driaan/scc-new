@@ -1,0 +1,74 @@
+#!/bin/sh
+
+# Shell script to receive configuration data for SCC.
+# Copyright (C) 2001-2004 Open Challenge B.V.
+# Copyright (C) 2004-2005 OpenEyeT Professional Services.
+# Copyright (C) 2005-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: scc-receive-mail 6217 2019-03-22 18:46:12Z siemkorteweg $
+ 
+ 
+ProgName=${0##*/};			export ProgName
+
+set -u
+
+export SCC_BIN=/opt/scc-srv/bin
+export SCC_CONF=/var/opt/scc-srv/conf
+export SCC_DATA=/var/opt/scc-srv/data
+export SCC_TMP=/tmp
+
+export TMPDIR=${SCC_TMP}
+export TMP=${SCC_TMP}
+
+export SHELL=/bin/sh
+export LANG=C
+
+umask 077
+
+# Make sure that an active selinux allows writing in the destination directory:
+# chcon -R system_u:object_r:mail_spool_t:s0 <dir>
+
+dest=${SCC_DATA}/transfer/mail
+if [ $# -eq 1 ]
+then
+	dest="${1}"
+fi
+
+exec >${dest}/${ProgName}.log
+exec 2>&1
+
+if [ ! -d "${dest}" ]
+then
+	echo "${ProgName}: missing destination directory"
+	exit 0
+fi
+
+id=$$
+while [ -f "${dest}"/file_${id} ]
+do
+	id=$(( id + 1 ))
+done
+
+cat >"${dest}"/file_${id}
+cat </dev/null >"${dest}"/done_${id}
+
+exit 0

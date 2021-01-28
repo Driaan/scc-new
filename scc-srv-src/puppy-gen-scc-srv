@@ -1,0 +1,82 @@
+#!/bin/sh
+
+# Generate pet-file to install scc by means of petget.
+# Copyright (C) 2007-2018 QNH.
+# Copyright (C) 2019 Siem Korteweg.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING.
+# If not, write to the Free Software Foundation,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+#
+# Contact information: https://sourceforge.net/projects/sysconfcollect/support
+
+# SCC-release: 1.19.44
+# ID:          $Id: puppy-gen-scc-srv 6217 2019-03-22 18:46:12Z siemkorteweg $
+
+# This program requires to be called in a directory with the following hierarchy:
+#
+#	install				pre/post install scripts
+#	software/opt/scc-srv		bin, doc and man
+#	software/var/opt/scc-srv	conf, data and newconfig
+#
+# After using this program, the directory contains one file:
+#
+#	scc-srv-<release>.pet
+#
+# Provide an alternative version as first argument.
+# Be aware of the limitations in the format of the version.
+
+TESTING="testing"
+x="$(echo "${TESTING}" 2>/dev/null)"
+if [ "${x}" != "${TESTING}" ]
+then
+	exec /bin/ksh ${0} "$@"
+
+	echo "${0}: cannot find ksh" >&2
+	exit 2
+fi
+
+ProgName=${0##*/};			export ProgName
+
+VERSION=${1:-1.19.44}
+
+ls | grep -v file-list >file-list
+
+mkdir scc-srv-${VERSION}
+mv software/* scc-srv-${VERSION}
+
+cp -p install/postinstall scc-srv-${VERSION}/pinstall.sh
+
+# No preremove, take the essential code from preremove:
+cat >scc-srv-${VERSION}/puninstall.sh <<_X_
+#!/bin/sh
+rm -rf /opt/scc-srv /var/opt/scc-srv
+_X_
+chmod 500 scc-srv-${VERSION}/puninstall.sh
+
+{
+	echo "PETMENUDESCR='System Configuration Collector Server'"
+	echo "PETOFFICIALDEPS=''"
+	echo "PETREGISTER='yes'"
+} >scc-srv-${VERSION}/scc-srv-${VERSION}.pet.specs
+
+chgrp -R root scc-srv-${VERSION}
+
+tar cf scc-srv-${VERSION}.tar scc-srv-${VERSION}
+gzip <scc-srv-${VERSION}.tar >scc-srv-${VERSION}.pet
+
+# Cleanup of the all files except the produced pet-file.
+rm -rf scc-srv-${VERSION}.tar scc-srv-${VERSION} $(cat file-list) file-list
+
+exit 0
