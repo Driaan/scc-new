@@ -21,16 +21,32 @@ cd scc
 ./debian-gen-scc
 sudo dpkg -i scc_1.26.73-1_all.deb
 
+
+
 # scc-srv
-sudo apt install scc-srv
-cd scc
+sudo apt install apache2
+cd scc-srv
 ./debian-gen-scc-srv
 sudo dpkg -i scc-srv_1.19.44-1_all.deb
-/opt/scc-srv/bin/scc-srv-set
 /opt/scc-srv/bin/scc-setup --activate # to start apache2 server
 ```
 
-# Rsync Setup
+# SCC Client Rsync Setup
+
+```/opt/scc/bin/scc-rsync-setup --host 10.22.228.250 --secret 123qwe```
+
+```/opt/scc/bin/scc-rsync-setup --host 10.40.40.26 --secret 123qwe```
+
+```/opt/scc/bin/scc -p rsync```
+
+
+# Run on CRON
+
+```
+0 22 * * * root /opt/scc/bin/scc -p rsync &> /dev/null
+```
+
+# SCC-SRV Rsync Setup
 
 1. create file ```/var/opt/scc-srv/conf/scc-hosts```
 
