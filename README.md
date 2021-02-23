@@ -24,16 +24,19 @@ sudo dpkg -i scc_1.26.73-1_all.deb
 
 
 # scc-srv
-sudo apt install apache2
-cd scc-srv
+sudo apt install apache2 binutils sharutils
+cd scc-srv-src
 ./debian-gen-scc-srv
 sudo dpkg -i scc-srv_1.19.44-1_all.deb
-/opt/scc-srv/bin/scc-setup --activate # to start apache2 server
+sudo /opt/scc-srv/bin/scc-setup --activate # to start apache2 server
+sudo systemctl reload apache2
+
 ```
 
 # SCC Client Rsync Setup
 
 ```/opt/scc/bin/scc-rsync-setup --host 10.22.228.250 --secret 123qwe```
+```/opt/scc/bin/scc-rsync-setup --host 192.168.210.10 --secret 123qwe```
 
 ```/opt/scc/bin/scc-rsync-setup --host 10.40.40.26 --secret 123qwe```
 
